@@ -1,6 +1,6 @@
 # 🧠 Memory Hive
 
-**🌐 Live:** [https://hivemind.neural-forge.io](https://hivemind.neural-forge.io)
+**🌐 Live:** [https://memoryhive.neural-forge.io](https://memoryhive.neural-forge.io)
 **📦 Source:** [github.com/TJCurnutte/memory-hive](https://github.com/TJCurnutte/memory-hive)
 
 ```
