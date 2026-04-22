@@ -172,7 +172,10 @@ Each agent's private directory is theirs alone. The curator doesn't read private
 ### 5. Conflict Resolution
 When two agents contradict each other, both go to `curator/CONFLICTS.md`. Curator investigates and resolves — logged in `DECISIONS.md`. No unilateral overwrites.
 
-### 6. Memory Hygiene
+### 6. Curator Does the Job
+The Chief of Staff (curator) operates with full autonomy. It assesses, acts, and delivers — no unnecessary "does this sound good?" checkpoints. When something needs human input, it asks. Otherwise, it ships. This is what makes the system fast.
+
+### 7. Memory Hygiene
 - Raw learnings >7 days unreviewed → auto-escalate
 - Active tasks >14 days old → auto-escalate
 - Private silos never auto-cleaned (agent owns its own space)
