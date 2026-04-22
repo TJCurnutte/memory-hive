@@ -305,12 +305,20 @@ create_silo() {
             ;;
     esac
     _dir="$AGENTS_DIR/$_aid"
+    _was_existing=0
     if [ -d "$_dir" ]; then
-        return 1
+        # Already there. If it has the full triplet, nothing to do (idempotent).
+        # Otherwise top up any missing starter files — don't touch existing ones.
+        if [ -f "$_dir/log.md" ] && [ -f "$_dir/context.md" ] && [ -f "$_dir/memory.md" ]; then
+            return 1
+        fi
+        _was_existing=1
+    else
+        mkdir -p "$_dir" || return 2
     fi
-    mkdir -p "$_dir" || return 2
 
-    cat > "$_dir/log.md" <<EOF
+    if [ ! -f "$_dir/log.md" ]; then
+        cat > "$_dir/log.md" <<EOF
 # ${_aid} — activity log
 
 Append-only journal of what this agent did, when, and why.
@@ -320,8 +328,10 @@ Newest entries at the top.
 
 - Silo initialized by memory-hive installer.
 EOF
+    fi
 
-    cat > "$_dir/context.md" <<EOF
+    if [ ! -f "$_dir/context.md" ]; then
+        cat > "$_dir/context.md" <<EOF
 # ${_aid} — working context
 
 Short, current-task context for this agent. Replace freely as the task shifts.
@@ -338,8 +348,10 @@ Short, current-task context for this agent. Replace freely as the task shifts.
 
 -
 EOF
+    fi
 
-    cat > "$_dir/memory.md" <<EOF
+    if [ ! -f "$_dir/memory.md" ]; then
+        cat > "$_dir/memory.md" <<EOF
 # ${_aid} — durable memory
 
 Long-lived facts, preferences, and lessons this agent should remember across
@@ -357,6 +369,15 @@ sessions. Prefer short bullets; link out to shared knowledge where relevant.
 
 -
 EOF
+    fi
+
+    # Returning 0 for top-ups is a mild white lie — it means the banner
+    # will say "created" for a silo that was actually just completed. That's
+    # fine: from the user's POV, they now have a working silo they didn't
+    # have before.
+    if [ "$_was_existing" -eq 1 ]; then
+        return 0
+    fi
     return 0
 }
 
