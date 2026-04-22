@@ -1,61 +1,160 @@
 # 🧠 Memory Hive
 
+```
+                    ┌─────────────────────────────────────────┐
+                    │          THE SHARED HIVE 🧠             │
+                    │                                         │
+                    │  ┌─────────────────────────────────┐    │
+                    │  │  registry/     knowledge/       │    │
+                    │  │  ├── AGENTS.md  ├── SOUL.md     │    │
+                    │  │  └── SKILLS    ├── DOMAINS.md   │    │
+                    │  │                             │    │
+                    │  │  learnings/    tasks/         │    │
+                    │  │  ├── raw/      ├── queue.md  │    │
+                    │  │  ├── distilled/  └── active/ │    │
+                    │  │  └── META.json               │    │
+                    │  └─────────────────────────────────┘    │
+                    │           ▲              ▲              │
+                    │           │   curator    │              │
+                    │   writes  │   reviews    │  reads       │
+                    │           │              │              │
+                    └───────────┼──────────────┼──────────────┘
+                                │              │
+              ┌─────────────────┼──────────────┼─────────────────┐
+              │                 │              │                 │
+    ┌─────────▼─────────┐ ┌────▼────┐ ┌───────▼────┐ ┌──────────▼────────┐
+    │  🤖 Coder         │ │  🎧     │ │  🔒        │ │  📱 Social Media  │
+    │  Private Silo │   │ │Vibe Coder│ │Sec-Auditor│ │  Manager          │
+    │  └── log.md       │ │Silo │   │ │Silo │     │ │  Silo             │
+    │  └── notes.md     │ └───┘   │ └───┘     │ └───┘                  │
+    └───────────────────┘         │         │                         │
+              │                    │         │                         │
+    ┌─────────▼─────────┐ ┌────▼────┐ ┌───────▼────┐ ┌──────────▼────────┐
+    │  🎯 SDR Alpha     │ │  ⚡ SDR │ │  🌐 Web    │ │  🔬 Research      │
+    │  Silo             │ │  Beta   │ │  Dev      │ │  Analyst          │
+    │                   │ │Silo     │ │Silo       │ │  Silo             │
+    └───────────────────┘ └─────────┘ └───────────┘ └───────────────────┘
+              │
+    ┌─────────▼─────────┐ ┌────────▼────┐ ┌──────────▼─────┐
+    │  📊 Data Analyst  │ │  ✍️ Content │ │  ☁️ CXaaS       │
+    │  Silo             │ │  Strategist │ │  Specialist    │
+    │                   │ │  Silo       │ │  Silo          │
+    └───────────────────┘ └────────────┘ └─────────────────┘
+```
+
 **A shared, continuously learning memory system for multi-agent AI architectures.**
 
-Memory Hive is the end-all-be-all of multi-agent memory infrastructure. It gives any multi-agent system a central, shared brain that every agent reads from and writes to — creating a collective intelligence that compounds over time.
+Memory Hive gives every agent two memory layers:
+- **Private silo** — personal continuity for each agent
+- **Shared hive** — collective intelligence that compounds
+
+Every agent reads from the hive on boot. Every agent writes learnings after tasks. A curator synthesizes contributions. The system gets smarter with every task.
 
 ---
 
-## The Problem
+## The Two-Layer Architecture
 
-Most multi-agent systems keep agent memory siloed. Each agent finishes a task and forgets. The next agent starts from scratch. Nothing compounds. Nothing learns.
+### Layer 1 — Private Silos
 
-## The Solution
+Each agent has its own personal memory space that nobody else touches:
 
-**One shared hive.** Every agent reads from it on boot. Every agent contributes to it after completing work. A curator (typically the Chief of Staff / orchestrator agent) synthesizes contributions and maintains the knowledge base.
+```
+agents/[agent-id]/
+├── log.md        ← Personal notes, observations, working context
+├── context.md    ← Agent-specific state and preferences
+└── memory.md     ← Private learnings only this agent needs
+```
 
-The result: a system that learns from every task it completes, gets smarter over time, and can reference past work when tackling new challenges.
+Silos give agents continuity. When a Coder wakes up, they remember what they were working on last week. When SDR Beta runs a campaign, they know what SDR Alpha tried before.
+
+### Layer 2 — Shared Hive
+
+All agents read from and contribute to the collective brain:
+
+```
+hive/
+├── index.md           ← Entry point — always read first
+├── registry/          ← Who's who and what they do
+├── knowledge/         ← Curated truth (curator only writes)
+├── learnings/         ← Raw → distilled → patterns
+├── tasks/             ← Shared work queue
+└── curator/           ← Curation workspace
+```
+
+The hive is the cross-pollination layer. What the Coder learns benefits the Web Developer. What SDR Alpha discovers informs SDR Beta's approach.
+
+---
+
+## How It Works
+
+```
+Agent spawns
+    │
+    ▼
+┌────────────────────────────────────────────────┐
+│ 1. Read hive/index.md        (current state)   │
+│ 2. Read hive/registry/AGENTS.md              │
+│ 3. Read hive/registry/SKILLS_CATALOG.md       │
+│ 4. Read hive/knowledge/HUMAN_CONTEXT.md       │
+│ 5. Read hive/learnings/distilled/patterns.md  │
+│ 6. Read hive/tasks/queue.md                  │
+│ 7. Read own private silo (agents/[id]/)      │
+│ 8. Load active task context                   │
+│ 9. Begin work                                 │
+└────────────────────────────────────────────────┘
+    │
+    ▼
+Task completes
+    │
+    ▼
+┌────────────────────────────────────────────────┐
+│ 1. Write learnings to hive/learnings/raw/      │
+│ 2. Update private silo (agents/[id]/log.md)   │
+│ 3. Submit summary to curator/DRAFT.md         │
+│ 4. Curator reviews → promotes to distilled/   │
+│ 5. Next agent boots → reads updated hive      │
+└────────────────────────────────────────────────┘
+    │
+    ▼
+Hive is smarter than before
+```
 
 ---
 
 ## Core Architecture
 
 ```
-~/.openclaw/hive/
-├── HIVE_ARCHITECTURE.md    ← Full design document
-├── index.md                ← Entry point — all agents read this first
-├── registry/
-│   ├── AGENTS.md           ← Agent roster (who exists, what they do)
-│   └── SKILLS_CATALOG.md   ← Skills matrix
-├── knowledge/
-│   ├── HUMAN_CONTEXT.md          ← Primary human context
-│   ├── SOUL.md            ← System behavior guide
-│   └── DOMAINS.md         ← Area expertise definitions
-├── learnings/
-│   ├── raw/               ← Agent dumps (no gatekeeping)
-│   ├── distilled/        ← Curated learnings by curator
-│   │   ├── patterns.md
-│   │   ├── mistakes.md
-│   │   ├── wins.md
-│   │   └── cross-agent-insights.md
-│   └── META.json          ← Learning stats and health
-├── tasks/
-│   ├── queue.md            ← Shared task queue
-│   └── active/            ← Current working context
-├── agents/
-│   └── [agent-id]/         ← Each agent's personal log
-└── curator/
-    ├── DRAFT.md           ← Pending contributions
-    ├── CONFLICTS.md       ← Contradictions to resolve
-    └── DECISIONS.md       ← Curation audit trail
+~/.openclaw/hive/                    ~/.openclaw/hive/agents/[id]/
+├── index.md                         ├── log.md        ← private
+├── registry/                        ├── context.md    ← private
+│   ├── AGENTS.md                   └── memory.md     ← private
+├── knowledge/                      
+│   ├── HUMAN_CONTEXT.md                    
+│   ├── SOUL.md                              
+│   └── DOMAINS.md                            
+├── learnings/                      
+│   ├── raw/[agent-id]/                        
+│   ├── distilled/                              
+│   │   ├── patterns.md                        
+│   │   ├── mistakes.md                        
+│   │   ├── wins.md                            
+│   │   └── cross-agent-insights.md            
+│   └── META.json                              
+├── tasks/                          
+│   ├── queue.md                                 
+│   └── active/                                 
+└── curator/                        
+    ├── DRAFT.md                                 
+    ├── CONFLICTS.md                            
+    └── DECISIONS.md                            
 ```
 
 ---
 
 ## Key Principles
 
-### 1. Shared, Not Silos
-All agents share one memory. When the Coder learns something, the Web Developer can find it. No per-agent black holes.
+### 1. Double Layer — Both, Not Either
+Private silos for personal continuity. Shared hive for collective intelligence. Each serves a different purpose. Agents have both.
 
 ### 2. Curator System
 One agent (typically the orchestrator/Chief of Staff) acts as curator. Agents contribute freely to `learnings/raw/`. The curator reviews and promotes valuable insights to `learnings/distilled/`. This keeps the system organized without creating contribution friction.
@@ -64,16 +163,8 @@ One agent (typically the orchestrator/Chief of Staff) acts as curator. Agents co
 - **Raw learnings** — Agents dump post-task observations without friction
 - **Distilled learnings** — Curator reviews and writes canonical patterns, mistakes, wins
 
-### 4. Boot Sequence
-Every agent, on every spawn:
-1. Read `index.md`
-2. Read `registry/AGENTS.md`
-3. Read `registry/SKILLS_CATALOG.md`
-4. Read `knowledge/HUMAN_CONTEXT.md`
-5. Read `learnings/distilled/patterns.md`
-6. Read `tasks/queue.md`
-7. Read own log in `agents/[id]/`
-8. Load active task context
+### 4. Silo Privacy Respected
+Each agent's private directory is theirs alone. The curator doesn't read private silos unless explicitly asked. What happens in an agent's silo stays in that agent's silo.
 
 ### 5. Conflict Resolution
 When two agents contradict each other, both go to `curator/CONFLICTS.md`. Curator investigates and resolves — logged in `DECISIONS.md`. No unilateral overwrites.
@@ -81,9 +172,8 @@ When two agents contradict each other, both go to `curator/CONFLICTS.md`. Curato
 ### 6. Memory Hygiene
 - Raw learnings >7 days unreviewed → auto-escalate
 - Active tasks >14 days old → auto-escalate
+- Private silos never auto-cleaned (agent owns its own space)
 - Confidence gates prevent low-confidence info from polluting core knowledge
-- 3 aligned low-confidence observations → upgrade to medium
-- 3 aligned medium → upgrade to high
 
 ---
 
@@ -98,7 +188,10 @@ cd memory-hive
 
 # Set up your hive directory
 mkdir -p ~/.openclaw/hive
-cp -r . ~/.openclaw/hive/
+cp -r hive/ ~/.openclaw/hive/
+
+# Each agent gets its own silo
+mkdir -p ~/.openclaw/hive/agents/[your-agent-id]
 
 # Integrate with your agent system
 # See INTEGRATION.md for framework-specific guides
@@ -106,15 +199,30 @@ cp -r . ~/.openclaw/hive/
 
 ### For OpenClaw Users
 
-If you're using OpenClaw, the hive is already designed to drop into `~/.openclaw/hive/`. All agents in your system will automatically use the boot sequence on spawn.
+All agents in your OpenClaw system automatically use the hive boot sequence. Each agent already has its own workspace — point it to `~/.openclaw/hive/` for the shared layer and `~/.openclaw/hive/agents/[agent-id]/` for private silo.
 
 ### Contributing
 
 We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines. Key areas:
-- New framework adapters
+- Framework adapters (LangChain, AutoGen, CrewAI, etc.)
 - Curation automation tools
 - Memory hygiene improvements
-- Documentation improvements
+- Visualization tools
+
+---
+
+## The Curator Role
+
+The **Chief of Staff** (main agent) acts as curator. This is the most important role in the system — it maintains the shared hive so all other agents can focus on their specialties.
+
+**Curator responsibilities:**
+- Maintain `knowledge/` as curated truth
+- Review `learnings/raw/` daily
+- Promote valuable learnings to `learnings/distilled/`
+- Resolve conflicts in `curator/CONFLICTS.md`
+- Log every decision in `curator/DECISIONS.md`
+- Keep the hive organized and useful
+- Synthesize cross-agent insights
 
 ---
 
@@ -129,3 +237,4 @@ MIT — use it, build on it, make it better.
 ---
 
 **The hive learns. Every task. Every agent. Every time.**
+**Private silos remember. Shared hive compounds.**

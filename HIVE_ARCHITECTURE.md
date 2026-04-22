@@ -2,7 +2,48 @@
 
 ## Overview
 
-Memory Hive is a shared, continuously learning memory system for multi-agent AI architectures. All agents share one central knowledge base that they read from on boot and contribute to after completing tasks. The system compounds intelligence over time — every task makes the hive smarter.
+Memory Hive is a shared, continuously learning memory system for multi-agent AI architectures. Every agent has **two memory layers** — a private silo for personal continuity and a shared hive for collective intelligence. The system compounds over time: every task makes the hive smarter, every agent keeps its own context, and a curator maintains the shared knowledge base.
+
+---
+
+## The Two-Layer Architecture
+
+### Layer 1 — Private Silos
+
+Each agent has its own personal memory space in `agents/[agent-id]/`:
+
+```
+agents/[agent-id]/
+├── log.md        ← Personal notes, working context, ongoing thoughts
+├── context.md    ← Agent-specific state, preferences, relationships
+└── memory.md     ← Private learnings only this agent needs
+```
+
+**Silo rules:**
+- Only the owning agent reads and writes to their silo
+- Curator never reads private silos (unless agent explicitly asks)
+- Silos never auto-cleaned — the agent owns its own space
+- Silos provide continuity — agent wakes up knowing what it was doing
+
+### Layer 2 — Shared Hive
+
+All agents read from and contribute to the collective brain in `hive/`:
+
+```
+hive/
+├── index.md
+├── registry/
+├── knowledge/
+├── learnings/
+├── tasks/
+└── curator/
+```
+
+**Hive rules:**
+- All agents can read everything in the hive
+- All agents write to `learnings/raw/[agent-id]/`
+- Only the curator writes to `knowledge/` and `learnings/distilled/`
+- Hive is the cross-pollination layer — what one agent learns benefits all
 
 ---
 
@@ -11,49 +52,49 @@ Memory Hive is a shared, continuously learning memory system for multi-agent AI 
 ### The Hive Directory
 
 ```
-~/.openclaw/hive/
+~/.openclaw/hive/          ← Shared brain (all agents read/write)
+~/.openclaw/hive/agents/   ← Private silos (one per agent)
 ```
-
-One shared directory. Not per-agent. Not siloed. Everything lives here.
 
 ---
 
-### Sections
+### Sections — Shared Hive
 
 #### 1. `index.md` — Entry Point
 
 All agents read this first on every spawn. Contains:
 - Current status of the hive
-- What agents exist
-- What's being worked on
+- What agents exist and their status
+- Active projects and priorities
 - Any urgent context
+- Recent learnings worth knowing
 
 #### 2. `registry/` — Agent Roster
 
-**`AGENTS.md`** — Every agent in the system. Each entry:
+**`AGENTS.md`** — Every agent in the system:
 - Agent ID and name
 - Role and specialty
 - Current status (active/idle)
 - Skills matrix reference
 
-**`SKILLS_CATALOG.md`** — What each agent can do. Structured so any agent can look up who handles what.
+**`SKILLS_CATALOG.md`** — What each agent can do. Structured for routing decisions.
 
 #### 3. `knowledge/` — Curated Truth
 
-Written and maintained by curator (Chief of Staff) only. Contains:
+Written and maintained by curator only. Contains:
 - `HUMAN_CONTEXT.md` — Human context (goals, preferences, tics, timezone)
 - `SOUL.md` — System behavior guidelines
 - `DOMAINS.md` — Area expertise definitions
 - `PROJECTS.md` — Active projects and their state
 - `PREFERENCES.md` — Human preferences, communication style
 
-**Rule:** Only the curator writes to `knowledge/`. No agent contributes directly — the curator reviews and promotes.
+**Rule:** Only the curator writes to `knowledge/`. No agent contributes directly to curated truth — the curator reviews and promotes.
 
 #### 4. `learnings/` — The Learning Engine
 
-This is where the hive gets smart.
+The core of the hive's intelligence. Two-tier system:
 
-**`raw/`** — Agent contributions, no gatekeeping.
+**`raw/[agent-id]/`** — Agent contributions, no gatekeeping.
 After every task, the agent writes what they learned:
 - What worked
 - What didn't
@@ -61,58 +102,61 @@ After every task, the agent writes what they learned:
 - Mistakes made
 - Anything worth remembering
 
-**Format:** `learnings/raw/[agent-id]/[YYYY-MM-DD]-[task-summary].md`
+Format: `learnings/raw/[agent-id]/[YYYY-MM-DD]-[task-summary].md`
 
 **`distilled/`** — Curated by curator.
 The curator reviews `raw/` regularly and promotes valuable learnings to:
 - `patterns.md` — Cross-agent patterns noticed
 - `mistakes.md` — Known failure modes
 - `wins.md` — Confirmed successes
-- `cross-agent-insights.md` — Insights that emerged from multiple agents
+- `cross-agent-insights.md` — Insights from multiple agents working together
 
 **`META.json`** — Stats: total contributions, last review date, health metrics.
 
 #### 5. `tasks/` — Shared Work Context
 
-**`queue.md`** — What's queued up:
-- Task description
-- Assigned agent
-- Priority
-- Status
-- Created date
+**`queue.md`** — What's queued:
+- Task description, assigned agent, priority, status, created date
 
 **`active/`** — Currently running tasks:
-- Brief
-- Working notes
-- Current state
-- Blockers
+- Brief, working notes, current state, blockers
 
-#### 6. `agents/` — Personal Logs
+#### 6. `curator/` — Curation Workspace
 
-Each agent has its own log: `agents/[agent-id]/log.md`
+The curator's workspace for maintaining the hive.
 
-Not shared — personal memory for that agent. The curator doesn't read this unless asked. It stays private to each agent.
+**`DRAFT.md`** — Pending contributions from agents.
 
-#### 7. `curator/` — Curation Workspace
+**`CONFLICTS.md`** — When two agents contradict each other. Both perspectives preserved until resolved.
 
-The Chief of Staff's workspace for maintaining the hive.
+**`DECISIONS.md`** — Audit trail of every curation decision.
 
-**`DRAFT.md`** — Agent contributions pending review.
+---
 
-**`CONFLICTS.md`** — When two agents contradict each other. Both perspectives are preserved. Curator investigates and resolves.
+### Sections — Private Silos
 
-**`DECISIONS.md`** — Audit trail of every curation decision. Why something was promoted, why something was rejected, why a conflict was resolved a certain way.
+#### `agents/[agent-id]/` — Personal Memory
+
+Each agent has its own private directory:
+
+**`log.md`** — Personal working notes. The agent's running journal of what it's doing, what it's thought about, what's in progress. Nobody else reads this.
+
+**`context.md`** — Agent-specific state. How this agent prefers to work, what it's currently focused on, relationships with other agents (e.g., "SDR Beta: coordinates with SDR Alpha").
+
+**`memory.md`** — Private learnings. Things this agent learned that don't need to be in the shared hive but are worth remembering (personal notes, agent-specific patterns, private observations).
+
+**Silo privacy is absolute.** The curator only accesses a private silo if the agent explicitly asks for help.
 
 ---
 
 ## The Curation Loop
 
-The curator (Chief of Staff) runs this loop after every task or on a schedule:
+The curator runs this loop after every task or on a schedule:
 
 1. **Collect** — Check `curator/DRAFT.md` for new contributions
 2. **Review** — Read raw learnings, identify what matters
-3. **Promote** — Move valuable learnings to `distilled/`
-4. **Resolve** — Handle any conflicts in `CONFLICTS.md`
+3. **Promote** — Move valuable learnings to `learnings/distilled/`
+4. **Resolve** — Handle any conflicts in `curator/CONFLICTS.md`
 5. **Archive** — Raw learnings >7 days old → review and archive
 6. **Log** — Every decision goes to `DECISIONS.md`
 
@@ -123,33 +167,51 @@ The curator (Chief of Staff) runs this loop after every task or on a schedule:
 Every agent, on every spawn:
 
 ```
-1. Read index.md
-2. Read registry/AGENTS.md
-3. Read registry/SKILLS_CATALOG.md
-4. Read knowledge/HUMAN_CONTEXT.md
-5. Read learnings/distilled/patterns.md
-6. Read tasks/queue.md
-7. Read own log in agents/[id]/
-8. Load active task context
-9. Begin work
+1. Read hive/index.md
+2. Read hive/registry/AGENTS.md
+3. Read hive/registry/SKILLS_CATALOG.md
+4. Read hive/knowledge/HUMAN_CONTEXT.md
+5. Read hive/learnings/distilled/patterns.md
+6. Read hive/tasks/queue.md
+7. Read own private silo: agents/[id]/log.md
+8. Read own context: agents/[id]/context.md
+9. Check for active task in hive/tasks/active/
+10. Begin work
 ```
 
-This ensures every agent has the full hive context before starting — not just their own narrow slice.
+This ensures every agent has full hive context plus its own personal context before starting.
+
+---
+
+## Task Completion Flow
+
+When an agent completes a task:
+
+```
+1. Agent writes learnings to hive/learnings/raw/[agent-id]/
+2. Agent updates own silo: agents/[agent-id]/log.md
+3. Agent submits contribution summary to curator/DRAFT.md
+4. Curator reviews within 24h
+5. Curator promotes valuable learnings to learnings/distilled/
+6. Curator logs decision to curator/DECISIONS.md
+7. Next agent to spawn sees updated hive
+8. System is now smarter than before the task
+```
 
 ---
 
 ## Confidence System
 
-Not all learning is equal. The system uses confidence gates:
+Not all learning is equal. The hive uses confidence gates:
 
 | Level | Description | Can reach knowledge/ |
 |---|---|---|
 | Low | Single observation, unconfirmed | No |
-| Medium | Confirmed by 2+ agents or repeated | No (but can propose) |
+| Medium | Confirmed by 2+ agents or repeated | No (can propose) |
 | High | Confirmed across time + agents | Yes |
 
 **Upgrade rules:**
-- 3 aligned low-confidence → medium
+- 3 aligned low-confidence observations → medium
 - 3 aligned medium → high
 
 This prevents speculation from polluting core knowledge.
@@ -158,7 +220,7 @@ This prevents speculation from polluting core knowledge.
 
 ## Conflict Resolution
 
-**Step 1:** Both perspectives written to `CONFLICTS.md`
+**Step 1:** Both perspectives written to `curator/CONFLICTS.md`
 
 **Step 2:** Curator investigates:
 - Context-dependent? (both right in different situations)
@@ -168,7 +230,7 @@ This prevents speculation from polluting core knowledge.
 
 **Step 3:** Resolution written to `DECISIONS.md`
 
-**Step 4:** Loser not deleted — both remain in `CONFLICTS.md` as resolved
+**Step 4:** Both perspectives remain in `CONFLICTS.md` as historical record
 
 ---
 
@@ -181,6 +243,7 @@ This prevents speculation from polluting core knowledge.
 | Individual file size | Cap at 50KB |
 | Daily raw writes | Cap at 20KB per file |
 | Confidence gating | Low can't reach knowledge/ |
+| Private silos | Never auto-cleaned (agent owns) |
 | Review cadence | Curator reviews daily |
 
 ---
@@ -189,21 +252,39 @@ This prevents speculation from polluting core knowledge.
 
 ### OpenClaw
 
-All OpenClaw agents can be configured to use the hive boot sequence. Update agent system prompts to include the boot sequence, then point agents to `~/.openclaw/hive/index.md`.
+All agents can be configured to use the hive boot sequence. Each agent's workspace becomes:
+- `~/.openclaw/workspace-[agent-id]/` — agent's own dir
+- `~/.openclaw/hive/` — shared hive
+- `~/.openclaw/hive/agents/[agent-id]/` — private silo
 
 ### Custom Frameworks
 
-The hive is framework-agnostic. Any agent can read from and write to the hive directory via standard file operations. Just implement:
-1. Boot: read index.md first
-2. Contribute: write learnings after tasks
-3. Curation: if you're the curator, run the curation loop
+The hive is framework-agnostic. Any agent can:
+- Read from and write to the hive via standard file operations
+- Keep personal context in `agents/[id]/`
+- Implement the boot sequence and task completion flow independently
+
+Key integration points:
+1. On agent spawn → run boot sequence
+2. On task completion → write to `learnings/raw/[id]/` and `agents/[id]/log.md`
+3. If curator → run curation loop
+4. All agents → read `learnings/distilled/` before starting tasks
 
 ---
 
 ## Who Runs This
 
-The **Chief of Staff** (main agent) acts as curator. In the user's architecture, that's the primary orchestrator that receives all human input and dispatches work. The curator role is dedicated — it maintains the hive so all other agents can focus on their specialties.
+The **Chief of Staff** (main agent) acts as curator. In any architecture, this is the primary orchestrator — the agent that receives all human input and dispatches work. The curator maintains the hive so all other agents can focus on their specialties.
+
+The curator is the only agent that:
+- Writes to `knowledge/`
+- Modifies `learnings/distilled/`
+- Resolves conflicts in `CONFLICTS.md`
+- Updates `DECISIONS.md`
+
+All other agents contribute to `learnings/raw/` and maintain their private silos.
 
 ---
 
 **The hive learns. Every task. Every agent. Every time.**
+**Private silos remember. Shared hive compounds.**
