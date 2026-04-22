@@ -239,20 +239,17 @@ HIVE_BLOCK_START="<!-- memory-hive:start -->"
 HIVE_BLOCK_END="<!-- memory-hive:end -->"
 
 # Build the block body in a temp file so we can splice it cleanly.
+# Source of truth is templates/claude-boot-block.md in the cloned repo;
+# substitute the ${HIVE_DIR} placeholder with the real install path.
 HIVE_BLOCK_FILE="$TMP_DIR/hive-block.md"
-{
-    printf '%s\n' "$HIVE_BLOCK_START"
-    printf '## Memory Hive — shared memory for this agent\n\n'
-    printf 'On boot, always read these two files before responding:\n'
-    printf -- '- Shared context: %s/index.md\n' "$HIVE_DIR"
-    printf -- '- Your private silo: %s/agents/<your-agent-id>/memory.md\n\n' "$HIVE_DIR"
-    printf 'After any significant task, append a learning to your silo'"'"'s memory.md\n'
-    printf 'and log what you did in log.md. Promote generalizable insights to\n'
-    printf '%s/knowledge/.\n\n' "$HIVE_DIR"
-    printf 'This block is managed by memory-hive'"'"'s installer. Re-running the\n'
-    printf 'installer will update it; your other content is untouched.\n'
-    printf '%s\n' "$HIVE_BLOCK_END"
-} > "$HIVE_BLOCK_FILE"
+HIVE_BLOCK_TEMPLATE="$TMP_DIR/memory-hive/templates/claude-boot-block.md"
+if [ ! -f "$HIVE_BLOCK_TEMPLATE" ]; then
+    die "Boot block template missing at $HIVE_BLOCK_TEMPLATE"
+fi
+# Use a sed delimiter unlikely to appear in a filesystem path.
+_hive_dir_escaped="$(printf '%s' "$HIVE_DIR" | sed 's/[&|]/\\&/g')"
+sed "s|\${HIVE_DIR}|$_hive_dir_escaped|g" "$HIVE_BLOCK_TEMPLATE" > "$HIVE_BLOCK_FILE" \
+    || die "Failed to render boot block from $HIVE_BLOCK_TEMPLATE"
 
 # merge_hive_block <target-claude-md-path>
 # Idempotently inject (or replace) the managed block in the file. POSIX awk
