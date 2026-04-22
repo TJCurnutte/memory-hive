@@ -1,12 +1,16 @@
 #!/bin/sh
 # Memory Hive installer
-# Installs the Memory Hive file-based memory system for multi-agent AI.
+# Installs the Memory Hive file-based memory system for multi-agent AI,
+# auto-detects the user's agent environment, merges a boot block into
+# ~/.claude/CLAUDE.md when present, and scaffolds a default silo so
+# agents can start using the hive immediately.
 #
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/TJCurnutte/memory-hive/main/install.sh | sh
 #
-# Override install location:
-#   MEMORY_HIVE_DIR=/custom/path sh install.sh
+# Environment overrides:
+#   MEMORY_HIVE_DIR=/custom/path   install location (default: $HOME/.memory-hive)
+#   MEMORY_HIVE_MERGE_CWD=1        also merge the hive block into $PWD/CLAUDE.md
 
 set -e
 
@@ -106,28 +110,340 @@ fi
 
 ok "Memory Hive installed"
 
-# --- success banner ----------------------------------------------------------
+# =============================================================================
+# Phase A: Environment detection
+# =============================================================================
+# Detection must never abort the install -- wrap probes so a missing dir or
+# permission error just means "not detected".
 
-cat <<EOF
+DETECTED_CLAUDE_CODE=0
+DETECTED_CLAUDE_MD=0
+DETECTED_CLAUDE_AGENTS=""  # space-separated list of ~/.claude/agents/* subdir names
+DETECTED_OPENCLAW=0
+DETECTED_OPENCLAW_DIR=""
+DETECTED_CWD_CLAUDE_MD=0
 
-${BOLD}${GREEN}Memory Hive is ready.${RESET}
+CLAUDE_HOME="$HOME/.claude"
+CLAUDE_MD_PATH="$CLAUDE_HOME/CLAUDE.md"
+CLAUDE_AGENTS_DIR="$CLAUDE_HOME/agents"
+OPENCLAW_HOME="$HOME/.openclaw"
+CWD_CLAUDE_MD="$PWD/CLAUDE.md"
 
-  Install location: ${BOLD}${INSTALL_DIR}${RESET}
-  Hive root:        ${BOLD}${HIVE_DIR}${RESET}
-  Agent silos:      ${BOLD}${AGENTS_DIR}${RESET}
+info "Detecting agent environment"
 
-${BOLD}Next steps${RESET}
+if [ -d "$CLAUDE_HOME" ]; then
+    DETECTED_CLAUDE_CODE=1
+    ok "Found Claude Code config at $CLAUDE_HOME"
+fi
 
-  1. Create your first agent silo:
-       sh ${INSTALL_DIR}/create-agent.sh my-agent
-     (or set MEMORY_HIVE_DIR to the same path you installed to)
+if [ -f "$CLAUDE_MD_PATH" ]; then
+    DETECTED_CLAUDE_MD=1
+fi
 
-  2. Point your agents at ${BOLD}${HIVE_DIR}${RESET}. Each agent reads/writes its
-     own silo under ${BOLD}${AGENTS_DIR}/<agent-id>/${RESET} and shares knowledge
-     through ${BOLD}${HIVE_DIR}/knowledge/${RESET} and ${BOLD}${HIVE_DIR}/registry/${RESET}.
+if [ -d "$CLAUDE_AGENTS_DIR" ]; then
+    # Collect agent names whose path is a directory. Suppress errors from
+    # an empty glob.
+    for _agent_path in "$CLAUDE_AGENTS_DIR"/*; do
+        [ -d "$_agent_path" ] || continue
+        _agent_name="$(basename "$_agent_path")"
+        # Skip dotfiles just in case a shell expanded them.
+        case "$_agent_name" in
+            .*) continue ;;
+        esac
+        if [ -z "$DETECTED_CLAUDE_AGENTS" ]; then
+            DETECTED_CLAUDE_AGENTS="$_agent_name"
+        else
+            DETECTED_CLAUDE_AGENTS="$DETECTED_CLAUDE_AGENTS $_agent_name"
+        fi
+    done
+    if [ -n "$DETECTED_CLAUDE_AGENTS" ]; then
+        ok "Found Claude Code sub-agents: $DETECTED_CLAUDE_AGENTS"
+    fi
+fi
 
-  3. Read the docs:
-       ${CYAN}https://github.com/TJCurnutte/memory-hive${RESET}
+if [ -d "$OPENCLAW_HOME" ]; then
+    DETECTED_OPENCLAW=1
+    DETECTED_OPENCLAW_DIR="$OPENCLAW_HOME"
+    ok "Found OpenClaw config at $OPENCLAW_HOME"
+fi
 
-To upgrade later, just re-run this installer. Existing agent silos are preserved.
+if [ -f "$CWD_CLAUDE_MD" ]; then
+    DETECTED_CWD_CLAUDE_MD=1
+fi
+
+if [ "$DETECTED_CLAUDE_CODE" -eq 0 ] && [ "$DETECTED_OPENCLAW" -eq 0 ]; then
+    info "No known agent environment detected -- continuing with generic install"
+fi
+
+# =============================================================================
+# Phase B: Auto-merge into CLAUDE.md
+# =============================================================================
+
+HIVE_BLOCK_START="<!-- memory-hive:start -->"
+HIVE_BLOCK_END="<!-- memory-hive:end -->"
+
+# Build the block body in a temp file so we can splice it cleanly.
+HIVE_BLOCK_FILE="$TMP_DIR/hive-block.md"
+{
+    printf '%s\n' "$HIVE_BLOCK_START"
+    printf '## Memory Hive — shared memory for this agent\n\n'
+    printf 'On boot, always read these two files before responding:\n'
+    printf -- '- Shared context: %s/index.md\n' "$HIVE_DIR"
+    printf -- '- Your private silo: %s/agents/<your-agent-id>/memory.md\n\n' "$HIVE_DIR"
+    printf 'After any significant task, append a learning to your silo'"'"'s memory.md\n'
+    printf 'and log what you did in log.md. Promote generalizable insights to\n'
+    printf '%s/knowledge/.\n\n' "$HIVE_DIR"
+    printf 'This block is managed by memory-hive'"'"'s installer. Re-running the\n'
+    printf 'installer will update it; your other content is untouched.\n'
+    printf '%s\n' "$HIVE_BLOCK_END"
+} > "$HIVE_BLOCK_FILE"
+
+# merge_hive_block <target-claude-md-path>
+# Idempotently inject (or replace) the managed block in the file. POSIX awk
+# handles the splice: if the markers are present we replace lines between
+# them; otherwise we append a fresh copy separated by a blank line. Write to
+# a temp file and mv for atomicity. Never touches content outside the
+# markers.
+merge_hive_block() {
+    _target="$1"
+    _parent="$(dirname "$_target")"
+    mkdir -p "$_parent" 2>/dev/null || true
+
+    if [ ! -f "$_target" ]; then
+        # Create from scratch with just the managed block.
+        _tmp="$_target.memhive.$$"
+        cp "$HIVE_BLOCK_FILE" "$_tmp" || return 1
+        mv "$_tmp" "$_target" || { rm -f "$_tmp"; return 1; }
+        ok "Created $_target with Memory Hive block"
+        return 0
+    fi
+
+    _tmp="$_target.memhive.$$"
+    # Does the file already contain the managed block?
+    if grep -q -F "$HIVE_BLOCK_START" "$_target" 2>/dev/null \
+        && grep -q -F "$HIVE_BLOCK_END" "$_target" 2>/dev/null; then
+        # Replace the existing block in place.
+        awk -v start="$HIVE_BLOCK_START" -v end="$HIVE_BLOCK_END" -v blockfile="$HIVE_BLOCK_FILE" '
+            BEGIN { inblock = 0; emitted = 0 }
+            {
+                if (inblock == 0 && index($0, start) > 0) {
+                    # Emit the replacement block once, then swallow lines
+                    # until we see the end marker.
+                    while ((getline line < blockfile) > 0) print line
+                    close(blockfile)
+                    inblock = 1
+                    emitted = 1
+                    next
+                }
+                if (inblock == 1) {
+                    if (index($0, end) > 0) { inblock = 0 }
+                    next
+                }
+                print
+            }
+        ' "$_target" > "$_tmp" || { rm -f "$_tmp"; return 1; }
+        mv "$_tmp" "$_target" || { rm -f "$_tmp"; return 1; }
+        ok "Updated Memory Hive block in $_target"
+    else
+        # Append a fresh block. Make sure we separate from existing content
+        # with a blank line so we don't glue onto the previous paragraph.
+        {
+            cat "$_target"
+            # Ensure trailing newline before the block.
+            _last_char="$(tail -c 1 "$_target" 2>/dev/null || printf '')"
+            if [ "$_last_char" != "" ] && [ "$_last_char" != "
+" ]; then
+                printf '\n'
+            fi
+            printf '\n'
+            cat "$HIVE_BLOCK_FILE"
+        } > "$_tmp" || { rm -f "$_tmp"; return 1; }
+        mv "$_tmp" "$_target" || { rm -f "$_tmp"; return 1; }
+        ok "Added Memory Hive block to $_target"
+    fi
+    return 0
+}
+
+WIRED_TARGETS=""
+
+if [ "$DETECTED_CLAUDE_CODE" -eq 1 ]; then
+    if merge_hive_block "$CLAUDE_MD_PATH"; then
+        WIRED_TARGETS="$CLAUDE_MD_PATH"
+    else
+        warn "Could not update $CLAUDE_MD_PATH -- continuing"
+    fi
+fi
+
+if [ "$DETECTED_CWD_CLAUDE_MD" -eq 1 ] && [ "${MEMORY_HIVE_MERGE_CWD:-0}" = "1" ]; then
+    if merge_hive_block "$CWD_CLAUDE_MD"; then
+        if [ -z "$WIRED_TARGETS" ]; then
+            WIRED_TARGETS="$CWD_CLAUDE_MD"
+        else
+            WIRED_TARGETS="$WIRED_TARGETS $CWD_CLAUDE_MD"
+        fi
+    fi
+elif [ "$DETECTED_CWD_CLAUDE_MD" -eq 1 ]; then
+    info "Skipping project-level $CWD_CLAUDE_MD (set MEMORY_HIVE_MERGE_CWD=1 to opt in)"
+fi
+
+# =============================================================================
+# Phase C + D: Silo scaffolding (default + per-detected-agent)
+# =============================================================================
+# Inline the same templates create-agent.sh uses so we don't need to shell out
+# for each silo. Preserves existing silos (skip if the dir already exists).
+
+TODAY="$(date -u +%Y-%m-%d 2>/dev/null || echo "today")"
+
+# create_silo <agent-id>
+# Returns 0 if the silo was newly created, 1 if it already existed, 2 on error.
+create_silo() {
+    _aid="$1"
+    case "$_aid" in
+        ""|*/*|.*|*" "*)
+            warn "Skipping silo with invalid id: '$_aid'"
+            return 2
+            ;;
+    esac
+    _dir="$AGENTS_DIR/$_aid"
+    if [ -d "$_dir" ]; then
+        return 1
+    fi
+    mkdir -p "$_dir" || return 2
+
+    cat > "$_dir/log.md" <<EOF
+# ${_aid} — activity log
+
+Append-only journal of what this agent did, when, and why.
+Newest entries at the top.
+
+## ${TODAY}
+
+- Silo initialized by memory-hive installer.
 EOF
+
+    cat > "$_dir/context.md" <<EOF
+# ${_aid} — working context
+
+Short, current-task context for this agent. Replace freely as the task shifts.
+
+## Role
+
+(What is this agent's responsibility? One or two sentences.)
+
+## Current focus
+
+(What is the agent working on right now?)
+
+## Open questions
+
+-
+EOF
+
+    cat > "$_dir/memory.md" <<EOF
+# ${_aid} — durable memory
+
+Long-lived facts, preferences, and lessons this agent should remember across
+sessions. Prefer short bullets; link out to shared knowledge where relevant.
+
+## Facts
+
+-
+
+## Preferences
+
+-
+
+## Lessons learned
+
+-
+EOF
+    return 0
+}
+
+CREATED_SILOS=""
+EXISTING_SILOS=""
+
+track_silo() {
+    _name="$1"
+    _rc="$2"
+    if [ "$_rc" = "0" ]; then
+        if [ -z "$CREATED_SILOS" ]; then
+            CREATED_SILOS="$_name"
+        else
+            CREATED_SILOS="$CREATED_SILOS $_name"
+        fi
+    elif [ "$_rc" = "1" ]; then
+        if [ -z "$EXISTING_SILOS" ]; then
+            EXISTING_SILOS="$_name"
+        else
+            EXISTING_SILOS="$EXISTING_SILOS $_name"
+        fi
+    fi
+}
+
+# Phase C: default silo.
+# NOTE: `create_silo` returns 1 when the silo already exists. Under `set -e`
+# that terminates the script, so we guard every call with `|| _rc=$?` which
+# captures the status without tripping errexit.
+_rc=0; create_silo "main" || _rc=$?
+track_silo "main" "$_rc"
+
+# Phase D: auto-silo for detected Claude Code sub-agents.
+if [ -n "$DETECTED_CLAUDE_AGENTS" ]; then
+    for _ag in $DETECTED_CLAUDE_AGENTS; do
+        _rc=0; create_silo "$_ag" || _rc=$?
+        track_silo "$_ag" "$_rc"
+    done
+fi
+
+# =============================================================================
+# Phase E: Context-aware success banner
+# =============================================================================
+
+# Use ~ for $HOME in display paths for readability.
+display_path() {
+    case "$1" in
+        "$HOME"/*) printf '~%s' "${1#$HOME}" ;;
+        *) printf '%s' "$1" ;;
+    esac
+}
+
+_install_display="$(display_path "$INSTALL_DIR")"
+_hive_display="$(display_path "$HIVE_DIR")"
+
+printf '\n'
+printf '%s%s✓ Memory Hive installed at %s%s\n' "$BOLD" "$GREEN" "$_install_display" "$RESET"
+printf '\n'
+
+if [ -n "$WIRED_TARGETS" ]; then
+    for _t in $WIRED_TARGETS; do
+        printf '  Wired into: %s (managed block added)\n' "$(display_path "$_t")"
+    done
+fi
+
+if [ -n "$CREATED_SILOS" ] && [ -n "$EXISTING_SILOS" ]; then
+    printf '  Silos created: %s\n' "$CREATED_SILOS"
+    printf '  Silos preserved: %s\n' "$EXISTING_SILOS"
+elif [ -n "$CREATED_SILOS" ]; then
+    printf '  Silos created: %s\n' "$CREATED_SILOS"
+elif [ -n "$EXISTING_SILOS" ]; then
+    printf '  Silos preserved: %s\n' "$EXISTING_SILOS"
+fi
+
+printf '  Shared hive:  %s/\n' "$_hive_display"
+
+if [ "$DETECTED_OPENCLAW" -eq 1 ]; then
+    printf '  OpenClaw:     %s (detected, no config changes made)\n' "$(display_path "$DETECTED_OPENCLAW_DIR")"
+fi
+
+printf '\n'
+
+if [ "$DETECTED_CLAUDE_CODE" -eq 1 ] || [ "$DETECTED_OPENCLAW" -eq 1 ]; then
+    printf 'Your agents will pick up the hive on next boot — no restart required.\n'
+    printf 'Read the docs: %shttps://github.com/TJCurnutte/memory-hive%s\n' "$CYAN" "$RESET"
+else
+    printf "We didn't detect Claude Code or OpenClaw on this machine. To wire this\n"
+    printf 'into your own agent system, point it at %s/ for shared\n' "$_hive_display"
+    printf 'context and %s/agents/main/ for the default silo.\n' "$_hive_display"
+    printf 'Docs: %shttps://github.com/TJCurnutte/memory-hive%s\n' "$CYAN" "$RESET"
+fi
