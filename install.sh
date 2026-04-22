@@ -72,15 +72,71 @@ if [ -d "$AGENTS_DIR" ]; then
     mv "$AGENTS_DIR" "$AGENTS_BACKUP"
 fi
 
-# Copy each top-level entry under hive/ except agents/ (which we'll handle
-# specifically so we don't clobber user data).
+# Merge each top-level entry under hive/ into $HIVE_DIR without overwriting
+# anything the user already has.
+#
+# Rules:
+#   - If $HIVE_DIR/<name> does not exist → copy wholesale.
+#   - If it exists and is a directory → recursively copy only files that are
+#     missing on the user's side. Existing files are left strictly alone.
+#   - If it exists and is a file → never overwrite. Drop the upstream version
+#     alongside as <file>.upstream so the user can `diff` it at their leisure.
+# agents/ is handled separately below.
+#
+# Notes:
+#   - POSIX `cp` has no portable --update flag, so we walk via `find` and copy
+#     per-file.
+#   - Symlinks in the repo are treated as their targets (unlikely in practice).
+
+SAFE_UPDATES_ADDED=0
+SAFE_UPDATES_PRESERVED=0
+
+_safe_merge_dir() {
+    _src="$1"; _dst="$2"
+    [ -d "$_dst" ] || mkdir -p "$_dst"
+    # Relative paths of every file under $_src.
+    ( cd "$_src" && find . -type f 2>/dev/null ) | while IFS= read -r rel; do
+        rel="${rel#./}"
+        [ -n "$rel" ] || continue
+        _s="$_src/$rel"
+        _d="$_dst/$rel"
+        if [ -e "$_d" ]; then
+            # Drop a .upstream sibling if the content actually changed, so the
+            # user can review. Never touch the live file.
+            if ! cmp -s "$_s" "$_d" 2>/dev/null; then
+                cp "$_s" "$_d.upstream" 2>/dev/null || true
+            fi
+        else
+            _ddir="$(dirname "$_d")"
+            [ -d "$_ddir" ] || mkdir -p "$_ddir"
+            cp "$_s" "$_d" || die "Failed to copy $rel into $_dst"
+        fi
+    done
+}
+
 for entry in "$TMP_DIR/memory-hive/hive/"* "$TMP_DIR/memory-hive/hive/".[!.]*; do
     [ -e "$entry" ] || continue
     name="$(basename "$entry")"
     if [ "$name" = "agents" ]; then
         continue
     fi
-    cp -R "$entry" "$HIVE_DIR/" || die "Failed to copy $name into $HIVE_DIR"
+    target="$HIVE_DIR/$name"
+    if [ ! -e "$target" ]; then
+        # Fresh install for this entry — just copy.
+        cp -R "$entry" "$HIVE_DIR/" || die "Failed to copy $name into $HIVE_DIR"
+    elif [ -d "$entry" ] && [ -d "$target" ]; then
+        # Both directories — merge file-by-file, preserving existing.
+        _safe_merge_dir "$entry" "$target"
+    elif [ -f "$entry" ] && [ -f "$target" ]; then
+        # File collision at hive root — never overwrite; drop .upstream.
+        if ! cmp -s "$entry" "$target" 2>/dev/null; then
+            cp "$entry" "$target.upstream" 2>/dev/null || true
+        fi
+    else
+        # Type mismatch (rare) — leave the user's version alone, stash upstream.
+        cp -R "$entry" "$target.upstream" 2>/dev/null || true
+        warn "$name: type differs between upstream and local — left yours alone, stashed upstream as ${name}.upstream"
+    fi
 done
 
 # Restore (or create) the agents directory.
