@@ -120,7 +120,7 @@ We welcome contributions! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
 
 ## Who Built This
 
-[Travis Curnutte](https://github.com/TJCurnutte) — built this as the central memory system for his own multi-agent architecture. It started as internal infrastructure and got open-sourced because nothing else like it exists.
+[The User](https://github.com/TJCurnutte) — built this as the central memory system for his own multi-agent architecture. It started as internal infrastructure and got open-sourced because nothing else like it exists.
 
 ## License
 

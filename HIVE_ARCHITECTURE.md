@@ -202,7 +202,7 @@ The hive is framework-agnostic. Any agent can read from and write to the hive di
 
 ## Who Runs This
 
-The **Chief of Staff** (main agent) acts as curator. In Travis's architecture, that's the primary orchestrator that receives all human input and dispatches work. The curator role is dedicated — it maintains the hive so all other agents can focus on their specialties.
+The **Chief of Staff** (main agent) acts as curator. In the user's architecture, that's the primary orchestrator that receives all human input and dispatches work. The curator role is dedicated — it maintains the hive so all other agents can focus on their specialties.
 
 ---
 

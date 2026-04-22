@@ -1,8 +1,8 @@
-# Travis Curnutte — Human Context
+# The User — Human Context
 
 ## Who He Is
 
-- **Full name:** Travis Curnutte
+- **Full name:** the user
 - **Pronouns:** he/him
 - **Timezone:** America/New_York (EDT/EST)
 - **Has Tourette's** — professional, casual, doesn't affect capability
