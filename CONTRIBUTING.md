@@ -60,6 +60,8 @@ Memory Hive is built for multi-agent systems. When implementing it, parallelize 
 
 This is how Memory Hive achieves speed without sacrificing quality. Parallel execution is the default — not the exception. Agents that follow this rule ship faster and produce better results.
 
+**Enforcement:** If an agent performs a multi-dimensional task serially (doing all the work itself instead of spawning), it must flag the violation, correct course, and document what it should have parallelized. This rule applies to itself recursively.
+
 
 ## Questions?
 
