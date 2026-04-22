@@ -188,20 +188,10 @@ The Chief of Staff (curator) operates with full autonomy. It assesses, acts, and
 ### Quick Start
 
 ```bash
-# Clone the repo
-git clone https://github.com/TJCurnutte/memory-hive.git
-cd memory-hive
-
-# Set up your hive directory
-mkdir -p ~/.openclaw/hive
-cp -r hive/ ~/.openclaw/hive/
-
-# Each agent gets its own silo
-mkdir -p ~/.openclaw/hive/agents/[your-agent-id]
-
-# Integrate with your agent system
-# See INTEGRATION.md for framework-specific guides
+curl -fsSL memoryhive.neural-forge.io/install.sh | sh
 ```
+
+The installer auto-detects Claude Code, OpenClaw, and generic environments. See [INTEGRATION.md](INTEGRATION.md) for details on what gets wired up.
 
 ### For OpenClaw Users
 
