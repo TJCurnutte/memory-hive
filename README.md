@@ -28,7 +28,7 @@ The result: a system that learns from every task it completes, gets smarter over
 │   ├── AGENTS.md           ← Agent roster (who exists, what they do)
 │   └── SKILLS_CATALOG.md   ← Skills matrix
 ├── knowledge/
-│   ├── TRAVIS.md          ← Primary human context
+│   ├── HUMAN_CONTEXT.md          ← Primary human context
 │   ├── SOUL.md            ← System behavior guide
 │   └── DOMAINS.md         ← Area expertise definitions
 ├── learnings/
@@ -69,7 +69,7 @@ Every agent, on every spawn:
 1. Read `index.md`
 2. Read `registry/AGENTS.md`
 3. Read `registry/SKILLS_CATALOG.md`
-4. Read `knowledge/TRAVIS.md`
+4. Read `knowledge/HUMAN_CONTEXT.md`
 5. Read `learnings/distilled/patterns.md`
 6. Read `tasks/queue.md`
 7. Read own log in `agents/[id]/`

@@ -52,7 +52,7 @@ _(empty until first task completes)_
 - [HIVE_ARCHITECTURE.md](../HIVE_ARCHITECTURE.md) — Full system design
 - [registry/AGENTS.md](./registry/AGENTS.md) — Agent roster
 - [registry/SKILLS_CATALOG.md](./registry/SKILLS_CATALOG.md) — Skills matrix
-- [knowledge/TRAVIS.md](./knowledge/TRAVIS.md) — Human context
+- [knowledge/HUMAN_CONTEXT.md](./knowledge/HUMAN_CONTEXT.md) — Human context
 - [learnings/distilled/](./learnings/distilled/) — Curated learnings
 
 ---

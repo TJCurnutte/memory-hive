@@ -41,7 +41,7 @@ All agents read this first on every spawn. Contains:
 #### 3. `knowledge/` — Curated Truth
 
 Written and maintained by curator (Chief of Staff) only. Contains:
-- `TRAVIS.md` — Human context (goals, preferences, tics, timezone)
+- `HUMAN_CONTEXT.md` — Human context (goals, preferences, tics, timezone)
 - `SOUL.md` — System behavior guidelines
 - `DOMAINS.md` — Area expertise definitions
 - `PROJECTS.md` — Active projects and their state
@@ -126,7 +126,7 @@ Every agent, on every spawn:
 1. Read index.md
 2. Read registry/AGENTS.md
 3. Read registry/SKILLS_CATALOG.md
-4. Read knowledge/TRAVIS.md
+4. Read knowledge/HUMAN_CONTEXT.md
 5. Read learnings/distilled/patterns.md
 6. Read tasks/queue.md
 7. Read own log in agents/[id]/
