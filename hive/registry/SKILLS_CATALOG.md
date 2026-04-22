@@ -1,91 +1,79 @@
 # Skills Catalog
 
-Matrix of what each agent can do. Used for routing decisions.
+Matrix of what each agent in your hive can do. Used for routing decisions.
 
-## Skill Categories
+This catalog is **user-maintained**. The installer seeds it with just the
+curator row. As you add agents, append their skills below so the curator
+(and you) can route tasks to the right one.
 
-### 🔧 Technical / Development
+## Format
 
-| Skill | Agents |
-|---|---|
-| Architecture & system design | coder, vibe-coder, api-expert |
-| Frontend development | web-dev, coder, vibe-coder |
-| Backend development | coder, api-expert, web-dev |
-| Debugging | coder, security-auditor, api-expert |
-| Code review | coder, security-auditor |
-| API design | api-expert, coder |
-| Security auditing | security-auditor |
-| Testing & QA | coder, web-dev |
+Group skills by category. For each row, list the agent IDs that have the
+skill. Routing is as simple as "task X needs skill Y → any agent listed
+under Y can handle it."
 
-### 📊 Research & Data
+## Categories (examples)
 
-| Skill | Agents |
-|---|---|
-| Deep research (Karpathy-style) | research-analyst |
-| Data analysis & queries | data-analyst |
-| Market research | research-analyst, cxaas-specialist |
-| Competitive analysis | research-analyst, cxaas-specialist |
-| Report generation | data-analyst, content-strategist |
+Adapt these to your roster. The categories below are examples, not
+requirements — delete the ones you don't need and add your own.
 
-### 📢 Marketing & Content
+### Coordination
 
 | Skill | Agents |
 |---|---|
-| Social media strategy | social-media-mgr |
-| Content calendar planning | content-strategist, social-media-mgr |
-| Long-form content writing | content-strategist |
-| LinkedIn posts | social-media-mgr, content-strategist |
-| Email sequences | content-strategist |
-| Brand growth | social-media-mgr, content-strategist |
+| Task triage & delegation | main |
+| Memory curation | main |
+| Conflict resolution | main |
+| Multi-agent orchestration | main |
 
-### 🤝 Sales & Outreach
+### Development (example — populate as you add agents)
 
 | Skill | Agents |
 |---|---|
-| Outbound prospecting | sdr-1, sdr-2 |
-| Lead qualification | sdr-1 |
-| Appointment setting | sdr-1 |
-| Follow-up campaigns | sdr-2 |
-| Pipeline hygiene | sdr-2 |
+| Architecture & system design | _(add agent IDs)_ |
+| Backend development | _(add agent IDs)_ |
+| Frontend development | _(add agent IDs)_ |
+| Debugging | _(add agent IDs)_ |
+| Code review | _(add agent IDs)_ |
+| Testing & QA | _(add agent IDs)_ |
 
-### ☁️ Domain Expertise
-
-| Skill | Agents |
-|---|---|
-| CCaaS platforms | cxaas-specialist |
-| CX technology | cxaas-specialist |
-| AWS Connect | cxaas-specialist |
-| Genesys, Five9, Twilio Flex | cxaas-specialist |
-| Telecom / SIP | cxaas-specialist, api-expert |
-| UCaaS | cxaas-specialist |
-
-### 🗂️ Coordination
+### Research & Analysis (example)
 
 | Skill | Agents |
 |---|---|
-| Task triage & delegation | main (Chief of Staff) |
-| Memory curation | main (Chief of Staff) |
-| Project coordination | main (Chief of Staff) |
-| Multi-agent orchestration | main (Chief of Staff) |
+| Deep research | _(add agent IDs)_ |
+| Data analysis | _(add agent IDs)_ |
+| Report synthesis | _(add agent IDs)_ |
+
+### Writing & Content (example)
+
+| Skill | Agents |
+|---|---|
+| Long-form writing | _(add agent IDs)_ |
+| Editing & tightening | _(add agent IDs)_ |
+| Tone matching | _(add agent IDs)_ |
+
+### Planning (example)
+
+| Skill | Agents |
+|---|---|
+| Breaking down tasks | _(add agent IDs)_ |
+| Risk identification | _(add agent IDs)_ |
+| Dependency mapping | _(add agent IDs)_ |
 
 ---
 
 ## Routing Guide
 
-When a task comes in, route to the agent with the matching primary skill:
+When a task comes in, route to an agent whose primary skill matches. If no
+agent matches, the curator (`main`) picks it up by default.
 
-- **Build something** → coder, web-dev, vibe-coder
-- **Secure/audit something** → security-auditor
-- **Research something thoroughly** → research-analyst
-- **Numbers/reports** → data-analyst
-- **API/integration** → api-expert
-- **Social content** → social-media-mgr
-- **Long-form writing** → content-strategist
-- **Outbound sales** → sdr-1
-- **Pipeline/foll0w-ups** → sdr-2
-- **CCaaS questions** → cxaas-specialist
-- **Anything unclear / everything** → main (Chief of Staff)
+- **Anything unclear or cross-cutting** → `main`
+- **Every other bucket** → whichever agent you listed for that skill
+
+Update this catalog every time you add or remove an agent.
 
 ---
 
-**Last updated:** 2026-04-22
+**Keep this in sync with `AGENTS.md`. They should always agree on who
+exists.**

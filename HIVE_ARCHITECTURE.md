@@ -52,8 +52,8 @@ hive/
 ### The Hive Directory
 
 ```
-~/.openclaw/hive/          ← Shared brain (all agents read/write)
-~/.openclaw/hive/agents/   ← Private silos (one per agent)
+~/.memory-hive/hive/          ← Shared brain (all agents read/write)
+~/.memory-hive/hive/agents/   ← Private silos (one per agent)
 ```
 
 ---
@@ -141,7 +141,7 @@ Each agent has its own private directory:
 
 **`log.md`** — Personal working notes. The agent's running journal of what it's doing, what it's thought about, what's in progress. Nobody else reads this.
 
-**`context.md`** — Agent-specific state. How this agent prefers to work, what it's currently focused on, relationships with other agents (e.g., "SDR Beta: coordinates with SDR Alpha").
+**`context.md`** — Agent-specific state. How this agent prefers to work, what it's currently focused on, relationships with other agents (e.g., "reviewer: pairs with coder on every PR").
 
 **`memory.md`** — Private learnings. Things this agent learned that don't need to be in the shared hive but are worth remembering (personal notes, agent-specific patterns, private observations).
 
@@ -254,8 +254,8 @@ This prevents speculation from polluting core knowledge.
 
 All agents can be configured to use the hive boot sequence. Each agent's workspace becomes:
 - `~/.openclaw/workspace-[agent-id]/` — agent's own dir
-- `~/.openclaw/hive/` — shared hive
-- `~/.openclaw/hive/agents/[agent-id]/` — private silo
+- `~/.memory-hive/hive/` — shared hive
+- `~/.memory-hive/hive/agents/[agent-id]/` — private silo
 
 ### Custom Frameworks
 

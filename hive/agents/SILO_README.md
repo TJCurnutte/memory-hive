@@ -15,7 +15,7 @@ Personal working notes. The agent's running journal of:
 Your agent-specific state:
 - How you prefer to work
 - What you're currently focused on
-- Relationships with other agents (e.g., "SDR Beta: coordinates with SDR Alpha")
+- Relationships with other agents (e.g., "reviewer: pairs with coder on every PR")
 - Anything that helps you get back up to speed after a gap
 
 ### `memory.md`

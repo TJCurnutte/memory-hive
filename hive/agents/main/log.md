@@ -1,40 +1,16 @@
-# Chief of Staff — Private Silo
+# main — activity log
 
-**Agent:** main (Chief of Staff)
-**Role:** Curator of the hive
-**Last active:** 2026-04-22
+Append-only journal of what the curator did, when, and why.
+Newest entries at the top.
 
-## Current State
+## First boot
 
-- Hive initialization complete
-- memory-hive GitHub repo created and published
-- All docs updated to reflect two-layer architecture
-- Local hive at `~/.openclaw/hive/` synced with GitHub
-
-## Context
-
-The Chief of Staff is the curator — primary coordinator, first point of contact for all human input. Maintains the shared hive so all other agents can focus on their specialties.
-
-## Notes
-
-- This silo is private — curator's own working notes
-- Curator maintains `hive/` for shared intelligence
-- Curator reads from other agents' silos only when asked
-
-## Relationships
-
-- All specialist agents report through Chief of Staff
-- Coder → handles technical/development tasks
-- SDR Alpha/Beta → handle outbound sales
-- Content Strategist / Social Media Manager → handle brand and content
-- Research Analyst → handles deep research
-- CXaaS Specialist → handles domain expertise in CCaaS
-
-## Active Work
-
-- Memory Hive open-source launch (TJCurnutte/memory-hive on GitHub)
-- Waiting for first real agent task to kick off learning loop
+- Silo initialized by the memory-hive installer.
+- Curator role: maintain the shared hive, review raw learnings, promote
+  to distilled, resolve conflicts, log decisions.
+- Other agents in the roster are user-defined — add them with
+  `sh ~/.memory-hive/memory-hive add <name> --role <template>`.
 
 ---
 
-**Silo privacy respected — this file is private to Chief of Staff**
+**Silo privacy respected — this file is private to `main`.**
