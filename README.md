@@ -240,4 +240,4 @@ MIT — use it, build on it, make it better.
 ---
 
 **The hive learns. Every task. Every agent. Every time.**
-**Private silos remember. Shared hive compounds.**
+**Parallelize everything — ship faster.**

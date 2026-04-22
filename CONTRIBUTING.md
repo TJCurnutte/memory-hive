@@ -49,6 +49,18 @@ Open a feature request issue. Explain the problem it solves and how you'd use it
 - Bug fixes need regression tests
 - Run existing tests before submitting
 
+## SPAWNING RULE — For Multi-Agent Implementations
+
+Memory Hive is built for multi-agent systems. When implementing it, parallelize aggressively:
+
+- **Planning tasks** → spawn planning + execution subagents simultaneously
+- **Building/coding tasks** → split across 2-3 subagents working in parallel
+- **Creative/design tasks** → spawn multiple subagents for different creative directions
+- **Research tasks** → cover multiple angles at once via parallel subagents
+
+This is how Memory Hive achieves speed without sacrificing quality. Parallel execution is the default — not the exception. Agents that follow this rule ship faster and produce better results.
+
+
 ## Questions?
 
 Open a Discussion if you're not sure about something. We're happy to help.
