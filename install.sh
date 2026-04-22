@@ -88,8 +88,10 @@ fi
 #     per-file.
 #   - Symlinks in the repo are treated as their targets (unlikely in practice).
 
-SAFE_UPDATES_ADDED=0
-SAFE_UPDATES_PRESERVED=0
+# MEMORY_HIVE_SYNC=1 turns a re-install into an "update": upstream wins for
+# shared hive content. Agent silos (under $AGENTS_DIR) are ALWAYS preserved
+# regardless of this flag — they live outside this merge loop entirely.
+SYNC_MODE="${MEMORY_HIVE_SYNC:-0}"
 
 _safe_merge_dir() {
     _src="$1"; _dst="$2"
@@ -101,9 +103,16 @@ _safe_merge_dir() {
         _s="$_src/$rel"
         _d="$_dst/$rel"
         if [ -e "$_d" ]; then
-            # Drop a .upstream sibling if the content actually changed, so the
-            # user can review. Never touch the live file.
-            if ! cmp -s "$_s" "$_d" 2>/dev/null; then
+            if cmp -s "$_s" "$_d" 2>/dev/null; then
+                : # identical — nothing to do
+            elif [ "$SYNC_MODE" = "1" ]; then
+                # Update mode: upstream wins for shared content. Back up the
+                # user's version as .local so nothing is irrecoverably lost.
+                cp "$_d" "$_d.local" 2>/dev/null || true
+                cp "$_s" "$_d" || die "Failed to update $rel in $_dst"
+            else
+                # Default (install mode): never overwrite. Drop the upstream
+                # version alongside for review.
                 cp "$_s" "$_d.upstream" 2>/dev/null || true
             fi
         else
@@ -128,9 +137,14 @@ for entry in "$TMP_DIR/memory-hive/hive/"* "$TMP_DIR/memory-hive/hive/".[!.]*; d
         # Both directories — merge file-by-file, preserving existing.
         _safe_merge_dir "$entry" "$target"
     elif [ -f "$entry" ] && [ -f "$target" ]; then
-        # File collision at hive root — never overwrite; drop .upstream.
+        # File collision at hive root.
         if ! cmp -s "$entry" "$target" 2>/dev/null; then
-            cp "$entry" "$target.upstream" 2>/dev/null || true
+            if [ "$SYNC_MODE" = "1" ]; then
+                cp "$target" "$target.local" 2>/dev/null || true
+                cp "$entry" "$target" || die "Failed to update $name in $HIVE_DIR"
+            else
+                cp "$entry" "$target.upstream" 2>/dev/null || true
+            fi
         fi
     else
         # Type mismatch (rare) — leave the user's version alone, stash upstream.
@@ -158,27 +172,21 @@ else
     fi
 fi
 
-# Also install the create-agent.sh helper into the install dir for convenience.
-if [ -f "$TMP_DIR/memory-hive/create-agent.sh" ]; then
-    cp "$TMP_DIR/memory-hive/create-agent.sh" "$INSTALL_DIR/create-agent.sh"
-    chmod +x "$INSTALL_DIR/create-agent.sh" 2>/dev/null || true
-fi
+# Install the helper scripts into the install dir so users can run them
+# locally without a curl round-trip. These are tools (not user content) and
+# we always keep them current with upstream.
+for helper in create-agent.sh update.sh install.sh check-compliance.sh; do
+    _src="$TMP_DIR/memory-hive/$helper"
+    [ -f "$_src" ] || continue
+    cp "$_src" "$INSTALL_DIR/$helper"
+    chmod +x "$INSTALL_DIR/$helper" 2>/dev/null || true
+done
 
-# Install check-compliance.sh alongside. Like the hive content, we don't
-# clobber a user-modified copy: if the target exists and differs, drop
-# the new one as <file>.upstream so it can be reviewed with `diff`.
-if [ -f "$TMP_DIR/memory-hive/check-compliance.sh" ]; then
-    _cc_target="$INSTALL_DIR/check-compliance.sh"
-    if [ ! -e "$_cc_target" ]; then
-        cp "$TMP_DIR/memory-hive/check-compliance.sh" "$_cc_target"
-        chmod +x "$_cc_target" 2>/dev/null || true
-    elif ! cmp -s "$TMP_DIR/memory-hive/check-compliance.sh" "$_cc_target" 2>/dev/null; then
-        cp "$TMP_DIR/memory-hive/check-compliance.sh" "$_cc_target.upstream" 2>/dev/null || true
-        chmod +x "$_cc_target.upstream" 2>/dev/null || true
-    fi
+if [ "$SYNC_MODE" = "1" ]; then
+    ok "Memory Hive updated"
+else
+    ok "Memory Hive installed"
 fi
-
-ok "Memory Hive installed"
 
 # =============================================================================
 # Phase A: Environment detection
@@ -262,7 +270,10 @@ if [ ! -f "$HIVE_BLOCK_TEMPLATE" ]; then
 fi
 # Use a sed delimiter unlikely to appear in a filesystem path.
 _hive_dir_escaped="$(printf '%s' "$HIVE_DIR" | sed 's/[&|]/\\&/g')"
-sed "s|\${HIVE_DIR}|$_hive_dir_escaped|g" "$HIVE_BLOCK_TEMPLATE" > "$HIVE_BLOCK_FILE" \
+_install_dir_escaped="$(printf '%s' "$INSTALL_DIR" | sed 's/[&|]/\\&/g')"
+sed -e "s|\${HIVE_DIR}|$_hive_dir_escaped|g" \
+    -e "s|\${INSTALL_DIR}|$_install_dir_escaped|g" \
+    "$HIVE_BLOCK_TEMPLATE" > "$HIVE_BLOCK_FILE" \
     || die "Failed to render boot block from $HIVE_BLOCK_TEMPLATE"
 
 # merge_hive_block <target-claude-md-path>

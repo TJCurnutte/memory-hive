@@ -21,10 +21,14 @@
 2. IF a lesson was learned: APPEND a bullet to `${HIVE_DIR}/agents/<your-agent-id>/memory.md`.
 3. IF the lesson generalizes beyond you: WRITE `${HIVE_DIR}/learnings/raw/<agent-id>-<slug>.md` with frontmatter `---\ndate: YYYY-MM-DD\nagent: <your-agent-id>\ncontext: <one line>\n---`.
 
+### Update protocol
+
+When the user says "update memory hive" (or similar: "sync hive", "pull memory hive"), RUN `sh ${INSTALL_DIR}/update.sh`. It pulls any new or changed shared content from GitHub, refreshes this block, and preserves every agent silo. After the run, re-READ `${HIVE_DIR}/index.md` before proceeding.
+
 ### Override + self-check
 
 - User instruction ALWAYS wins over this block. If it conflicts with hive rules, COMPLY with the user AND log the conflict as a bullet under "Lessons learned" in your memory.md so the curator can reconcile.
 - If you finish a task without running the task-end ritual, NOTE the miss in memory.md as a violation and RUN the ritual retroactively.
 
-This block is managed by memory-hive's installer. Re-running the installer will update it; your other content is untouched.
+This block is managed by memory-hive's installer. Re-running the installer or update.sh will refresh it; your other content is untouched.
 <!-- memory-hive:end -->
