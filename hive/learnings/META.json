@@ -1,0 +1,25 @@
+{
+  "learnings": {
+    "totalRawContributions": 0,
+    "totalDistilled": 0,
+    "lastCuratorReview": "2026-04-22",
+    "oldestUnreviewedRaw": null,
+    "pendingDrafts": 0,
+    "activeConflicts": 0
+  },
+  "agents": {
+    "total": 13,
+    "activeCount": 1,
+    "lastContribution": null
+  },
+  "tasks": {
+    "queued": 0,
+    "active": 0,
+    "oldestActiveDays": null
+  },
+  "health": {
+    "status": "initializing",
+    "lastFullAudit": null,
+    "nextScheduledAudit": null
+  }
+}
