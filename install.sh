@@ -164,6 +164,20 @@ if [ -f "$TMP_DIR/memory-hive/create-agent.sh" ]; then
     chmod +x "$INSTALL_DIR/create-agent.sh" 2>/dev/null || true
 fi
 
+# Install check-compliance.sh alongside. Like the hive content, we don't
+# clobber a user-modified copy: if the target exists and differs, drop
+# the new one as <file>.upstream so it can be reviewed with `diff`.
+if [ -f "$TMP_DIR/memory-hive/check-compliance.sh" ]; then
+    _cc_target="$INSTALL_DIR/check-compliance.sh"
+    if [ ! -e "$_cc_target" ]; then
+        cp "$TMP_DIR/memory-hive/check-compliance.sh" "$_cc_target"
+        chmod +x "$_cc_target" 2>/dev/null || true
+    elif ! cmp -s "$TMP_DIR/memory-hive/check-compliance.sh" "$_cc_target" 2>/dev/null; then
+        cp "$TMP_DIR/memory-hive/check-compliance.sh" "$_cc_target.upstream" 2>/dev/null || true
+        chmod +x "$_cc_target.upstream" 2>/dev/null || true
+    fi
+fi
+
 ok "Memory Hive installed"
 
 # =============================================================================
@@ -515,9 +529,11 @@ printf '\n'
 if [ "$DETECTED_CLAUDE_CODE" -eq 1 ] || [ "$DETECTED_OPENCLAW" -eq 1 ]; then
     printf 'Your agents will pick up the hive on next boot — no restart required.\n'
     printf 'Read the docs: %shttps://github.com/TJCurnutte/memory-hive%s\n' "$CYAN" "$RESET"
+    printf '  Check compliance: sh %s/check-compliance.sh\n' "$_install_display"
 else
     printf "We didn't detect Claude Code or OpenClaw on this machine. To wire this\n"
     printf 'into your own agent system, point it at %s/ for shared\n' "$_hive_display"
     printf 'context and %s/agents/main/ for the default silo.\n' "$_hive_display"
     printf 'Docs: %shttps://github.com/TJCurnutte/memory-hive%s\n' "$CYAN" "$RESET"
+    printf '  Check compliance: sh %s/check-compliance.sh\n' "$_install_display"
 fi
