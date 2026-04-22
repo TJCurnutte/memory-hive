@@ -10,7 +10,18 @@
 set -e
 
 AGENT_ID="${1:-}"
-INSTALL_DIR="${MEMORY_HIVE_DIR:-$HOME/.memory-hive}"
+
+# Self-locate: if this script lives next to a hive/ directory, use that as the
+# install root. Lets `sh /custom/path/create-agent.sh` work without the user
+# also exporting MEMORY_HIVE_DIR. The env var still wins if explicitly set.
+SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+if [ -n "${MEMORY_HIVE_DIR:-}" ]; then
+    INSTALL_DIR="$MEMORY_HIVE_DIR"
+elif [ -n "$SCRIPT_DIR" ] && [ -d "$SCRIPT_DIR/hive" ]; then
+    INSTALL_DIR="$SCRIPT_DIR"
+else
+    INSTALL_DIR="$HOME/.memory-hive"
+fi
 AGENTS_DIR="$INSTALL_DIR/hive/agents"
 
 if [ -z "$AGENT_ID" ]; then
