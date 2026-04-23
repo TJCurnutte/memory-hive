@@ -1,8 +1,17 @@
-# 🧠 Memory Hive Architecture
+# Memory Hive Architecture
+
+Conceptual model for the two-layer memory system. For installer
+behavior and CLI usage see [INTEGRATION.md](INTEGRATION.md); for the
+product overview see [README.md](README.md).
 
 ## Overview
 
-Memory Hive is a shared, continuously learning memory system for multi-agent AI architectures. Every agent has **two memory layers** — a private silo for personal continuity and a shared hive for collective intelligence. The system compounds over time: every task makes the hive smarter, every agent keeps its own context, and a curator maintains the shared knowledge base.
+Memory Hive is a shared, continuously learning memory system for
+multi-agent AI architectures. Every agent has **two memory layers** —
+a private silo for personal continuity and a shared hive for
+collective intelligence. The system compounds over time: every task
+makes the hive smarter, every agent keeps its own context, and a
+curator maintains the shared knowledge base.
 
 ---
 
@@ -52,8 +61,8 @@ hive/
 ### The Hive Directory
 
 ```
-~/.openclaw/hive/          ← Shared brain (all agents read/write)
-~/.openclaw/hive/agents/   ← Private silos (one per agent)
+~/.memory-hive/hive/          ← Shared brain (all agents read/write)
+~/.memory-hive/hive/agents/   ← Private silos (one per agent)
 ```
 
 ---
@@ -141,7 +150,7 @@ Each agent has its own private directory:
 
 **`log.md`** — Personal working notes. The agent's running journal of what it's doing, what it's thought about, what's in progress. Nobody else reads this.
 
-**`context.md`** — Agent-specific state. How this agent prefers to work, what it's currently focused on, relationships with other agents (e.g., "SDR Beta: coordinates with SDR Alpha").
+**`context.md`** — Agent-specific state. How this agent prefers to work, what it's currently focused on, relationships with other agents (e.g., "reviewer: pairs with coder on every PR").
 
 **`memory.md`** — Private learnings. Things this agent learned that don't need to be in the shared hive but are worth remembering (personal notes, agent-specific patterns, private observations).
 
@@ -250,25 +259,23 @@ This prevents speculation from polluting core knowledge.
 
 ## Integrating With Your Agents
 
-### OpenClaw
+The hive is framework-agnostic — nothing here depends on Claude Code,
+OpenClaw, or any specific runtime. Any agent, in any framework, can:
 
-All agents can be configured to use the hive boot sequence. Each agent's workspace becomes:
-- `~/.openclaw/workspace-[agent-id]/` — agent's own dir
-- `~/.openclaw/hive/` — shared hive
-- `~/.openclaw/hive/agents/[agent-id]/` — private silo
-
-### Custom Frameworks
-
-The hive is framework-agnostic. Any agent can:
 - Read from and write to the hive via standard file operations
 - Keep personal context in `agents/[id]/`
 - Implement the boot sequence and task completion flow independently
 
 Key integration points:
-1. On agent spawn → run boot sequence
+
+1. On agent spawn → run the boot sequence
 2. On task completion → write to `learnings/raw/[id]/` and `agents/[id]/log.md`
-3. If curator → run curation loop
+3. If curator → run the curation loop
 4. All agents → read `learnings/distilled/` before starting tasks
+
+For Claude Code and OpenClaw users, the installer wires this up
+automatically. See [INTEGRATION.md](INTEGRATION.md) for what it does
+and [MIGRATION.md](MIGRATION.md) if you're moving from an older setup.
 
 ---
 

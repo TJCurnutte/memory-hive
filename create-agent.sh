@@ -6,6 +6,13 @@
 #
 # Override install location:
 #   MEMORY_HIVE_DIR=/custom/path sh create-agent.sh <agent-id>
+#
+# Seed a role description into context.md's "## Role" section:
+#   MH_AGENT_ROLE="Writes code and knows the codebase conventions." \
+#     sh create-agent.sh <agent-id>
+#
+# Or point at a template file under templates/roles/:
+#   MH_AGENT_ROLE_FILE=/path/to/role.md sh create-agent.sh <agent-id>
 
 set -e
 
@@ -57,6 +64,14 @@ mkdir -p "$AGENT_DIR"
 
 TODAY="$(date -u +%Y-%m-%d 2>/dev/null || echo "today")"
 
+# Resolve the role text. Env var wins over file; both are optional.
+ROLE_TEXT=""
+if [ -n "${MH_AGENT_ROLE:-}" ]; then
+    ROLE_TEXT="$MH_AGENT_ROLE"
+elif [ -n "${MH_AGENT_ROLE_FILE:-}" ] && [ -f "$MH_AGENT_ROLE_FILE" ]; then
+    ROLE_TEXT="$(cat "$MH_AGENT_ROLE_FILE")"
+fi
+
 cat > "$AGENT_DIR/log.md" <<EOF
 # ${AGENT_ID} — activity log
 
@@ -68,7 +83,22 @@ Newest entries at the top.
 - Silo initialized.
 EOF
 
-cat > "$AGENT_DIR/context.md" <<EOF
+# context.md: seed the Role section with ROLE_TEXT if we have it,
+# otherwise keep the placeholder prompt so the user fills it in later.
+if [ -n "$ROLE_TEXT" ]; then
+    {
+        printf '# %s — working context\n\n' "$AGENT_ID"
+        printf 'Short, current-task context for this agent. Replace freely as the task shifts.\n\n'
+        printf '## Role\n\n'
+        printf '%s\n\n' "$ROLE_TEXT"
+        printf '## Current focus\n\n'
+        printf '(What is the agent working on right now?)\n\n'
+        printf '## Open questions\n\n'
+        # Leading "- " via -- to prevent printf treating it as a flag.
+        printf -- '-\n'
+    } > "$AGENT_DIR/context.md"
+else
+    cat > "$AGENT_DIR/context.md" <<EOF
 # ${AGENT_ID} — working context
 
 Short, current-task context for this agent. Replace freely as the task shifts.
@@ -85,6 +115,7 @@ Short, current-task context for this agent. Replace freely as the task shifts.
 
 -
 EOF
+fi
 
 cat > "$AGENT_DIR/memory.md" <<EOF
 # ${AGENT_ID} — durable memory
@@ -109,3 +140,6 @@ printf "Created agent silo: %s\n" "$AGENT_DIR"
 printf "  log.md     — append-only activity log\n"
 printf "  context.md — current working context\n"
 printf "  memory.md  — durable memory\n"
+if [ -n "$ROLE_TEXT" ]; then
+    printf "  role       — seeded into context.md\n"
+fi

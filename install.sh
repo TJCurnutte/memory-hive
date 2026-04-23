@@ -11,6 +11,11 @@
 # Environment overrides:
 #   MEMORY_HIVE_DIR=/custom/path   install location (default: $HOME/.memory-hive)
 #   MEMORY_HIVE_MERGE_CWD=1        also merge the hive block into $PWD/CLAUDE.md
+#   MEMORY_HIVE_REPO=/local/path   install from a local working copy instead of
+#                                  cloning (useful for development and tests)
+#   MEMORY_HIVE_SKIP_CLAUDE_MD=1   don't modify ~/.claude/CLAUDE.md even if it
+#                                  exists (useful for tests that shouldn't
+#                                  touch the developer's real config)
 
 set -e
 
@@ -49,10 +54,16 @@ info "Installing Memory Hive to ${BOLD}${INSTALL_DIR}${RESET}"
 TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t memory-hive)"
 trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
 
-info "Fetching latest from $REPO_URL"
-if ! git clone --depth 1 --quiet "$REPO_URL" "$TMP_DIR/memory-hive" 2>/tmp/memory-hive-clone.err; then
-    cat /tmp/memory-hive-clone.err >&2 || true
-    die "Failed to clone $REPO_URL. Check your network connection."
+if [ -n "${MEMORY_HIVE_REPO:-}" ] && [ -d "$MEMORY_HIVE_REPO/hive" ]; then
+    info "Using local repo at $MEMORY_HIVE_REPO (MEMORY_HIVE_REPO override)"
+    cp -R "$MEMORY_HIVE_REPO" "$TMP_DIR/memory-hive" \
+        || die "Failed to copy local repo from $MEMORY_HIVE_REPO"
+else
+    info "Fetching latest from $REPO_URL"
+    if ! git clone --depth 1 --quiet "$REPO_URL" "$TMP_DIR/memory-hive" 2>/tmp/memory-hive-clone.err; then
+        cat /tmp/memory-hive-clone.err >&2 || true
+        die "Failed to clone $REPO_URL. Check your network connection."
+    fi
 fi
 
 if [ ! -d "$TMP_DIR/memory-hive/hive" ]; then
@@ -175,12 +186,24 @@ fi
 # Install the helper scripts into the install dir so users can run them
 # locally without a curl round-trip. These are tools (not user content) and
 # we always keep them current with upstream.
-for helper in create-agent.sh update.sh install.sh check-compliance.sh; do
+for helper in create-agent.sh update.sh install.sh check-compliance.sh memory-hive; do
     _src="$TMP_DIR/memory-hive/$helper"
     [ -f "$_src" ] || continue
     cp "$_src" "$INSTALL_DIR/$helper"
     chmod +x "$INSTALL_DIR/$helper" 2>/dev/null || true
 done
+
+# Install role templates so the wizard and CLI can seed context.md from them.
+if [ -d "$TMP_DIR/memory-hive/templates/roles" ]; then
+    mkdir -p "$INSTALL_DIR/templates/roles"
+    for _role in "$TMP_DIR/memory-hive/templates/roles/"*.md; do
+        [ -f "$_role" ] || continue
+        _role_name="$(basename "$_role")"
+        # Always refresh templates from upstream (these are reference content,
+        # not user data — the CLI reads them verbatim).
+        cp "$_role" "$INSTALL_DIR/templates/roles/$_role_name"
+    done
+fi
 
 if [ "$SYNC_MODE" = "1" ]; then
     ok "Memory Hive updated"
@@ -344,12 +367,14 @@ merge_hive_block() {
 
 WIRED_TARGETS=""
 
-if [ "$DETECTED_CLAUDE_CODE" -eq 1 ]; then
+if [ "$DETECTED_CLAUDE_CODE" -eq 1 ] && [ "${MEMORY_HIVE_SKIP_CLAUDE_MD:-0}" != "1" ]; then
     if merge_hive_block "$CLAUDE_MD_PATH"; then
         WIRED_TARGETS="$CLAUDE_MD_PATH"
     else
         warn "Could not update $CLAUDE_MD_PATH -- continuing"
     fi
+elif [ "$DETECTED_CLAUDE_CODE" -eq 1 ]; then
+    info "Skipping $CLAUDE_MD_PATH (MEMORY_HIVE_SKIP_CLAUDE_MD=1)"
 fi
 
 if [ "$DETECTED_CWD_CLAUDE_MD" -eq 1 ] && [ "${MEMORY_HIVE_MERGE_CWD:-0}" = "1" ]; then
@@ -496,6 +521,623 @@ if [ -n "$DETECTED_CLAUDE_AGENTS" ]; then
 fi
 
 # =============================================================================
+# Phase D.5: Interactive wizard (tty only, best-effort)
+# =============================================================================
+# Adds two flows:
+#   - Fresh install (no non-main silos present): ask how many agents to create
+#     and for each one: name + role template.
+#   - Re-install (non-main silos already present): ask keep/add/fresh/select.
+#
+# The wizard is skipped cleanly when no tty is reachable (CI, `curl | sh`
+# with /dev/tty unavailable). In that case the user gets the existing
+# behavior plus a one-liner hint to run `memory-hive add` later.
+
+# Decide where the wizard reads from:
+#   - stdin is a tty                          → read from stdin directly
+#   - stdin NOT tty, stdout IS tty, /dev/tty  → treat as `curl | sh` running
+#     interactively; open /dev/tty on FD 3 and read from there
+#   - otherwise                               → read from stdin and let EOF
+#     naturally end the wizard (covers `sh install.sh < /dev/null` for CI,
+#     heredoc-driven tests, and any other piped input)
+#
+# $WIZARD_TTY ends up: "stdin", "fd3", or "" (no wizard).
+WIZARD_TTY=""
+if [ -t 0 ]; then
+    WIZARD_TTY="stdin"
+elif [ -t 1 ] && [ -r /dev/tty ] && { exec 3</dev/tty; } 2>/dev/null; then
+    WIZARD_TTY="fd3"
+elif [ -p /dev/stdin ] 2>/dev/null || [ -f /dev/stdin ] 2>/dev/null; then
+    # Piped (pipe) or redirected (regular file) stdin — e.g. heredoc. Reads
+    # return EOF cleanly if the stream is empty, so the wizard exits
+    # gracefully for `< /dev/null` in CI.
+    WIZARD_TTY="stdin"
+fi
+
+# _wizard_read <varname> [default]
+# Read a line from the wizard tty into the named variable. Honors $default if
+# the user just hits enter. Returns 1 if we hit EOF (user cancelled or lost
+# the tty mid-flow).
+_wizard_read() {
+    _mh_var="$1"
+    _mh_default="${2:-}"
+    _mh_line=""
+    if [ "$WIZARD_TTY" = "fd3" ]; then
+        IFS= read -r _mh_line <&3 || return 1
+    else
+        IFS= read -r _mh_line || return 1
+    fi
+    if [ -z "$_mh_line" ] && [ -n "$_mh_default" ]; then
+        _mh_line="$_mh_default"
+    fi
+    # Portable indirect assignment.
+    eval "$_mh_var=\$_mh_line"
+    return 0
+}
+
+# _sanitize_name <raw> -> prints sanitized name to stdout.
+# Rules: lowercase, letters/digits/dashes only, spaces->dashes, strip leading/
+# trailing dashes, collapse multiple dashes, cap at 32 chars. Prints empty
+# if the sanitized result is empty or just dashes.
+_sanitize_name() {
+    _raw="$1"
+    # Replace spaces with dashes first, then lowercase, then strip anything
+    # that isn't [a-z0-9-], then collapse/trim dashes.
+    _name="$(printf '%s' "$_raw" \
+        | tr ' ' '-' \
+        | tr '[:upper:]' '[:lower:]' \
+        | tr -cd 'a-z0-9-' \
+        | sed -e 's/-\{2,\}/-/g' -e 's/^-//' -e 's/-$//')"
+    # Cap at 32 chars.
+    _name="$(printf '%s' "$_name" | cut -c1-32)"
+    # Re-strip trailing dash if the cut produced one.
+    _name="$(printf '%s' "$_name" | sed -e 's/-$//')"
+    case "$_name" in
+        ""|*[!a-z0-9-]*)
+            printf ''
+            return
+            ;;
+    esac
+    printf '%s' "$_name"
+}
+
+# _role_text_for_template <template-name> -> prints role paragraph to stdout.
+# Returns empty (and prints nothing) if the template isn't known / file missing.
+# Callers should check for empty output, not exit status — command
+# substitution eats exit codes anyway.
+_role_text_for_template() {
+    _tpl="$1"
+    _tpl_file="$TMP_DIR/memory-hive/templates/roles/$_tpl.md"
+    if [ -f "$_tpl_file" ]; then
+        cat "$_tpl_file"
+    fi
+}
+
+# _print_role_menu: print the numbered role template menu to stderr so it
+# never mixes with captured stdout.
+_print_role_menu() {
+    printf '\n' >&2
+    printf '  Role — pick a template or type your own:\n' >&2
+    printf '    [1] coder       Writes and edits code; runs tests before shipping.\n' >&2
+    printf '    [2] reviewer    Reviews code and designs for correctness and security.\n' >&2
+    printf '    [3] researcher  Deep-dives on open questions with sources cited.\n' >&2
+    printf '    [4] writer      Drafts and edits prose; tightens verbose writing.\n' >&2
+    printf '    [5] planner     Breaks big tasks into concrete steps.\n' >&2
+    printf '    [6] custom      Type your own description.\n' >&2
+    printf '    [0] skip        Leave role blank for now.\n' >&2
+}
+
+# _resolve_role_choice <choice> -> writes role text to $WIZARD_ROLE_OUT or
+# leaves it empty for skip. Returns 1 if the choice was invalid.
+WIZARD_ROLE_OUT=""
+_resolve_role_choice() {
+    _choice="$1"
+    WIZARD_ROLE_OUT=""
+    case "$_choice" in
+        0|"") return 0 ;;
+        1) WIZARD_ROLE_OUT="$(_role_text_for_template coder)" ;;
+        2) WIZARD_ROLE_OUT="$(_role_text_for_template reviewer)" ;;
+        3) WIZARD_ROLE_OUT="$(_role_text_for_template researcher)" ;;
+        4) WIZARD_ROLE_OUT="$(_role_text_for_template writer)" ;;
+        5) WIZARD_ROLE_OUT="$(_role_text_for_template planner)" ;;
+        6)
+            printf '  Role description (one paragraph, end with a blank line):\n' >&2
+            _custom=""
+            while :; do
+                _line=""
+                if ! _wizard_read _line; then break; fi
+                [ -z "$_line" ] && break
+                if [ -z "$_custom" ]; then
+                    _custom="$_line"
+                else
+                    _custom="$_custom
+$_line"
+                fi
+            done
+            WIZARD_ROLE_OUT="$_custom"
+            ;;
+        *) return 1 ;;
+    esac
+    return 0
+}
+
+# _wizard_create_one <name> <role-text>
+# Creates the silo directly via create_silo then, if role is non-empty,
+# rewrites the Role section in context.md. Re-uses create_silo to keep the
+# file layout in sync with the rest of the installer.
+_wizard_create_one() {
+    _wname="$1"
+    _wrole="$2"
+    _rc=0
+    create_silo "$_wname" || _rc=$?
+    if [ "$_rc" = "2" ]; then
+        warn "Skipped '$_wname' (could not create silo)"
+        return 1
+    fi
+    track_silo "$_wname" "$_rc"
+    if [ -n "$_wrole" ]; then
+        _wfile="$AGENTS_DIR/$_wname/context.md"
+        if [ -f "$_wfile" ]; then
+            # Write role to a file so awk can read it — awk -v with multi-line
+            # strings fails on several awks (macOS BWK awk, mawk).
+            _wrolefile="$TMP_DIR/wizard-role-$$.md"
+            printf '%s\n' "$_wrole" > "$_wrolefile"
+            _wtmp="$_wfile.wizard.$$"
+            awk -v rolefile="$_wrolefile" '
+                BEGIN { inrole = 0 }
+                /^## Role$/ {
+                    print
+                    print ""
+                    while ((getline line < rolefile) > 0) print line
+                    close(rolefile)
+                    inrole = 1
+                    next
+                }
+                {
+                    if (inrole == 1) {
+                        if ($0 ~ /^## /) {
+                            print ""
+                            print
+                            inrole = 0
+                            next
+                        }
+                        next
+                    }
+                    print
+                }
+            ' "$_wfile" > "$_wtmp" && mv "$_wtmp" "$_wfile" || rm -f "$_wtmp"
+            rm -f "$_wrolefile"
+        fi
+    fi
+    return 0
+}
+
+# _wizard_archive_agent <name> <date>
+# Move a silo to hive/agents/_archived/<date>/<name>/. Never deletes.
+_wizard_archive_agent() {
+    _aname="$1"
+    _adate="$2"
+    _src="$AGENTS_DIR/$_aname"
+    [ -d "$_src" ] || return 1
+    _arch_root="$AGENTS_DIR/_archived/$_adate"
+    mkdir -p "$_arch_root" || return 1
+    _dst="$_arch_root/$_aname"
+    if [ -e "$_dst" ]; then
+        # Append a suffix to avoid clobbering a previous archive of same name.
+        _i=1
+        while [ -e "${_dst}.${_i}" ]; do _i=$((_i + 1)); done
+        _dst="${_dst}.${_i}"
+    fi
+    mv "$_src" "$_dst" || return 1
+    return 0
+}
+
+# _list_non_main_agents: prints space-separated list of non-main, non-archived
+# agent names present in AGENTS_DIR.
+_list_non_main_agents() {
+    _out=""
+    if [ -d "$AGENTS_DIR" ]; then
+        for _p in "$AGENTS_DIR"/*; do
+            [ -d "$_p" ] || continue
+            _n="$(basename "$_p")"
+            case "$_n" in
+                main|_archived|.*) continue ;;
+            esac
+            if [ -z "$_out" ]; then _out="$_n"; else _out="$_out $_n"; fi
+        done
+    fi
+    printf '%s' "$_out"
+}
+
+# Where to look for pre-existing agent rosters we can import from.
+# Users often have agents defined by Claude Code (~/.claude/agents/) or in a
+# prior OpenClaw hive (~/.openclaw/hive/agents/). On a fresh memory-hive
+# install, detecting those means the wizard can offer to seed silos instead
+# of asking the user to retype the roster.
+CLAUDE_AGENTS_DIR_DEFAULT="$HOME/.claude/agents"
+OPENCLAW_AGENTS_DIR_DEFAULT="$HOME/.openclaw/hive/agents"
+
+# _list_importable_agents: dedupes names found under the Claude Code agents
+# dir and an existing OpenClaw hive agents dir. Skips 'main', '_archived',
+# dotfiles, and anything whose sanitized name is empty. Prints
+# space-separated names to stdout.
+_list_importable_agents() {
+    _out=""
+    _seen=" "
+    for _src in "$CLAUDE_AGENTS_DIR_DEFAULT" "$OPENCLAW_AGENTS_DIR_DEFAULT"; do
+        [ -d "$_src" ] || continue
+        for _p in "$_src"/*; do
+            [ -e "$_p" ] || continue
+            _bn="$(basename "$_p")"
+            # strip common definition-file suffixes
+            _bn="${_bn%.md}"
+            _bn="${_bn%.yaml}"
+            _bn="${_bn%.yml}"
+            _bn="${_bn%.json}"
+            case "$_bn" in
+                main|_archived|.*|'*'|CONTRIBUTION_TEMPLATE|SILO_README) continue ;;
+            esac
+            _n="$(_sanitize_name "$_bn")"
+            [ -n "$_n" ] || continue
+            case "$_seen" in
+                *" $_n "*) continue ;;
+            esac
+            _seen="$_seen$_n "
+            if [ -z "$_out" ]; then _out="$_n"; else _out="$_out $_n"; fi
+        done
+    done
+    printf '%s' "$_out"
+}
+
+# _guess_role_template_for_name <name>
+# Heuristic: if the agent's name matches or contains a known template word
+# (coder, reviewer, researcher, writer, planner), return that template name.
+# Returns empty for no-match so the caller can fall back to a blank role.
+_guess_role_template_for_name() {
+    _gname="$1"
+    case "$_gname" in
+        coder|*-coder|coder-*|*-code|code-*|*developer*|*-dev|dev-*|web-dev|vibe-coder|api-expert)
+            printf 'coder' ;;
+        reviewer|*-reviewer|reviewer-*|security-auditor|*-auditor|auditor-*|*-review|review-*)
+            printf 'reviewer' ;;
+        researcher|*-researcher|researcher-*|research-analyst|*-research|research-*|data-analyst|*-analyst|analyst-*)
+            printf 'researcher' ;;
+        writer|*-writer|writer-*|content-strategist|*-strategist|strategist-*|social-media-mgr|*-copy|copy-*)
+            printf 'writer' ;;
+        planner|*-planner|planner-*|cxaas-specialist|*-specialist|specialist-*|coordinator|*-coordinator|coordinator-*)
+            printf 'planner' ;;
+        *)
+            printf '' ;;
+    esac
+}
+
+# _wizard_import_one <name>
+# Create a silo for <name>, seed a role from (1) OpenClaw's existing
+# context.md if it has real content, else (2) a template whose name matches
+# the agent name, else leave blank. For log.md and memory.md: copy from
+# OpenClaw only if the destination is empty.
+_wizard_import_one() {
+    _iname="$1"
+    _rc=0
+    create_silo "$_iname" || _rc=$?
+    if [ "$_rc" = "2" ]; then
+        warn "Skipped '$_iname' (could not create silo)"
+        return 1
+    fi
+    track_silo "$_iname" "$_rc"
+
+    _src_dir="$OPENCLAW_AGENTS_DIR_DEFAULT/$_iname"
+
+    # Copy log.md and memory.md from OpenClaw if dest is still empty.
+    if [ -d "$_src_dir" ]; then
+        for _f in log.md memory.md; do
+            _src_f="$_src_dir/$_f"
+            _dst_f="$AGENTS_DIR/$_iname/$_f"
+            if [ -f "$_src_f" ] && [ ! -s "$_dst_f" ]; then
+                cp "$_src_f" "$_dst_f" 2>/dev/null || true
+            fi
+        done
+    fi
+
+    # Seed a role: prefer existing OpenClaw context.md content (if it has
+    # something other than the placeholder), then a matching template.
+    _role_text=""
+    _src_ctx="$_src_dir/context.md"
+    if [ -f "$_src_ctx" ] && grep -q "^## Role$" "$_src_ctx" 2>/dev/null; then
+        # Extract the block between "## Role" and the next "## " heading.
+        _extracted="$(awk '
+            /^## Role$/ { capture=1; next }
+            capture==1 && /^## / { exit }
+            capture==1 { print }
+        ' "$_src_ctx" | sed -e 's/^[[:space:]]*//' -e '/^$/d' | head -c 2000)"
+        case "$_extracted" in
+            ""|"(What is this agent"*) : ;;  # placeholder — skip
+            *) _role_text="$_extracted" ;;
+        esac
+    fi
+    if [ -z "$_role_text" ]; then
+        _tpl="$(_guess_role_template_for_name "$_iname")"
+        if [ -n "$_tpl" ]; then
+            _role_text="$(_role_text_for_template "$_tpl")"
+        fi
+    fi
+
+    if [ -n "$_role_text" ]; then
+        _wfile="$AGENTS_DIR/$_iname/context.md"
+        if [ -f "$_wfile" ]; then
+            _wrolefile="$TMP_DIR/wizard-import-role-$$.md"
+            printf '%s\n' "$_role_text" > "$_wrolefile"
+            _wtmp="$_wfile.import.$$"
+            awk -v rolefile="$_wrolefile" '
+                BEGIN { inrole = 0 }
+                /^## Role$/ {
+                    print
+                    print ""
+                    while ((getline line < rolefile) > 0) print line
+                    close(rolefile)
+                    inrole = 1
+                    next
+                }
+                {
+                    if (inrole == 1) {
+                        if ($0 ~ /^## /) {
+                            print ""
+                            print
+                            inrole = 0
+                            next
+                        }
+                        next
+                    }
+                    print
+                }
+            ' "$_wfile" > "$_wtmp" && mv "$_wtmp" "$_wfile" || rm -f "$_wtmp"
+            rm -f "$_wrolefile"
+        fi
+    fi
+    return 0
+}
+
+# _wizard_fresh_flow: prompt for N, then for each agent name + role.
+_wizard_fresh_flow() {
+    printf '\n' >&2
+    printf '%sLet'\''s set up your agents.%s (besides `main`, who is always here)\n' \
+        "$BOLD" "$RESET" >&2
+    printf '\n' >&2
+    printf 'How many agents do you want under Chief of Staff? [0-10, default 3]: ' >&2
+    _count_raw=""
+    if ! _wizard_read _count_raw "3"; then
+        warn "Lost tty mid-wizard; skipping remaining prompts"
+        return 0
+    fi
+    case "$_count_raw" in
+        ""|*[!0-9]*) _count=3 ;;
+        *) _count="$_count_raw" ;;
+    esac
+    if [ "$_count" -gt 10 ]; then _count=10; fi
+    if [ "$_count" -lt 0 ]; then _count=0; fi
+    if [ "$_count" -eq 0 ]; then
+        printf '  No extra agents — just main. (Add later with `memory-hive add <name>`.)\n' >&2
+        return 0
+    fi
+
+    _i=1
+    _blank_retries=0
+    while [ "$_i" -le "$_count" ]; do
+        printf '\n' >&2
+        printf '  Agent %s of %s\n' "$_i" "$_count" >&2
+        _name=""
+        _sanitized=""
+        while :; do
+            printf '    Name (lowercase, letters/digits/dashes): ' >&2
+            _raw=""
+            if ! _wizard_read _raw; then return 0; fi
+            # If the stream is empty (CI / lost tty), bail out after a couple
+            # of retries so we don't loop forever on EOF echo.
+            if [ -z "$_raw" ]; then
+                _blank_retries=$((_blank_retries + 1))
+                if [ "$_blank_retries" -ge 3 ]; then
+                    warn "No name provided after 3 tries — skipping remaining agents"
+                    return 0
+                fi
+                printf '    Name must contain letters or digits. Try again.\n' >&2
+                continue
+            fi
+            _blank_retries=0
+            _sanitized="$(_sanitize_name "$_raw")"
+            if [ -z "$_sanitized" ]; then
+                printf '    Name must contain letters or digits. Try again.\n' >&2
+                continue
+            fi
+            if [ "$_sanitized" = "main" ] || [ "$_sanitized" = "_archived" ]; then
+                printf '    "%s" is reserved. Pick a different name.\n' "$_sanitized" >&2
+                continue
+            fi
+            if [ -d "$AGENTS_DIR/$_sanitized" ]; then
+                printf '    A silo named "%s" already exists. Pick a different name.\n' "$_sanitized" >&2
+                continue
+            fi
+            # Always confirm — lets the user abort a sanitization surprise and
+            # aligns the wizard's input stream with the documented test flow.
+            printf '    Create '\''%s'\''? [Y/n]: ' "$_sanitized" >&2
+            _ok=""
+            if ! _wizard_read _ok "y"; then return 0; fi
+            case "$_ok" in
+                n|N|no|NO|No) continue ;;
+            esac
+            break
+        done
+        _name="$_sanitized"
+
+        _print_role_menu
+        printf '  Choice [1-6, 0 to skip]: ' >&2
+        _choice=""
+        if ! _wizard_read _choice "0"; then return 0; fi
+        if ! _resolve_role_choice "$_choice"; then
+            warn "Unknown role choice '$_choice' — leaving role blank"
+            WIZARD_ROLE_OUT=""
+        fi
+
+        _wizard_create_one "$_name" "$WIZARD_ROLE_OUT" || true
+        _i=$((_i + 1))
+    done
+}
+
+# _wizard_reconcile_flow: prompt keep/add/fresh/select for an existing install.
+_wizard_reconcile_flow() {
+    _existing="$1"
+    _date="$(date -u +%Y-%m-%d 2>/dev/null || echo "today")"
+    printf '\n' >&2
+    printf '%sMemory Hive is already installed.%s\n' "$BOLD" "$RESET" >&2
+    printf 'Existing agents: main %s\n' "$_existing" >&2
+    printf '\n' >&2
+    printf '  [k] Keep existing (default) — just update the managed block and shared hive\n' >&2
+    printf '  [a] Add more alongside existing\n' >&2
+    printf '  [f] Fresh start — archive existing agents to hive/agents/_archived/%s/\n' "$_date" >&2
+    printf '  [s] Select — review each and keep or archive\n' >&2
+    printf '\nChoice [k]: ' >&2
+    _pick=""
+    if ! _wizard_read _pick "k"; then return 0; fi
+    case "$_pick" in
+        k|K|keep) return 0 ;;
+        a|A|add)
+            _wizard_fresh_flow
+            return 0
+            ;;
+        f|F|fresh)
+            for _ag in $_existing; do
+                if _wizard_archive_agent "$_ag" "$_date"; then
+                    ok "Archived $_ag to hive/agents/_archived/$_date/$_ag"
+                else
+                    warn "Could not archive $_ag"
+                fi
+            done
+            _wizard_fresh_flow
+            return 0
+            ;;
+        s|S|select)
+            for _ag in $_existing; do
+                printf '  Keep '\''%s'\''? [Y/n]: ' "$_ag" >&2
+                _ans=""
+                if ! _wizard_read _ans "y"; then return 0; fi
+                case "$_ans" in
+                    n|N|no|NO|No)
+                        if _wizard_archive_agent "$_ag" "$_date"; then
+                            ok "Archived $_ag to hive/agents/_archived/$_date/$_ag"
+                        else
+                            warn "Could not archive $_ag"
+                        fi
+                        ;;
+                esac
+            done
+            printf '\nAdd new agents now? [y/N]: ' >&2
+            _more=""
+            if ! _wizard_read _more "n"; then return 0; fi
+            case "$_more" in
+                y|Y|yes|YES|Yes) _wizard_fresh_flow ;;
+            esac
+            return 0
+            ;;
+        *)
+            warn "Unrecognized choice '$_pick' — keeping existing (default)"
+            return 0
+            ;;
+    esac
+}
+
+# _wizard_import_flow: offered when the user has a clean memory-hive install
+# but has agents defined elsewhere on the machine (Claude Code sub-agents,
+# existing OpenClaw hive). Lets them import the whole roster, pick a subset,
+# or skip and run the fresh-flow wizard from scratch.
+_wizard_import_flow() {
+    _names="$1"
+    printf '\n' >&2
+    printf '%sFound existing agents on this machine:%s\n' "$BOLD" "$RESET" >&2
+    if [ -d "$CLAUDE_AGENTS_DIR_DEFAULT" ]; then
+        printf '  ~/.claude/agents/\n' >&2
+    fi
+    if [ -d "$OPENCLAW_AGENTS_DIR_DEFAULT" ]; then
+        printf '  ~/.openclaw/hive/agents/\n' >&2
+    fi
+    printf '  Detected: %s\n' "$_names" >&2
+    printf '\n' >&2
+    printf '  [i] Import all (default) — scaffold a silo for each, seed from OpenClaw if present\n' >&2
+    printf '  [s] Select — pick which ones to import\n' >&2
+    printf '  [n] Skip — start fresh with the wizard instead\n' >&2
+    printf '\nChoice [i]: ' >&2
+    _pick=""
+    if ! _wizard_read _pick "i"; then return 0; fi
+    case "$_pick" in
+        i|I|import|"")
+            for _ag in $_names; do
+                _wizard_import_one "$_ag" || true
+            done
+            printf '\nAdd more agents via the wizard now? [y/N]: ' >&2
+            _more=""
+            if ! _wizard_read _more "n"; then return 0; fi
+            case "$_more" in
+                y|Y|yes|YES|Yes) _wizard_fresh_flow ;;
+            esac
+            ;;
+        s|S|select)
+            for _ag in $_names; do
+                printf '  Import '\''%s'\''? [Y/n]: ' "$_ag" >&2
+                _ans=""
+                if ! _wizard_read _ans "y"; then return 0; fi
+                case "$_ans" in
+                    n|N|no|NO|No) continue ;;
+                esac
+                _wizard_import_one "$_ag" || true
+            done
+            printf '\nAdd more agents via the wizard now? [y/N]: ' >&2
+            _more=""
+            if ! _wizard_read _more "n"; then return 0; fi
+            case "$_more" in
+                y|Y|yes|YES|Yes) _wizard_fresh_flow ;;
+            esac
+            ;;
+        n|N|no|NO|No|skip)
+            _wizard_fresh_flow
+            ;;
+        *)
+            warn "Unrecognized choice '$_pick' — importing all (default)"
+            for _ag in $_names; do
+                _wizard_import_one "$_ag" || true
+            done
+            ;;
+    esac
+}
+
+WIZARD_RAN=0
+if [ -n "$WIZARD_TTY" ]; then
+    _existing_nonmain="$(_list_non_main_agents)"
+    if [ -n "$_existing_nonmain" ]; then
+        _wizard_reconcile_flow "$_existing_nonmain"
+        WIZARD_RAN=1
+    else
+        _importable="$(_list_importable_agents)"
+        if [ -n "$_importable" ]; then
+            _wizard_import_flow "$_importable"
+        else
+            _wizard_fresh_flow
+        fi
+        WIZARD_RAN=1
+    fi
+fi
+
+# Close the tty fd if we opened one.
+if [ "$WIZARD_TTY" = "fd3" ]; then
+    exec 3<&- 2>/dev/null || true
+fi
+
+# Refresh hive/registry/AGENTS.md now that silos are (re)populated. Covers
+# fresh/import/reconcile flows alike; if the CLI isn't available for some
+# reason, silently skip — the registry is a convenience, not a correctness
+# gate.
+if [ -x "$INSTALL_DIR/memory-hive" ]; then
+    MEMORY_HIVE_DIR="$INSTALL_DIR" sh "$INSTALL_DIR/memory-hive" register \
+        >/dev/null 2>&1 || true
+fi
+
+# =============================================================================
 # Phase E: Context-aware success banner
 # =============================================================================
 
@@ -548,3 +1190,14 @@ else
     printf 'Docs: %shttps://github.com/TJCurnutte/memory-hive%s\n' "$CYAN" "$RESET"
     printf '  Check compliance: sh %s/check-compliance.sh\n' "$_install_display"
 fi
+
+# Always show the CLI + "add more agents" hint. In non-interactive installs
+# this is the only way the user learns how to populate their roster.
+printf '\n'
+if [ "$WIZARD_RAN" -eq 0 ]; then
+    printf 'Add agents any time: sh %s/memory-hive add <name> --role coder\n' "$_install_display"
+    printf '  list:    sh %s/memory-hive list\n' "$_install_display"
+else
+    printf 'CLI: sh %s/memory-hive (add|list|role|rename|archive)\n' "$_install_display"
+fi
+printf 'Tip: add %s to your PATH to drop the "sh ...memory-hive" prefix.\n' "$_install_display"

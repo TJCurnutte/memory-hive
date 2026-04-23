@@ -15,7 +15,7 @@ Personal working notes. The agent's running journal of:
 Your agent-specific state:
 - How you prefer to work
 - What you're currently focused on
-- Relationships with other agents (e.g., "SDR Beta: coordinates with SDR Alpha")
+- Relationships with other agents (e.g., "reviewer: pairs with coder on every PR")
 - Anything that helps you get back up to speed after a gap
 
 ### `memory.md`
@@ -35,6 +35,19 @@ Private learnings — things you learned that:
 ## Privacy
 
 Private silos are not part of the shared hive. They don't sync to Git, don't feed into the curator's review, and don't appear in any shared documentation. They exist solely to give you continuity between sessions.
+
+## Creating a silo
+
+The installer wizard scaffolds silos for any agents you define. After
+install you can add more with:
+
+```bash
+sh ~/.memory-hive/memory-hive add <name> --role <template>
+```
+
+Templates ship in `templates/roles/`: `coder`, `reviewer`,
+`researcher`, `writer`, `planner`, `curator`. See the repo
+[INTEGRATION.md](../../INTEGRATION.md) for full CLI behavior.
 
 ---
 

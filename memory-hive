@@ -1,0 +1,679 @@
+#!/bin/sh
+# memory-hive — single entry point CLI for managing your hive's agents.
+#
+# Usage:
+#   memory-hive add <name> [--role <template|path>]
+#   memory-hive list
+#   memory-hive archive <name>
+#   memory-hive role <name>
+#   memory-hive rename <old> <new>
+#   memory-hive register
+#   memory-hive doctor
+#   memory-hive help
+#
+# <template> is one of: coder, reviewer, researcher, writer, planner
+# <path> is a path to a markdown file; its contents become the role text.
+#
+# Install location is auto-detected in the same way create-agent.sh does:
+#   1. $MEMORY_HIVE_DIR if set
+#   2. The dir this script lives in, if it contains hive/
+#   3. $HOME/.memory-hive
+
+set -e
+
+# --- locate install root -----------------------------------------------------
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" 2>/dev/null && pwd)"
+if [ -n "${MEMORY_HIVE_DIR:-}" ]; then
+    INSTALL_DIR="$MEMORY_HIVE_DIR"
+elif [ -n "$SCRIPT_DIR" ] && [ -d "$SCRIPT_DIR/hive" ]; then
+    INSTALL_DIR="$SCRIPT_DIR"
+else
+    INSTALL_DIR="$HOME/.memory-hive"
+fi
+HIVE_DIR="$INSTALL_DIR/hive"
+AGENTS_DIR="$HIVE_DIR/agents"
+ROLES_DIR="$INSTALL_DIR/templates/roles"
+CREATE_AGENT="$INSTALL_DIR/create-agent.sh"
+
+# --- helpers -----------------------------------------------------------------
+
+_mh_die() { printf 'ERROR: %s\n' "$1" >&2; exit 1; }
+
+_mh_require_install() {
+    if [ ! -d "$HIVE_DIR" ]; then
+        _mh_die "Memory Hive is not installed at $INSTALL_DIR. Run the installer first."
+    fi
+}
+
+# _mh_sanitize_name <raw> -> prints sanitized name to stdout.
+# Mirrors install.sh's _sanitize_name so wizard + CLI agree on the rules.
+_mh_sanitize_name() {
+    _raw="$1"
+    _name="$(printf '%s' "$_raw" \
+        | tr ' ' '-' \
+        | tr '[:upper:]' '[:lower:]' \
+        | tr -cd 'a-z0-9-' \
+        | sed -e 's/-\{2,\}/-/g' -e 's/^-//' -e 's/-$//')"
+    _name="$(printf '%s' "$_name" | cut -c1-32)"
+    _name="$(printf '%s' "$_name" | sed -e 's/-$//')"
+    case "$_name" in
+        ""|*[!a-z0-9-]*)
+            printf ''
+            return
+            ;;
+    esac
+    printf '%s' "$_name"
+}
+
+# _mh_resolve_role <input> -> prints role text to stdout.
+# <input> can be a template name (coder/reviewer/...) or a path to a file.
+# Empty input prints nothing.
+_mh_resolve_role() {
+    _role="$1"
+    [ -z "$_role" ] && return 0
+    # File path (absolute or contains a slash) → read the file verbatim.
+    case "$_role" in
+        /*|./*|../*|*/*)
+            if [ -f "$_role" ]; then
+                cat "$_role"
+                return 0
+            fi
+            _mh_die "Role file not found: $_role"
+            ;;
+    esac
+    # Template name → look under $ROLES_DIR/<name>.md.
+    _tpl="$ROLES_DIR/$_role.md"
+    if [ -f "$_tpl" ]; then
+        cat "$_tpl"
+        return 0
+    fi
+    _mh_die "Unknown role '$_role'. Known templates: $(_mh_list_templates). Or pass a path to a .md file."
+}
+
+_mh_list_templates() {
+    _out=""
+    if [ -d "$ROLES_DIR" ]; then
+        for _f in "$ROLES_DIR"/*.md; do
+            [ -f "$_f" ] || continue
+            _n="$(basename "$_f" .md)"
+            if [ -z "$_out" ]; then _out="$_n"; else _out="$_out, $_n"; fi
+        done
+    fi
+    printf '%s' "$_out"
+}
+
+# _mh_list_silos: print newline-separated list of non-archived, non-dotfile
+# silo names under $AGENTS_DIR. Empty if there are none.
+_mh_list_silos() {
+    [ -d "$AGENTS_DIR" ] || return 0
+    for _p in "$AGENTS_DIR"/*; do
+        [ -d "$_p" ] || continue
+        _n="$(basename "$_p")"
+        case "$_n" in
+            _archived|.*) continue ;;
+        esac
+        printf '%s\n' "$_n"
+    done
+}
+
+# _mh_extract_role <context-file>
+# Print the first non-blank, non-placeholder line under "## Role" and continue
+# printing lines until the next "## " heading or blank line. Squashes
+# intermediate newlines into single spaces so the result fits a table cell.
+# Prints empty if no usable role text was found.
+_mh_extract_role() {
+    _cf="$1"
+    [ -f "$_cf" ] || return 0
+    awk '
+        BEGIN { inrole = 0; buf = ""; done = 0 }
+        /^## Role$/ { inrole = 1; next }
+        inrole == 1 && /^## / { done = 1; exit }
+        inrole == 1 {
+            # Skip the placeholder prompt lines like "(What is this agent...)".
+            if ($0 ~ /^[[:space:]]*\([^)]*\)[[:space:]]*$/) next
+            if ($0 ~ /^[[:space:]]*$/) {
+                if (buf != "") { done = 1; exit }
+                next
+            }
+            line = $0
+            sub(/^[[:space:]]+/, "", line)
+            sub(/[[:space:]]+$/, "", line)
+            if (buf == "") { buf = line } else { buf = buf " " line }
+        }
+        END {
+            # Cap at ~140 chars so the AGENTS.md table stays tidy.
+            if (length(buf) > 140) { buf = substr(buf, 1, 137) "..." }
+            if (buf != "") print buf
+        }
+    ' "$_cf"
+}
+
+# mh_register: rewrite $HIVE_DIR/registry/AGENTS.md's auto-generated block
+# with the current on-disk roster and, if the shipped SKILLS_CATALOG.md is
+# still in place, replace it with a short user-maintained note.
+#
+# Never aborts the caller: best-effort, returns 0 even when the hive is
+# missing (so wrappers like `mh_add` can call it unconditionally).
+mh_register() {
+    _reg_dir="$HIVE_DIR/registry"
+    _reg_agents="$_reg_dir/AGENTS.md"
+    _reg_skills="$_reg_dir/SKILLS_CATALOG.md"
+
+    # If the hive isn't there yet there's nothing to register. Treat as no-op.
+    [ -d "$HIVE_DIR" ] || return 0
+
+    mkdir -p "$_reg_dir" 2>/dev/null || return 0
+
+    _start_marker="<!-- memory-hive:agents:start -->"
+    _end_marker="<!-- memory-hive:agents:end -->"
+
+    # Build the table body in a temp file.
+    _tbl="$_reg_dir/.agents-table.$$"
+    {
+        printf '%s\n' "$_start_marker"
+        printf '<!-- Auto-generated by `memory-hive register`. Do not edit by hand; edit silo context.md files instead. -->\n'
+        printf '\n'
+        printf '| Agent | Role |\n'
+        printf '|---|---|\n'
+        _mh_list_silos | sort | while IFS= read -r _aid; do
+            [ -n "$_aid" ] || continue
+            _role="$(_mh_extract_role "$AGENTS_DIR/$_aid/context.md")"
+            [ -n "$_role" ] || _role="_(no role set)_"
+            # Escape pipes in the role text so the markdown table doesn't break.
+            _role_esc="$(printf '%s' "$_role" | sed 's/|/\\|/g')"
+            printf '| %s | %s |\n' "$_aid" "$_role_esc"
+        done
+        printf '%s\n' "$_end_marker"
+    } > "$_tbl" 2>/dev/null || { rm -f "$_tbl"; return 0; }
+
+    if [ -f "$_reg_agents" ] \
+        && grep -q -F "$_start_marker" "$_reg_agents" 2>/dev/null \
+        && grep -q -F "$_end_marker" "$_reg_agents" 2>/dev/null; then
+        # Splice: replace everything between the markers, preserving content
+        # above and below. POSIX awk reads the replacement from a file.
+        _tmp="$_reg_agents.mhreg.$$"
+        awk -v start="$_start_marker" -v end="$_end_marker" -v blockfile="$_tbl" '
+            BEGIN { inblock = 0 }
+            {
+                if (inblock == 0 && index($0, start) > 0) {
+                    while ((getline line < blockfile) > 0) print line
+                    close(blockfile)
+                    inblock = 1
+                    next
+                }
+                if (inblock == 1) {
+                    if (index($0, end) > 0) { inblock = 0 }
+                    next
+                }
+                print
+            }
+        ' "$_reg_agents" > "$_tmp" 2>/dev/null \
+            && mv "$_tmp" "$_reg_agents" 2>/dev/null \
+            || { rm -f "$_tmp"; rm -f "$_tbl"; return 0; }
+    else
+        # File missing or no markers — create or append.
+        if [ ! -f "$_reg_agents" ]; then
+            {
+                printf '# Agent Registry\n\n'
+                printf 'Current roster. The table below is auto-generated from `hive/agents/*/context.md` by\n'
+                printf '`memory-hive register`. Edit the silo files, not this table.\n\n'
+                cat "$_tbl"
+                printf '\n'
+            } > "$_reg_agents" 2>/dev/null || { rm -f "$_tbl"; return 0; }
+        else
+            # Append markers + table at the end; keep existing human content
+            # intact so nothing is lost.
+            _tmp="$_reg_agents.mhreg.$$"
+            {
+                cat "$_reg_agents"
+                # Ensure trailing newline before appending.
+                _last="$(tail -c 1 "$_reg_agents" 2>/dev/null || printf '')"
+                if [ "$_last" != "" ] && [ "$_last" != "
+" ]; then
+                    printf '\n'
+                fi
+                printf '\n'
+                cat "$_tbl"
+                printf '\n'
+            } > "$_tmp" 2>/dev/null \
+                && mv "$_tmp" "$_reg_agents" 2>/dev/null \
+                || { rm -f "$_tmp"; rm -f "$_tbl"; return 0; }
+        fi
+    fi
+    rm -f "$_tbl"
+
+    # Skills catalog: if the file still looks like the shipped template,
+    # replace it with a short pointer note. Detect by looking for the
+    # canonical headings the shipped template uses. Anything else (user has
+    # customized it) → leave strictly alone.
+    if [ -f "$_reg_skills" ]; then
+        if grep -q '^# Skills Catalog$' "$_reg_skills" 2>/dev/null \
+            && grep -q 'Multi-agent orchestration' "$_reg_skills" 2>/dev/null; then
+            _tmp="$_reg_skills.mhreg.$$"
+            {
+                printf '# Skills Catalog\n\n'
+                printf 'This file is now user-maintained; the per-agent role is in [AGENTS.md](./AGENTS.md).\n\n'
+                printf 'Add skill/category tables below as your roster grows. `memory-hive register` will\n'
+                printf 'not touch this file once you have customized it.\n'
+            } > "$_tmp" 2>/dev/null \
+                && mv "$_tmp" "$_reg_skills" 2>/dev/null \
+                || rm -f "$_tmp"
+        fi
+    fi
+
+    return 0
+}
+
+# _mh_register_quiet: swallow all output, never fail the caller. Used by the
+# other verbs as a best-effort hook.
+_mh_register_quiet() {
+    mh_register >/dev/null 2>&1 || true
+}
+
+# mh_doctor: health-check the install. Prints findings and exits 0 if clean,
+# 1 if anything fired a warning.
+mh_doctor() {
+    # Colors mirror install.sh's style so the whole toolchain looks uniform.
+    if [ -t 1 ]; then
+        _D_BOLD="$(printf '\033[1m')"
+        _D_GREEN="$(printf '\033[32m')"
+        _D_YELLOW="$(printf '\033[33m')"
+        _D_RED="$(printf '\033[31m')"
+        _D_CYAN="$(printf '\033[36m')"
+        _D_RESET="$(printf '\033[0m')"
+    else
+        _D_BOLD=""; _D_GREEN=""; _D_YELLOW=""; _D_RED=""; _D_CYAN=""; _D_RESET=""
+    fi
+    _D_OK="${_D_GREEN}OK${_D_RESET}"
+    _D_WARN="${_D_YELLOW}!!${_D_RESET}"
+    _D_ERR="${_D_RED}ERROR${_D_RESET}"
+
+    _warnings=0
+
+    printf '%sMemory Hive doctor%s\n' "$_D_BOLD" "$_D_RESET"
+    printf 'Install dir: %s\n' "$INSTALL_DIR"
+    printf '\n'
+
+    # --- 1. hive/ exists ---------------------------------------------------
+    if [ -d "$HIVE_DIR" ]; then
+        printf '  %s hive/ directory present\n' "$_D_OK"
+    else
+        printf '  %s hive/ directory missing at %s\n' "$_D_ERR" "$HIVE_DIR"
+        printf '     run `sh %s/install.sh` to recreate.\n' "$INSTALL_DIR"
+        return 1
+    fi
+
+    # --- 2. main silo triplet ----------------------------------------------
+    _main_dir="$AGENTS_DIR/main"
+    _main_missing=""
+    for _f in log.md context.md memory.md; do
+        [ -f "$_main_dir/$_f" ] || _main_missing="$_main_missing $_f"
+    done
+    if [ ! -d "$_main_dir" ]; then
+        printf '  %s main silo missing at %s\n' "$_D_WARN" "$_main_dir"
+        _warnings=$((_warnings + 1))
+    elif [ -n "$_main_missing" ]; then
+        printf '  %s main silo incomplete — missing:%s\n' "$_D_WARN" "$_main_missing"
+        _warnings=$((_warnings + 1))
+    else
+        printf '  %s main silo has log.md, context.md, memory.md\n' "$_D_OK"
+    fi
+
+    # --- 3. other silo triplets --------------------------------------------
+    _silo_issues=0
+    _silo_count=0
+    for _p in "$AGENTS_DIR"/*; do
+        [ -d "$_p" ] || continue
+        _n="$(basename "$_p")"
+        case "$_n" in
+            _archived|.*|main) continue ;;
+        esac
+        _silo_count=$((_silo_count + 1))
+        _missing=""
+        for _f in log.md context.md memory.md; do
+            [ -f "$_p/$_f" ] || _missing="$_missing $_f"
+        done
+        if [ -n "$_missing" ]; then
+            printf '  %s silo %s incomplete — missing:%s\n' "$_D_WARN" "$_n" "$_missing"
+            _silo_issues=$((_silo_issues + 1))
+            _warnings=$((_warnings + 1))
+        fi
+    done
+    if [ "$_silo_count" -gt 0 ] && [ "$_silo_issues" -eq 0 ]; then
+        printf '  %s %s non-archived silo(s) have the full triplet\n' "$_D_OK" "$_silo_count"
+    elif [ "$_silo_count" -eq 0 ]; then
+        printf '  %s no non-main silos yet (add with `memory-hive add <name>`)\n' "$_D_OK"
+    fi
+
+    # --- 4. CLAUDE.md managed block references $INSTALL_DIR ----------------
+    _claude_md="$HOME/.claude/CLAUDE.md"
+    _start="<!-- memory-hive:start -->"
+    _end="<!-- memory-hive:end -->"
+    if [ ! -f "$_claude_md" ]; then
+        # Not an error: the user may not use Claude Code at all.
+        printf '  %s ~/.claude/CLAUDE.md not found (skipping managed-block check)\n' "$_D_OK"
+    else
+        if grep -q -F "$_start" "$_claude_md" 2>/dev/null \
+            && grep -q -F "$_end" "$_claude_md" 2>/dev/null; then
+            _block="$(awk -v s="$_start" -v e="$_end" '
+                BEGIN { inb = 0 }
+                { if (index($0, s) > 0) { inb = 1; next } }
+                inb == 1 { if (index($0, e) > 0) { inb = 0; next }; print }
+            ' "$_claude_md")"
+            if printf '%s' "$_block" | grep -q -F "$INSTALL_DIR" 2>/dev/null; then
+                printf '  %s CLAUDE.md managed block points at this install\n' "$_D_OK"
+            else
+                printf '  %s CLAUDE.md managed block does not reference %s\n' "$_D_WARN" "$INSTALL_DIR"
+                printf '     run `sh %s/install.sh` to refresh.\n' "$INSTALL_DIR"
+                _warnings=$((_warnings + 1))
+            fi
+        else
+            printf '  %s CLAUDE.md exists but has no memory-hive managed block\n' "$_D_WARN"
+            printf '     run `sh %s/install.sh` to add it.\n' "$INSTALL_DIR"
+            _warnings=$((_warnings + 1))
+        fi
+    fi
+
+    # --- 5. registry AGENTS.md is in sync ----------------------------------
+    _reg="$HIVE_DIR/registry/AGENTS.md"
+    if [ ! -f "$_reg" ]; then
+        printf '  %s registry AGENTS.md missing — run `memory-hive register`\n' "$_D_WARN"
+        _warnings=$((_warnings + 1))
+    else
+        _start_m="<!-- memory-hive:agents:start -->"
+        _end_m="<!-- memory-hive:agents:end -->"
+        if ! grep -q -F "$_start_m" "$_reg" 2>/dev/null \
+            || ! grep -q -F "$_end_m" "$_reg" 2>/dev/null; then
+            printf '  %s registry AGENTS.md has no auto-generated block — run `memory-hive register`\n' "$_D_WARN"
+            _warnings=$((_warnings + 1))
+        else
+            # Extract agent names from the table body (rows between the markers
+            # that look like `| <name> | ...`).
+            _reg_names="$(awk -v s="$_start_m" -v e="$_end_m" '
+                BEGIN { inb = 0 }
+                { if (index($0, s) > 0) { inb = 1; next } }
+                inb == 1 {
+                    if (index($0, e) > 0) { inb = 0; next }
+                    if ($0 ~ /^\| [^|]* \| /) {
+                        n = $0
+                        sub(/^\| /, "", n)
+                        sub(/ \|.*/, "", n)
+                        if (n != "Agent" && n != "---") print n
+                    }
+                }
+            ' "$_reg" | sort -u)"
+            _disk_names="$(_mh_list_silos | sort -u)"
+            if [ "$_reg_names" = "$_disk_names" ]; then
+                printf '  %s registry AGENTS.md matches on-disk silos\n' "$_D_OK"
+            else
+                printf '  %s registry AGENTS.md is out of sync — run `memory-hive register`\n' "$_D_WARN"
+                _warnings=$((_warnings + 1))
+            fi
+        fi
+    fi
+
+    # --- 6. archived silo count (informational only) -----------------------
+    _arch_count=0
+    _arch_root="$AGENTS_DIR/_archived"
+    if [ -d "$_arch_root" ]; then
+        for _ad in "$_arch_root"/*; do
+            [ -d "$_ad" ] || continue
+            for _as in "$_ad"/*; do
+                [ -d "$_as" ] || continue
+                _arch_count=$((_arch_count + 1))
+            done
+        done
+    fi
+    if [ "$_arch_count" -gt 0 ]; then
+        printf '  %s archived silos: %s (informational)\n' "${_D_CYAN}i${_D_RESET}" "$_arch_count"
+    fi
+
+    printf '\n'
+    if [ "$_warnings" -eq 0 ]; then
+        printf '%sDoctor:%s clean.\n' "$_D_BOLD" "$_D_RESET"
+        return 0
+    else
+        printf '%sDoctor:%s %s warning(s). See above.\n' "$_D_BOLD" "$_D_RESET" "$_warnings"
+        return 1
+    fi
+}
+
+# --- verbs -------------------------------------------------------------------
+
+mh_help() {
+    cat <<EOF
+memory-hive — manage agent silos in your hive.
+
+Usage:
+  memory-hive add <name> [--role <template|path>]
+      Create a new agent silo. <name> is sanitized to lowercase
+      letters/digits/dashes. <template> is one of: $(_mh_list_templates).
+      Alternatively pass a path to a .md file for a custom role.
+
+  memory-hive list
+      Print the current roster (excluding archived).
+
+  memory-hive archive <name>
+      Move the silo to hive/agents/_archived/<YYYY-MM-DD>/<name>/.
+      Never deletes.
+
+  memory-hive role <name>
+      Open the agent's context.md in \$EDITOR (defaults to vi).
+
+  memory-hive rename <old> <new>
+      Rename a silo directory. <old> must exist, <new> must not.
+
+  memory-hive register
+      Regenerate hive/registry/AGENTS.md from the current silo contents.
+      Runs automatically after add/archive/rename/role, so most users will
+      never call it directly.
+
+  memory-hive doctor
+      Health-check the install: verifies hive layout, silo triplets, the
+      managed CLAUDE.md block, and that AGENTS.md matches on-disk silos.
+
+  memory-hive help
+      Show this message.
+
+Install root: $INSTALL_DIR
+EOF
+}
+
+mh_list() {
+    _mh_require_install
+    if [ ! -d "$AGENTS_DIR" ]; then
+        printf '(no agents yet)\n'
+        return 0
+    fi
+    _found=0
+    for _p in "$AGENTS_DIR"/*; do
+        [ -d "$_p" ] || continue
+        _n="$(basename "$_p")"
+        case "$_n" in
+            _archived|.*) continue ;;
+        esac
+        _found=1
+        # Try to pull the first non-placeholder line from ## Role in context.md.
+        _role_summary=""
+        _cfile="$_p/context.md"
+        if [ -f "$_cfile" ]; then
+            _role_summary="$(awk '
+                /^## Role$/ { inrole = 1; next }
+                inrole == 1 && /^## / { exit }
+                inrole == 1 {
+                    # Skip blank lines and placeholder parenthetical prompts.
+                    if ($0 ~ /^[[:space:]]*$/) next
+                    if ($0 ~ /^\([^)]*\)$/) next
+                    print
+                    exit
+                }
+            ' "$_cfile")"
+        fi
+        if [ -n "$_role_summary" ]; then
+            # Trim to ~70 chars for one-line display.
+            _role_summary="$(printf '%s' "$_role_summary" | cut -c1-70)"
+            printf '  %-20s %s\n' "$_n" "$_role_summary"
+        else
+            printf '  %-20s (no role set)\n' "$_n"
+        fi
+    done
+    if [ "$_found" -eq 0 ]; then
+        printf '(no agents yet)\n'
+    fi
+}
+
+mh_add() {
+    _mh_require_install
+    _name_raw="$1"
+    shift || true
+    if [ -z "$_name_raw" ]; then
+        _mh_die "Usage: memory-hive add <name> [--role <template|path>]"
+    fi
+    _role_arg=""
+    # Parse remaining args. Only --role is supported for now.
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --role)
+                shift
+                if [ $# -eq 0 ]; then
+                    _mh_die "--role needs a value (template name or path)"
+                fi
+                _role_arg="$1"
+                shift
+                ;;
+            --role=*)
+                _role_arg="${1#--role=}"
+                shift
+                ;;
+            *)
+                _mh_die "Unknown argument: $1"
+                ;;
+        esac
+    done
+
+    _name="$(_mh_sanitize_name "$_name_raw")"
+    if [ -z "$_name" ]; then
+        _mh_die "Name must contain letters or digits (lowercase, dashes allowed)."
+    fi
+    if [ "$_name" = "main" ] || [ "$_name" = "_archived" ]; then
+        _mh_die "'$_name' is a reserved name."
+    fi
+    if [ -d "$AGENTS_DIR/$_name" ]; then
+        _mh_die "Agent '$_name' already exists at $AGENTS_DIR/$_name"
+    fi
+
+    _role_text=""
+    if [ -n "$_role_arg" ]; then
+        _role_text="$(_mh_resolve_role "$_role_arg")"
+    fi
+
+    if [ ! -f "$CREATE_AGENT" ]; then
+        _mh_die "create-agent.sh missing at $CREATE_AGENT — reinstall Memory Hive."
+    fi
+
+    if [ -n "$_role_text" ]; then
+        MH_AGENT_ROLE="$_role_text" \
+            MEMORY_HIVE_DIR="$INSTALL_DIR" \
+            sh "$CREATE_AGENT" "$_name"
+    else
+        MEMORY_HIVE_DIR="$INSTALL_DIR" \
+            sh "$CREATE_AGENT" "$_name"
+    fi
+    _mh_register_quiet
+}
+
+mh_archive() {
+    _mh_require_install
+    _name="$1"
+    [ -z "$_name" ] && _mh_die "Usage: memory-hive archive <name>"
+    case "$_name" in
+        main|_archived) _mh_die "'$_name' cannot be archived." ;;
+    esac
+    _src="$AGENTS_DIR/$_name"
+    if [ ! -d "$_src" ]; then
+        _mh_die "No such agent: $_name (looked in $_src)"
+    fi
+    _date="$(date -u +%Y-%m-%d 2>/dev/null || echo "today")"
+    _arch_root="$AGENTS_DIR/_archived/$_date"
+    mkdir -p "$_arch_root" || _mh_die "Could not create $_arch_root"
+    _dst="$_arch_root/$_name"
+    if [ -e "$_dst" ]; then
+        _i=1
+        while [ -e "${_dst}.${_i}" ]; do _i=$((_i + 1)); done
+        _dst="${_dst}.${_i}"
+    fi
+    mv "$_src" "$_dst" || _mh_die "Could not move $_src to $_dst"
+    printf 'Archived %s -> %s\n' "$_name" "$_dst"
+    _mh_register_quiet
+}
+
+mh_role() {
+    _mh_require_install
+    _name="$1"
+    [ -z "$_name" ] && _mh_die "Usage: memory-hive role <name>"
+    _cfile="$AGENTS_DIR/$_name/context.md"
+    if [ ! -f "$_cfile" ]; then
+        _mh_die "No such agent: $_name (looked for $_cfile)"
+    fi
+    _editor="${EDITOR:-vi}"
+    # Run (don't exec) so we can refresh the registry after $EDITOR closes.
+    # Errexit would abort the whole script if the editor exits non-zero
+    # (e.g. user quit with :cq in vim); guard so we still run register.
+    _editor_rc=0
+    "$_editor" "$_cfile" || _editor_rc=$?
+    _mh_register_quiet
+    return "$_editor_rc"
+}
+
+mh_rename() {
+    _mh_require_install
+    _old="$1"; _new_raw="$2"
+    [ -z "$_old" ] || [ -z "$_new_raw" ] && _mh_die "Usage: memory-hive rename <old> <new>"
+    case "$_old" in
+        main|_archived) _mh_die "'$_old' cannot be renamed." ;;
+    esac
+    _new="$(_mh_sanitize_name "$_new_raw")"
+    if [ -z "$_new" ]; then
+        _mh_die "New name must contain letters or digits (lowercase, dashes allowed)."
+    fi
+    if [ "$_new" = "main" ] || [ "$_new" = "_archived" ]; then
+        _mh_die "'$_new' is a reserved name."
+    fi
+    _src="$AGENTS_DIR/$_old"
+    _dst="$AGENTS_DIR/$_new"
+    if [ ! -d "$_src" ]; then
+        _mh_die "No such agent: $_old"
+    fi
+    if [ -e "$_dst" ]; then
+        _mh_die "Target already exists: $_new"
+    fi
+    mv "$_src" "$_dst" || _mh_die "Could not rename $_src -> $_dst"
+    printf 'Renamed %s -> %s\n' "$_old" "$_new"
+    _mh_register_quiet
+}
+
+# --- dispatch ----------------------------------------------------------------
+
+if [ $# -eq 0 ]; then
+    mh_help
+    exit 0
+fi
+
+_verb="$1"
+shift
+case "$_verb" in
+    add)      mh_add "$@" ;;
+    list|ls)  mh_list ;;
+    archive)  mh_archive "$@" ;;
+    role)     mh_role "$@" ;;
+    rename)   mh_rename "$@" ;;
+    register) _mh_require_install; mh_register ;;
+    doctor)   mh_doctor "$@" ;;
+    help|-h|--help) mh_help ;;
+    *)
+        printf 'Unknown command: %s\n\n' "$_verb" >&2
+        mh_help >&2
+        exit 2
+        ;;
+esac
