@@ -748,6 +748,154 @@ _list_non_main_agents() {
     printf '%s' "$_out"
 }
 
+# Where to look for pre-existing agent rosters we can import from.
+# Users often have agents defined by Claude Code (~/.claude/agents/) or in a
+# prior OpenClaw hive (~/.openclaw/hive/agents/). On a fresh memory-hive
+# install, detecting those means the wizard can offer to seed silos instead
+# of asking the user to retype the roster.
+CLAUDE_AGENTS_DIR_DEFAULT="$HOME/.claude/agents"
+OPENCLAW_AGENTS_DIR_DEFAULT="$HOME/.openclaw/hive/agents"
+
+# _list_importable_agents: dedupes names found under the Claude Code agents
+# dir and an existing OpenClaw hive agents dir. Skips 'main', '_archived',
+# dotfiles, and anything whose sanitized name is empty. Prints
+# space-separated names to stdout.
+_list_importable_agents() {
+    _out=""
+    _seen=" "
+    for _src in "$CLAUDE_AGENTS_DIR_DEFAULT" "$OPENCLAW_AGENTS_DIR_DEFAULT"; do
+        [ -d "$_src" ] || continue
+        for _p in "$_src"/*; do
+            [ -e "$_p" ] || continue
+            _bn="$(basename "$_p")"
+            # strip common definition-file suffixes
+            _bn="${_bn%.md}"
+            _bn="${_bn%.yaml}"
+            _bn="${_bn%.yml}"
+            _bn="${_bn%.json}"
+            case "$_bn" in
+                main|_archived|.*|'*'|CONTRIBUTION_TEMPLATE|SILO_README) continue ;;
+            esac
+            _n="$(_sanitize_name "$_bn")"
+            [ -n "$_n" ] || continue
+            case "$_seen" in
+                *" $_n "*) continue ;;
+            esac
+            _seen="$_seen$_n "
+            if [ -z "$_out" ]; then _out="$_n"; else _out="$_out $_n"; fi
+        done
+    done
+    printf '%s' "$_out"
+}
+
+# _guess_role_template_for_name <name>
+# Heuristic: if the agent's name matches or contains a known template word
+# (coder, reviewer, researcher, writer, planner), return that template name.
+# Returns empty for no-match so the caller can fall back to a blank role.
+_guess_role_template_for_name() {
+    _gname="$1"
+    case "$_gname" in
+        coder|*-coder|coder-*|*-code|code-*|*developer*|*-dev|dev-*|web-dev|vibe-coder|api-expert)
+            printf 'coder' ;;
+        reviewer|*-reviewer|reviewer-*|security-auditor|*-auditor|auditor-*|*-review|review-*)
+            printf 'reviewer' ;;
+        researcher|*-researcher|researcher-*|research-analyst|*-research|research-*|data-analyst|*-analyst|analyst-*)
+            printf 'researcher' ;;
+        writer|*-writer|writer-*|content-strategist|*-strategist|strategist-*|social-media-mgr|*-copy|copy-*)
+            printf 'writer' ;;
+        planner|*-planner|planner-*|cxaas-specialist|*-specialist|specialist-*|coordinator|*-coordinator|coordinator-*)
+            printf 'planner' ;;
+        *)
+            printf '' ;;
+    esac
+}
+
+# _wizard_import_one <name>
+# Create a silo for <name>, seed a role from (1) OpenClaw's existing
+# context.md if it has real content, else (2) a template whose name matches
+# the agent name, else leave blank. For log.md and memory.md: copy from
+# OpenClaw only if the destination is empty.
+_wizard_import_one() {
+    _iname="$1"
+    _rc=0
+    create_silo "$_iname" || _rc=$?
+    if [ "$_rc" = "2" ]; then
+        warn "Skipped '$_iname' (could not create silo)"
+        return 1
+    fi
+    track_silo "$_iname" "$_rc"
+
+    _src_dir="$OPENCLAW_AGENTS_DIR_DEFAULT/$_iname"
+
+    # Copy log.md and memory.md from OpenClaw if dest is still empty.
+    if [ -d "$_src_dir" ]; then
+        for _f in log.md memory.md; do
+            _src_f="$_src_dir/$_f"
+            _dst_f="$AGENTS_DIR/$_iname/$_f"
+            if [ -f "$_src_f" ] && [ ! -s "$_dst_f" ]; then
+                cp "$_src_f" "$_dst_f" 2>/dev/null || true
+            fi
+        done
+    fi
+
+    # Seed a role: prefer existing OpenClaw context.md content (if it has
+    # something other than the placeholder), then a matching template.
+    _role_text=""
+    _src_ctx="$_src_dir/context.md"
+    if [ -f "$_src_ctx" ] && grep -q "^## Role$" "$_src_ctx" 2>/dev/null; then
+        # Extract the block between "## Role" and the next "## " heading.
+        _extracted="$(awk '
+            /^## Role$/ { capture=1; next }
+            capture==1 && /^## / { exit }
+            capture==1 { print }
+        ' "$_src_ctx" | sed -e 's/^[[:space:]]*//' -e '/^$/d' | head -c 2000)"
+        case "$_extracted" in
+            ""|"(What is this agent"*) : ;;  # placeholder — skip
+            *) _role_text="$_extracted" ;;
+        esac
+    fi
+    if [ -z "$_role_text" ]; then
+        _tpl="$(_guess_role_template_for_name "$_iname")"
+        if [ -n "$_tpl" ]; then
+            _role_text="$(_role_text_for_template "$_tpl")"
+        fi
+    fi
+
+    if [ -n "$_role_text" ]; then
+        _wfile="$AGENTS_DIR/$_iname/context.md"
+        if [ -f "$_wfile" ]; then
+            _wrolefile="$TMP_DIR/wizard-import-role-$$.md"
+            printf '%s\n' "$_role_text" > "$_wrolefile"
+            _wtmp="$_wfile.import.$$"
+            awk -v rolefile="$_wrolefile" '
+                BEGIN { inrole = 0 }
+                /^## Role$/ {
+                    print
+                    print ""
+                    while ((getline line < rolefile) > 0) print line
+                    close(rolefile)
+                    inrole = 1
+                    next
+                }
+                {
+                    if (inrole == 1) {
+                        if ($0 ~ /^## /) {
+                            print ""
+                            print
+                            inrole = 0
+                            next
+                        }
+                        next
+                    }
+                    print
+                }
+            ' "$_wfile" > "$_wtmp" && mv "$_wtmp" "$_wfile" || rm -f "$_wtmp"
+            rm -f "$_wrolefile"
+        fi
+    fi
+    return 0
+}
+
 # _wizard_fresh_flow: prompt for N, then for each agent name + role.
 _wizard_fresh_flow() {
     printf '\n' >&2
@@ -895,6 +1043,69 @@ _wizard_reconcile_flow() {
     esac
 }
 
+# _wizard_import_flow: offered when the user has a clean memory-hive install
+# but has agents defined elsewhere on the machine (Claude Code sub-agents,
+# existing OpenClaw hive). Lets them import the whole roster, pick a subset,
+# or skip and run the fresh-flow wizard from scratch.
+_wizard_import_flow() {
+    _names="$1"
+    printf '\n' >&2
+    printf '%sFound existing agents on this machine:%s\n' "$BOLD" "$RESET" >&2
+    if [ -d "$CLAUDE_AGENTS_DIR_DEFAULT" ]; then
+        printf '  ~/.claude/agents/\n' >&2
+    fi
+    if [ -d "$OPENCLAW_AGENTS_DIR_DEFAULT" ]; then
+        printf '  ~/.openclaw/hive/agents/\n' >&2
+    fi
+    printf '  Detected: %s\n' "$_names" >&2
+    printf '\n' >&2
+    printf '  [i] Import all (default) — scaffold a silo for each, seed from OpenClaw if present\n' >&2
+    printf '  [s] Select — pick which ones to import\n' >&2
+    printf '  [n] Skip — start fresh with the wizard instead\n' >&2
+    printf '\nChoice [i]: ' >&2
+    _pick=""
+    if ! _wizard_read _pick "i"; then return 0; fi
+    case "$_pick" in
+        i|I|import|"")
+            for _ag in $_names; do
+                _wizard_import_one "$_ag" || true
+            done
+            printf '\nAdd more agents via the wizard now? [y/N]: ' >&2
+            _more=""
+            if ! _wizard_read _more "n"; then return 0; fi
+            case "$_more" in
+                y|Y|yes|YES|Yes) _wizard_fresh_flow ;;
+            esac
+            ;;
+        s|S|select)
+            for _ag in $_names; do
+                printf '  Import '\''%s'\''? [Y/n]: ' "$_ag" >&2
+                _ans=""
+                if ! _wizard_read _ans "y"; then return 0; fi
+                case "$_ans" in
+                    n|N|no|NO|No) continue ;;
+                esac
+                _wizard_import_one "$_ag" || true
+            done
+            printf '\nAdd more agents via the wizard now? [y/N]: ' >&2
+            _more=""
+            if ! _wizard_read _more "n"; then return 0; fi
+            case "$_more" in
+                y|Y|yes|YES|Yes) _wizard_fresh_flow ;;
+            esac
+            ;;
+        n|N|no|NO|No|skip)
+            _wizard_fresh_flow
+            ;;
+        *)
+            warn "Unrecognized choice '$_pick' — importing all (default)"
+            for _ag in $_names; do
+                _wizard_import_one "$_ag" || true
+            done
+            ;;
+    esac
+}
+
 WIZARD_RAN=0
 if [ -n "$WIZARD_TTY" ]; then
     _existing_nonmain="$(_list_non_main_agents)"
@@ -902,7 +1113,12 @@ if [ -n "$WIZARD_TTY" ]; then
         _wizard_reconcile_flow "$_existing_nonmain"
         WIZARD_RAN=1
     else
-        _wizard_fresh_flow
+        _importable="$(_list_importable_agents)"
+        if [ -n "$_importable" ]; then
+            _wizard_import_flow "$_importable"
+        else
+            _wizard_fresh_flow
+        fi
         WIZARD_RAN=1
     fi
 fi
