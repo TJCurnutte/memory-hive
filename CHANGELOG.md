@@ -8,6 +8,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Import flow for Claude Code + OpenClaw agents.** Before running the
+  fresh-install wizard, `install.sh` scans `~/.claude/agents/` and
+  `~/.openclaw/hive/agents/` for pre-existing agents. If any are found it
+  offers `[i] import all`, `[s] select`, or `[n] skip and run wizard`.
+  Imports auto-seed Role from (1) the source's existing `context.md`
+  `## Role` if non-placeholder, else (2) a role template matched to the
+  agent's name (coder→coder, security-auditor→reviewer,
+  research-analyst→researcher, content-strategist→writer,
+  cxaas-specialist→planner), else blank. `log.md` and `memory.md` are
+  also copied from the source when the destination is empty — never
+  overwriting.
 - **Interactive installer wizard.** On first install with a tty, `install.sh`
   asks how many agents you want, collects a name and optional role for each,
   and scaffolds one silo per agent. Non-interactive installs (`curl | sh` in
@@ -54,6 +65,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `sdr-2`, `security-auditor`, `cxaas-specialist`, `data-analyst`,
   `research-analyst`, `api-expert`, `web-dev`, `social-media-mgr`,
   `content-strategist`). Only `main/` (Chief of Staff / curator) ships now.
+- 83 stray `.md` playbook/skill files that had accumulated under
+  `hive/agents/` alongside the silo dirs. They're cross-agent knowledge
+  and belong under `hive/knowledge/` or `hive/learnings/`, not as
+  siblings of silos. Every fresh install had been copying them into the
+  new user's `hive/agents/`.
 
 ### Fixed
 
