@@ -90,6 +90,10 @@ jobs:
           export MEMORY_HIVE_DIR="$INSTALL_DIR"
           export MEMORY_HIVE_SKIP_CLAUDE_MD=1
           export MEMORY_HIVE_REPO="$(pwd)"
+          # Wizard is opt-in — must set MEMORY_HIVE_WIZARD=1 for the heredoc
+          # to be consumed. Without the flag the installer correctly runs
+          # silent (covered by the non-interactive test above).
+          export MEMORY_HIVE_WIZARD=1
           # Drive the wizard: 2 agents, "foo" (confirm y, role 1 = coder),
           # "bar" (confirm y, role 3 = researcher).
           sh install.sh <<'WIZARD'
