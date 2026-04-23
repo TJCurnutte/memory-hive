@@ -271,6 +271,174 @@ _mh_register_quiet() {
     mh_register >/dev/null 2>&1 || true
 }
 
+# mh_doctor: health-check the install. Prints findings and exits 0 if clean,
+# 1 if anything fired a warning.
+mh_doctor() {
+    # Colors mirror install.sh's style so the whole toolchain looks uniform.
+    if [ -t 1 ]; then
+        _D_BOLD="$(printf '\033[1m')"
+        _D_GREEN="$(printf '\033[32m')"
+        _D_YELLOW="$(printf '\033[33m')"
+        _D_RED="$(printf '\033[31m')"
+        _D_CYAN="$(printf '\033[36m')"
+        _D_RESET="$(printf '\033[0m')"
+    else
+        _D_BOLD=""; _D_GREEN=""; _D_YELLOW=""; _D_RED=""; _D_CYAN=""; _D_RESET=""
+    fi
+    _D_OK="${_D_GREEN}OK${_D_RESET}"
+    _D_WARN="${_D_YELLOW}!!${_D_RESET}"
+    _D_ERR="${_D_RED}ERROR${_D_RESET}"
+
+    _warnings=0
+
+    printf '%sMemory Hive doctor%s\n' "$_D_BOLD" "$_D_RESET"
+    printf 'Install dir: %s\n' "$INSTALL_DIR"
+    printf '\n'
+
+    # --- 1. hive/ exists ---------------------------------------------------
+    if [ -d "$HIVE_DIR" ]; then
+        printf '  %s hive/ directory present\n' "$_D_OK"
+    else
+        printf '  %s hive/ directory missing at %s\n' "$_D_ERR" "$HIVE_DIR"
+        printf '     run `sh %s/install.sh` to recreate.\n' "$INSTALL_DIR"
+        return 1
+    fi
+
+    # --- 2. main silo triplet ----------------------------------------------
+    _main_dir="$AGENTS_DIR/main"
+    _main_missing=""
+    for _f in log.md context.md memory.md; do
+        [ -f "$_main_dir/$_f" ] || _main_missing="$_main_missing $_f"
+    done
+    if [ ! -d "$_main_dir" ]; then
+        printf '  %s main silo missing at %s\n' "$_D_WARN" "$_main_dir"
+        _warnings=$((_warnings + 1))
+    elif [ -n "$_main_missing" ]; then
+        printf '  %s main silo incomplete — missing:%s\n' "$_D_WARN" "$_main_missing"
+        _warnings=$((_warnings + 1))
+    else
+        printf '  %s main silo has log.md, context.md, memory.md\n' "$_D_OK"
+    fi
+
+    # --- 3. other silo triplets --------------------------------------------
+    _silo_issues=0
+    _silo_count=0
+    for _p in "$AGENTS_DIR"/*; do
+        [ -d "$_p" ] || continue
+        _n="$(basename "$_p")"
+        case "$_n" in
+            _archived|.*|main) continue ;;
+        esac
+        _silo_count=$((_silo_count + 1))
+        _missing=""
+        for _f in log.md context.md memory.md; do
+            [ -f "$_p/$_f" ] || _missing="$_missing $_f"
+        done
+        if [ -n "$_missing" ]; then
+            printf '  %s silo %s incomplete — missing:%s\n' "$_D_WARN" "$_n" "$_missing"
+            _silo_issues=$((_silo_issues + 1))
+            _warnings=$((_warnings + 1))
+        fi
+    done
+    if [ "$_silo_count" -gt 0 ] && [ "$_silo_issues" -eq 0 ]; then
+        printf '  %s %s non-archived silo(s) have the full triplet\n' "$_D_OK" "$_silo_count"
+    elif [ "$_silo_count" -eq 0 ]; then
+        printf '  %s no non-main silos yet (add with `memory-hive add <name>`)\n' "$_D_OK"
+    fi
+
+    # --- 4. CLAUDE.md managed block references $INSTALL_DIR ----------------
+    _claude_md="$HOME/.claude/CLAUDE.md"
+    _start="<!-- memory-hive:start -->"
+    _end="<!-- memory-hive:end -->"
+    if [ ! -f "$_claude_md" ]; then
+        # Not an error: the user may not use Claude Code at all.
+        printf '  %s ~/.claude/CLAUDE.md not found (skipping managed-block check)\n' "$_D_OK"
+    else
+        if grep -q -F "$_start" "$_claude_md" 2>/dev/null \
+            && grep -q -F "$_end" "$_claude_md" 2>/dev/null; then
+            _block="$(awk -v s="$_start" -v e="$_end" '
+                BEGIN { inb = 0 }
+                { if (index($0, s) > 0) { inb = 1; next } }
+                inb == 1 { if (index($0, e) > 0) { inb = 0; next }; print }
+            ' "$_claude_md")"
+            if printf '%s' "$_block" | grep -q -F "$INSTALL_DIR" 2>/dev/null; then
+                printf '  %s CLAUDE.md managed block points at this install\n' "$_D_OK"
+            else
+                printf '  %s CLAUDE.md managed block does not reference %s\n' "$_D_WARN" "$INSTALL_DIR"
+                printf '     run `sh %s/install.sh` to refresh.\n' "$INSTALL_DIR"
+                _warnings=$((_warnings + 1))
+            fi
+        else
+            printf '  %s CLAUDE.md exists but has no memory-hive managed block\n' "$_D_WARN"
+            printf '     run `sh %s/install.sh` to add it.\n' "$INSTALL_DIR"
+            _warnings=$((_warnings + 1))
+        fi
+    fi
+
+    # --- 5. registry AGENTS.md is in sync ----------------------------------
+    _reg="$HIVE_DIR/registry/AGENTS.md"
+    if [ ! -f "$_reg" ]; then
+        printf '  %s registry AGENTS.md missing — run `memory-hive register`\n' "$_D_WARN"
+        _warnings=$((_warnings + 1))
+    else
+        _start_m="<!-- memory-hive:agents:start -->"
+        _end_m="<!-- memory-hive:agents:end -->"
+        if ! grep -q -F "$_start_m" "$_reg" 2>/dev/null \
+            || ! grep -q -F "$_end_m" "$_reg" 2>/dev/null; then
+            printf '  %s registry AGENTS.md has no auto-generated block — run `memory-hive register`\n' "$_D_WARN"
+            _warnings=$((_warnings + 1))
+        else
+            # Extract agent names from the table body (rows between the markers
+            # that look like `| <name> | ...`).
+            _reg_names="$(awk -v s="$_start_m" -v e="$_end_m" '
+                BEGIN { inb = 0 }
+                { if (index($0, s) > 0) { inb = 1; next } }
+                inb == 1 {
+                    if (index($0, e) > 0) { inb = 0; next }
+                    if ($0 ~ /^\| [^|]* \| /) {
+                        n = $0
+                        sub(/^\| /, "", n)
+                        sub(/ \|.*/, "", n)
+                        if (n != "Agent" && n != "---") print n
+                    }
+                }
+            ' "$_reg" | sort -u)"
+            _disk_names="$(_mh_list_silos | sort -u)"
+            if [ "$_reg_names" = "$_disk_names" ]; then
+                printf '  %s registry AGENTS.md matches on-disk silos\n' "$_D_OK"
+            else
+                printf '  %s registry AGENTS.md is out of sync — run `memory-hive register`\n' "$_D_WARN"
+                _warnings=$((_warnings + 1))
+            fi
+        fi
+    fi
+
+    # --- 6. archived silo count (informational only) -----------------------
+    _arch_count=0
+    _arch_root="$AGENTS_DIR/_archived"
+    if [ -d "$_arch_root" ]; then
+        for _ad in "$_arch_root"/*; do
+            [ -d "$_ad" ] || continue
+            for _as in "$_ad"/*; do
+                [ -d "$_as" ] || continue
+                _arch_count=$((_arch_count + 1))
+            done
+        done
+    fi
+    if [ "$_arch_count" -gt 0 ]; then
+        printf '  %s archived silos: %s (informational)\n' "${_D_CYAN}i${_D_RESET}" "$_arch_count"
+    fi
+
+    printf '\n'
+    if [ "$_warnings" -eq 0 ]; then
+        printf '%sDoctor:%s clean.\n' "$_D_BOLD" "$_D_RESET"
+        return 0
+    else
+        printf '%sDoctor:%s %s warning(s). See above.\n' "$_D_BOLD" "$_D_RESET" "$_warnings"
+        return 1
+    fi
+}
+
 # --- verbs -------------------------------------------------------------------
 
 mh_help() {
