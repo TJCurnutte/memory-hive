@@ -4,7 +4,29 @@ All notable changes to Memory Hive are recorded here.
 
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [Unreleased] — `feat/dynamic-agents`
+## [Unreleased]
+
+### Changed
+
+- **Default install is now zero-input.** `curl | sh` scaffolds the
+  reserved `main` silo, wires the managed `CLAUDE.md` block, and exits.
+  No wizard, no prompts. Users opt into the interactive setup with
+  `MEMORY_HIVE_WIZARD=1 curl | sh` or `memory-hive setup` after install.
+- **Heuristic role matching** in the installer now uses only generic
+  patterns (`*-coder`, `*-dev`, `*-engineer`, `*-auditor`, `*-analyst`,
+  `*-strategist`, `*-specialist`, `*-pm`, etc.). Specific agent names
+  from any individual user's roster have been removed.
+- **`hive/knowledge/HUMAN_CONTEXT.md`** is now a blank template. Each
+  user fills in their own facts locally; nothing personal ships in the
+  public repo.
+
+### Added
+
+- **`memory-hive setup`** — CLI verb that re-invokes the installer with
+  `MEMORY_HIVE_WIZARD=1` on demand. Useful after a silent install when
+  you decide you want the guided flow.
+
+## [0.1.0] — `feat/dynamic-agents`
 
 ### Added
 
@@ -67,11 +89,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Removed
 
-- Empty author-specific silo directories (`coder`, `vibe-coder`, `sdr-1`,
-  `sdr-2`, `security-auditor`, `cxaas-specialist`, `data-analyst`,
-  `research-analyst`, `api-expert`, `web-dev`, `social-media-mgr`,
-  `content-strategist`). Only `main/` (Chief of Staff / curator) ships now.
-- 83 stray `.md` playbook/skill files that had accumulated under
+- Empty silo directories from the original author's personal roster.
+  Only `main/` (Chief of Staff / curator) ships now; everything else is
+  user-created.
+- Stray playbook / skill markdown files that had accumulated under
   `hive/agents/` alongside the silo dirs. They're cross-agent knowledge
   and belong under `hive/knowledge/` or `hive/learnings/`, not as
   siblings of silos. Every fresh install had been copying them into the

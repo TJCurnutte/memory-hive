@@ -73,8 +73,7 @@ the managed `CLAUDE.md` block. No code changes needed on your side.
 
 Scenario: you installed Memory Hive before the `feat/dynamic-agents`
 rewrite landed, so your `~/.memory-hive/hive/agents/` contains the old
-author-specific roster (coder, vibe-coder, sdr-1, sdr-2,
-security-auditor, and the rest of the thirteen).
+author-specific roster that used to ship with the repo.
 
 1. Re-run the installer against the same directory:
    ```bash
