@@ -1204,6 +1204,41 @@ else
     printf '  Check compliance: sh %s/check-compliance.sh\n' "$_install_display"
 fi
 
+# Always list the current roster at the end. Readers know exactly what
+# they have now (beyond "Silos created: a b c..."). Reads on-disk silos
+# directly — no dependency on `memory-hive register` having been called.
+printf '\n%sYour roster:%s\n' "$BOLD" "$RESET"
+_mh_roster_any=0
+# Sort so output is deterministic across runs and filesystems.
+for _rp in $(ls "$AGENTS_DIR" 2>/dev/null | sort); do
+    _rn="$_rp"
+    _rd="$AGENTS_DIR/$_rn"
+    [ -d "$_rd" ] || continue
+    case "$_rn" in
+        _archived|.*) continue ;;
+    esac
+    _mh_roster_any=1
+    _rrole=""
+    if [ -f "$_rd/context.md" ]; then
+        _rrole="$(awk '/^## Role$/{flag=1;next} /^## /{flag=0} flag' "$_rd/context.md" \
+            | sed -e 's/^[[:space:]]*//' -e '/^$/d' -e 's/\.[[:space:]]*$/./' \
+            | head -1 | cut -c1-72)"
+        case "$_rrole" in
+            "(What is this agent"*|"") _rrole="(no role set)" ;;
+        esac
+    else
+        _rrole="(no context.md)"
+    fi
+    if [ "$_rn" = "main" ]; then
+        printf '  %s%-20s%s %s\n' "$CYAN" "$_rn" "$RESET" "$_rrole"
+    else
+        printf '  %-20s %s\n' "$_rn" "$_rrole"
+    fi
+done
+if [ "$_mh_roster_any" -eq 0 ]; then
+    printf '  (empty — the installer did not find or create any silos)\n'
+fi
+
 # Always show the CLI + "add more agents" hint. In the default zero-input
 # install this is the only way the user learns how to populate their roster.
 printf '\n'
