@@ -6,6 +6,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Three-tier memory flow documented** in `HIVE_ARCHITECTURE.md`:
+  raw external capture (Tier 1) → agent synthesis (Tier 2) → curator
+  distilled truth (Tier 3). Clarifies how external context enters the
+  hive without changing any existing flow.
+- **`hive/raw/` folder convention** for Tier 1 raw external capture.
+  One subfolder per source (`hive/raw/discord/`, `hive/raw/slack/`,
+  etc.). Append-only; never modified by agents. Includes a `README.md`
+  explaining the convention.
+- **`templates/memory-entry.md`** — canonical format spec for Tier 1
+  raw capture and Tier 2 structured synthesis. Two shapes, one spec.
+- **`examples/ingesters/discord/`** — reference Discord ingester.
+  Polls channels via the bot API and appends to `hive/raw/discord/`.
+  Pure stdlib, env-var configured, resumable via state file,
+  append-only. Includes a README with setup, launchd/cron recipes,
+  and adaptation notes.
+- **`examples/ingesters/generic-webhook/`** — minimal HTTP endpoint
+  that accepts POSTs and appends to `hive/raw/<source>/<topic>.md`.
+  Use it to capture context from anything that can send HTTP (Linear,
+  GitHub webhooks, Zapier, cron, internal tools).
+- **`examples/silo-mature/coder/`** — synthetic populated silo showing
+  what a mature agent memory looks like after weeks of use. Log,
+  context, memory, and learnings files with realistic density.
+  Reference content only; not installed.
+- **`examples/README.md`** — index explaining what's under
+  `examples/` and when to use each piece.
+
+### Documented (existing behavior, previously implicit)
+
+- **`hive/knowledge/` is expandable.** Ships with three canonical files
+  (HUMAN_CONTEXT, SOUL, DOMAINS); curator adds topical files as the
+  hive grows (PROJECTS, COMPLIANCE, per-topic, etc.). Previously
+  implicit; now called out in `HIVE_ARCHITECTURE.md`.
+- **`hive/learnings/distilled/` is expandable.** Ships with four
+  canonical files (patterns, mistakes, wins, cross-agent-insights);
+  curator adds topical files (e.g. `auth-patterns.md`) as the hive
+  accumulates enough distilled content per topic to warrant its own
+  file. Previously implicit; now documented.
+
 ### Changed
 
 - **Default install is now zero-input.** `curl | sh` scaffolds the

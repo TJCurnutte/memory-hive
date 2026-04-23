@@ -90,12 +90,20 @@ All agents read this first on every spawn. Contains:
 
 #### 3. `knowledge/` — Curated Truth
 
-Written and maintained by curator only. Contains:
+Written and maintained by curator only. Ships with three canonical files:
 - `HUMAN_CONTEXT.md` — Human context (goals, preferences, tics, timezone)
 - `SOUL.md` — System behavior guidelines
 - `DOMAINS.md` — Area expertise definitions
-- `PROJECTS.md` — Active projects and their state
-- `PREFERENCES.md` — Human preferences, communication style
+
+**`knowledge/` is expandable.** The curator adds topical files as the hive
+grows — any persistent truth the team needs to reference, in its own file:
+- `PROJECTS.md` — active projects and their state
+- `PREFERENCES.md` — detailed preferences and communication style
+- `COMPANY.md`, `COMPLIANCE.md`, `<topic>.md` — whatever the team needs
+
+There's no fixed set. The canonical three are the starting point; the
+curator promotes topical files whenever repeated references warrant a
+dedicated home.
 
 **Rule:** Only the curator writes to `knowledge/`. No agent contributes directly to curated truth — the curator reviews and promotes.
 
@@ -114,11 +122,15 @@ After every task, the agent writes what they learned:
 Format: `learnings/raw/[agent-id]/[YYYY-MM-DD]-[task-summary].md`
 
 **`distilled/`** — Curated by curator.
-The curator reviews `raw/` regularly and promotes valuable learnings to:
+The curator reviews `raw/` regularly and promotes valuable learnings. Four
+canonical files, plus topical files as the hive grows:
 - `patterns.md` — Cross-agent patterns noticed
 - `mistakes.md` — Known failure modes
 - `wins.md` — Confirmed successes
 - `cross-agent-insights.md` — Insights from multiple agents working together
+- `<topic>.md` — Any topic that accumulates enough distilled learnings to
+  warrant its own file (e.g. `auth-patterns.md`, `deployment.md`,
+  `customer-comms.md`). The canonical four are defaults, not a cap.
 
 **`META.json`** — Stats: total contributions, last review date, health metrics.
 
@@ -206,6 +218,65 @@ When an agent completes a task:
 7. Next agent to spawn sees updated hive
 8. System is now smarter than before the task
 ```
+
+---
+
+## The Three-Tier Memory Flow
+
+Memory Hive distinguishes between three tiers of content, each with a
+different writer, format, and permanence. Understanding the tiers is the
+difference between "a place agents write notes" and "a system that gets
+smarter over time":
+
+| Tier | Source | Location | Writer | Purpose |
+|---|---|---|---|---|
+| **1. Raw external** | Machine ingestion from outside the hive | `hive/raw/<source>/` | Ingester scripts (Discord, Slack, webhooks, email, etc.) | Capture context that happened outside any agent's session, so agents can read it on boot |
+| **2. Structured** | Agents observing + synthesizing | Silo `log.md`, `learnings/raw/[agent-id]/` | Agents, after each task | Agent-owned notes and raw contributions to the shared learning pool |
+| **3. Distilled** | Curator promoting valuable structured content | `learnings/distilled/*.md`, `knowledge/` | Curator only | Canonical truth — patterns, wins, mistakes, cross-agent insights |
+
+**How the tiers compose:**
+
+```
+Tier 1 (raw external)
+       │
+       │  agent reads on boot
+       ▼
+Tier 2 (agent synthesis)  ◄──  agents observe in session
+       │
+       │  curator promotes
+       ▼
+Tier 3 (distilled truth)
+```
+
+- **Tier 1 is optional.** If you don't run an ingester, `hive/raw/` stays empty
+  and the hive still works — it's just limited to what agents see in their own
+  sessions.
+- **Tier 1 writes a simple format** agents can skim efficiently. See
+  [`templates/memory-entry.md`](templates/memory-entry.md) for the format spec
+  and [`examples/ingesters/`](examples/ingesters/) for working ingester
+  implementations.
+- **Tier 2 and Tier 3 are the core system** — they work identically with or
+  without Tier 1.
+
+### Ingesters: how external context gets in
+
+An **ingester** is anything that writes to `hive/raw/<source>/`. Ingesters
+are:
+
+- **External:** they don't need to be running inside an agent session
+- **Append-only:** they write, they never edit existing entries
+- **Scoped:** one `<source>` subfolder per ingester (e.g.
+  `hive/raw/discord/`, `hive/raw/slack/`, `hive/raw/email/`)
+- **Simple:** they follow the format in `templates/memory-entry.md` so every
+  agent can parse them uniformly
+
+The repo ships two reference ingesters under `examples/ingesters/`:
+- `discord/` — polls Discord channels via the bot API every N seconds
+- `generic-webhook/` — a minimal HTTP endpoint that accepts POSTs and writes
+  them to `hive/raw/<source>/<topic>.md`
+
+Both are optional. Copy and adapt for your own platform (Linear, GitHub,
+email, Slack, etc.).
 
 ---
 
