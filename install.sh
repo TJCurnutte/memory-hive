@@ -8,8 +8,16 @@
 # Usage:
 #   curl -fsSL https://raw.githubusercontent.com/TJCurnutte/memory-hive/main/install.sh | sh
 #
+# Default behavior: silent, zero user-input. Creates the `main` silo,
+# wires the managed block into ~/.claude/CLAUDE.md if found, and exits.
+# Add agents any time with `memory-hive add <name>`.
+#
 # Environment overrides:
 #   MEMORY_HIVE_DIR=/custom/path   install location (default: $HOME/.memory-hive)
+#   MEMORY_HIVE_WIZARD=1           run the interactive setup wizard (prompts
+#                                  for agent count, names, roles; offers to
+#                                  import agents from ~/.claude/agents/ and
+#                                  ~/.openclaw/hive/agents/ if present)
 #   MEMORY_HIVE_MERGE_CWD=1        also merge the hive block into $PWD/CLAUDE.md
 #   MEMORY_HIVE_REPO=/local/path   install from a local working copy instead of
 #                                  cloning (useful for development and tests)
@@ -528,11 +536,14 @@ fi
 #     and for each one: name + role template.
 #   - Re-install (non-main silos already present): ask keep/add/fresh/select.
 #
-# The wizard is skipped cleanly when no tty is reachable (CI, `curl | sh`
-# with /dev/tty unavailable). In that case the user gets the existing
-# behavior plus a one-liner hint to run `memory-hive add` later.
+# Default behavior: NO wizard. The installer runs silently, scaffolds the
+# reserved `main` silo, and exits. Users who want the interactive setup
+# flow opt in with MEMORY_HIVE_WIZARD=1 (or `memory-hive setup` after
+# install, which re-invokes this script with the flag set).
+#
+# This keeps `curl | sh` a one-shot, no-input-required install.
 
-# Decide where the wizard reads from:
+# Decide where the wizard reads from (only relevant when WIZARD is enabled):
 #   - stdin is a tty                          → read from stdin directly
 #   - stdin NOT tty, stdout IS tty, /dev/tty  → treat as `curl | sh` running
 #     interactively; open /dev/tty on FD 3 and read from there
@@ -542,15 +553,17 @@ fi
 #
 # $WIZARD_TTY ends up: "stdin", "fd3", or "" (no wizard).
 WIZARD_TTY=""
-if [ -t 0 ]; then
-    WIZARD_TTY="stdin"
-elif [ -t 1 ] && [ -r /dev/tty ] && { exec 3</dev/tty; } 2>/dev/null; then
-    WIZARD_TTY="fd3"
-elif [ -p /dev/stdin ] 2>/dev/null || [ -f /dev/stdin ] 2>/dev/null; then
-    # Piped (pipe) or redirected (regular file) stdin — e.g. heredoc. Reads
-    # return EOF cleanly if the stream is empty, so the wizard exits
-    # gracefully for `< /dev/null` in CI.
-    WIZARD_TTY="stdin"
+if [ "${MEMORY_HIVE_WIZARD:-0}" = "1" ]; then
+    if [ -t 0 ]; then
+        WIZARD_TTY="stdin"
+    elif [ -t 1 ] && [ -r /dev/tty ] && { exec 3</dev/tty; } 2>/dev/null; then
+        WIZARD_TTY="fd3"
+    elif [ -p /dev/stdin ] 2>/dev/null || [ -f /dev/stdin ] 2>/dev/null; then
+        # Piped (pipe) or redirected (regular file) stdin — e.g. heredoc.
+        # Reads return EOF cleanly if the stream is empty, so the wizard
+        # exits gracefully for `< /dev/null` in CI.
+        WIZARD_TTY="stdin"
+    fi
 fi
 
 # _wizard_read <varname> [default]
@@ -789,21 +802,21 @@ _list_importable_agents() {
 }
 
 # _guess_role_template_for_name <name>
-# Heuristic: if the agent's name matches or contains a known template word
-# (coder, reviewer, researcher, writer, planner), return that template name.
-# Returns empty for no-match so the caller can fall back to a blank role.
+# Heuristic: if the agent's name matches or contains a role-like word,
+# return the matching template name. Falls back to empty for unknown names
+# so the caller can leave the role blank.
 _guess_role_template_for_name() {
     _gname="$1"
     case "$_gname" in
-        coder|*-coder|coder-*|*-code|code-*|*developer*|*-dev|dev-*|web-dev|vibe-coder|api-expert)
+        coder|*-coder|coder-*|*-code|code-*|*developer*|*-dev|dev-*|*-eng|eng-*|*-engineer|engineer-*)
             printf 'coder' ;;
-        reviewer|*-reviewer|reviewer-*|security-auditor|*-auditor|auditor-*|*-review|review-*)
+        reviewer|*-reviewer|reviewer-*|*-auditor|auditor-*|*-review|review-*|*-audit|audit-*)
             printf 'reviewer' ;;
-        researcher|*-researcher|researcher-*|research-analyst|*-research|research-*|data-analyst|*-analyst|analyst-*)
+        researcher|*-researcher|researcher-*|*-research|research-*|*-analyst|analyst-*|*-analysis|analysis-*)
             printf 'researcher' ;;
-        writer|*-writer|writer-*|content-strategist|*-strategist|strategist-*|social-media-mgr|*-copy|copy-*)
+        writer|*-writer|writer-*|*-strategist|strategist-*|*-copy|copy-*|*-editor|editor-*)
             printf 'writer' ;;
-        planner|*-planner|planner-*|cxaas-specialist|*-specialist|specialist-*|coordinator|*-coordinator|coordinator-*)
+        planner|*-planner|planner-*|*-specialist|specialist-*|coordinator|*-coordinator|coordinator-*|*-pm|pm-*)
             printf 'planner' ;;
         *)
             printf '' ;;
@@ -1191,13 +1204,15 @@ else
     printf '  Check compliance: sh %s/check-compliance.sh\n' "$_install_display"
 fi
 
-# Always show the CLI + "add more agents" hint. In non-interactive installs
-# this is the only way the user learns how to populate their roster.
+# Always show the CLI + "add more agents" hint. In the default zero-input
+# install this is the only way the user learns how to populate their roster.
 printf '\n'
 if [ "$WIZARD_RAN" -eq 0 ]; then
-    printf 'Add agents any time: sh %s/memory-hive add <name> --role coder\n' "$_install_display"
-    printf '  list:    sh %s/memory-hive list\n' "$_install_display"
+    printf 'Next steps:\n'
+    printf '  sh %s/memory-hive add <name> --role coder   # add an agent\n' "$_install_display"
+    printf '  sh %s/memory-hive list                       # see what you have\n' "$_install_display"
+    printf '  sh %s/memory-hive setup                      # guided setup (optional)\n' "$_install_display"
 else
-    printf 'CLI: sh %s/memory-hive (add|list|role|rename|archive)\n' "$_install_display"
+    printf 'CLI: sh %s/memory-hive (add|list|role|rename|archive|setup|doctor|register)\n' "$_install_display"
 fi
 printf 'Tip: add %s to your PATH to drop the "sh ...memory-hive" prefix.\n' "$_install_display"

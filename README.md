@@ -22,11 +22,23 @@ with every task.
 curl -fsSL memoryhive.neural-forge.io/install.sh | sh
 ```
 
-On a real terminal, the installer runs an interactive wizard: you pick
-how many agents you want, name them, and assign a role template (or
-write your own). In a non-interactive context (CI, `| sh` with no tty),
-it installs just the `main` curator silo and prints the one-liner for
-adding more later.
+**Default is zero-input.** The installer scaffolds the reserved `main`
+curator silo, wires a managed block into `~/.claude/CLAUDE.md` if Claude
+Code is detected, and exits. No prompts, no questions.
+
+Want the guided setup? Opt in:
+
+```bash
+# Either set the env var at install time:
+curl -fsSL memoryhive.neural-forge.io/install.sh | MEMORY_HIVE_WIZARD=1 sh
+
+# Or install first, then run the wizard any time:
+sh ~/.memory-hive/memory-hive setup
+```
+
+The wizard asks how many agents you want, their names, and role
+templates. If it finds agents in `~/.claude/agents/` or
+`~/.openclaw/hive/agents/`, it offers to import them.
 
 You can add, rename, archive, and edit agents at any time with the
 `memory-hive` CLI:
@@ -47,18 +59,17 @@ Add `~/.memory-hive` to your `PATH` if you want to drop the prefix.
 
 A narrative walkthrough of what a fresh install actually feels like:
 
-1. **Run the installer.** On a real terminal, the wizard asks how many
-   agents you want beyond the curator. Say two. It prompts for each
-   name (`coder`, `researcher`) and role (pick the matching templates).
-2. **Three silos are scaffolded** under `~/.memory-hive/hive/agents/`:
-   `main/` (curator, always present), `coder/`, `researcher/`. Each gets
-   a seeded `log.md`, `context.md`, and `memory.md`.
-3. **Your Claude Code agents load the hive on boot.** If the installer
-   detected `~/.claude/`, it injected a managed block into
-   `~/.claude/CLAUDE.md` telling every agent to read
-   `~/.memory-hive/hive/index.md` and its own silo before responding.
+1. **Run the installer.** One command, no prompts. You get the `main`
+   curator silo and a wired-up `~/.claude/CLAUDE.md` managed block.
+2. **Add the agents you want.** `memory-hive add coder --role coder`
+   and `memory-hive add researcher --role researcher`. Each call
+   scaffolds `log.md`, `context.md` (role seeded from the template),
+   and `memory.md`, and updates the registry automatically.
+3. **Your Claude Code agents load the hive on boot.** The managed
+   block tells every agent to read `~/.memory-hive/hive/index.md` and
+   its own silo before responding.
 4. **List your roster.** `memory-hive list` shows the three silos and
-   the one-line role description the wizard seeded.
+   the one-line role description each was seeded with.
 5. **Tighten a role description.** `memory-hive role coder` opens
    `hive/agents/coder/context.md` in `$EDITOR`. Rewrite the role to
    match how you actually work. Save.

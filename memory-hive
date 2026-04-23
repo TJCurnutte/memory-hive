@@ -473,11 +473,30 @@ Usage:
       Health-check the install: verifies hive layout, silo triplets, the
       managed CLAUDE.md block, and that AGENTS.md matches on-disk silos.
 
+  memory-hive setup
+      Run the interactive setup wizard — asks how many agents you want,
+      their names, and roles. Also offers to import agents from
+      ~/.claude/agents/ and ~/.openclaw/hive/agents/ if either exists.
+
   memory-hive help
       Show this message.
 
 Install root: $INSTALL_DIR
 EOF
+}
+
+mh_setup() {
+    _mh_require_install
+    _installer="$INSTALL_DIR/install.sh"
+    if [ ! -f "$_installer" ]; then
+        printf 'ERROR: installer not found at %s\n' "$_installer" >&2
+        printf 'Re-run the install to restore it:\n' >&2
+        printf '  curl -fsSL https://raw.githubusercontent.com/TJCurnutte/memory-hive/main/install.sh | sh\n' >&2
+        return 1
+    fi
+    MEMORY_HIVE_WIZARD=1 MEMORY_HIVE_DIR="$INSTALL_DIR" \
+        MEMORY_HIVE_SKIP_CLAUDE_MD="${MEMORY_HIVE_SKIP_CLAUDE_MD:-1}" \
+        sh "$_installer"
 }
 
 mh_list() {
@@ -670,6 +689,7 @@ case "$_verb" in
     rename)   mh_rename "$@" ;;
     register) _mh_require_install; mh_register ;;
     doctor)   mh_doctor "$@" ;;
+    setup)    mh_setup ;;
     help|-h|--help) mh_help ;;
     *)
         printf 'Unknown command: %s\n\n' "$_verb" >&2
