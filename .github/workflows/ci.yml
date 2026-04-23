@@ -1,0 +1,136 @@
+# CI for memory-hive. Runs shellcheck and install smoke tests on Ubuntu
+# and macOS. Keep this workflow lean: raw shell only, no third-party
+# actions beyond checkout@v4.
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+      - feat/**
+  pull_request:
+    branches:
+      - main
+      - feat/**
+
+jobs:
+  smoke:
+    name: shellcheck + install smoke (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install shellcheck (macOS)
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          # shellcheck ships via brew on the macOS runner image. Check first
+          # so we don't re-run brew every job.
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            brew install shellcheck
+          fi
+
+      - name: Install shellcheck (Ubuntu)
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          if ! command -v shellcheck >/dev/null 2>&1; then
+            sudo apt-get update -qq
+            sudo apt-get install -y shellcheck
+          fi
+
+      - name: Shellcheck (warn-level, do not fail build)
+        shell: bash
+        run: |
+          # Pre-existing findings are acceptable; we still want to record
+          # them. Keep output as annotations but do not fail the build.
+          set +e
+          mkdir -p ci-artifacts
+          shellcheck --format=gcc install.sh create-agent.sh memory-hive update.sh check-compliance.sh \
+            | tee ci-artifacts/shellcheck.txt
+          SC_RC=${PIPESTATUS[0]}
+          echo "shellcheck exit: $SC_RC" >> ci-artifacts/shellcheck.txt
+          exit 0
+
+      - name: Upload shellcheck artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: shellcheck-${{ matrix.os }}
+          path: ci-artifacts/shellcheck.txt
+          if-no-files-found: ignore
+
+      - name: Non-interactive install smoke test
+        shell: bash
+        run: |
+          set -eu
+          INSTALL_DIR="$(mktemp -d)"
+          export MEMORY_HIVE_DIR="$INSTALL_DIR"
+          export MEMORY_HIVE_SKIP_CLAUDE_MD=1
+          export MEMORY_HIVE_REPO="$(pwd)"
+          sh install.sh < /dev/null
+          # The installer MUST create the main silo on a clean install.
+          test -d "$INSTALL_DIR/hive/agents/main"
+          test -f "$INSTALL_DIR/hive/agents/main/log.md"
+          test -f "$INSTALL_DIR/hive/agents/main/context.md"
+          test -f "$INSTALL_DIR/hive/agents/main/memory.md"
+          echo "Non-interactive install OK"
+
+      - name: Interactive install smoke test (heredoc wizard)
+        shell: bash
+        run: |
+          set -eu
+          INSTALL_DIR="$(mktemp -d)"
+          export MEMORY_HIVE_DIR="$INSTALL_DIR"
+          export MEMORY_HIVE_SKIP_CLAUDE_MD=1
+          export MEMORY_HIVE_REPO="$(pwd)"
+          # Drive the wizard: 2 agents, "foo" (confirm y, role 1 = coder),
+          # "bar" (confirm y, role 3 = researcher).
+          sh install.sh <<'WIZARD'
+          2
+          foo
+          y
+          1
+          bar
+          y
+          3
+          WIZARD
+          test -d "$INSTALL_DIR/hive/agents/main"
+          test -d "$INSTALL_DIR/hive/agents/foo"
+          test -d "$INSTALL_DIR/hive/agents/bar"
+          # foo was created with role 1 (coder) — the template says "Writes and edits code".
+          grep -q "Writes and edits code" "$INSTALL_DIR/hive/agents/foo/context.md"
+          echo "Interactive install OK"
+
+      - name: CLI smoke — add / list / register
+        shell: bash
+        run: |
+          set -eu
+          INSTALL_DIR="$(mktemp -d)"
+          export MEMORY_HIVE_DIR="$INSTALL_DIR"
+          export MEMORY_HIVE_SKIP_CLAUDE_MD=1
+          export MEMORY_HIVE_REPO="$(pwd)"
+          sh install.sh < /dev/null
+
+          # add testagent with the writer template.
+          sh "$INSTALL_DIR/memory-hive" add testagent --role writer
+          test -d "$INSTALL_DIR/hive/agents/testagent"
+          grep -q "Drafts and edits prose" "$INSTALL_DIR/hive/agents/testagent/context.md"
+
+          # list must print testagent.
+          sh "$INSTALL_DIR/memory-hive" list | tee /tmp/mh-list.out
+          grep -q '^ *testagent' /tmp/mh-list.out
+
+          # register must succeed and keep registry in sync.
+          sh "$INSTALL_DIR/memory-hive" register
+          grep -q "testagent" "$INSTALL_DIR/hive/registry/AGENTS.md"
+
+          # doctor should exit 0 (CLAUDE.md absent in CI => skipped, not warning).
+          sh "$INSTALL_DIR/memory-hive" doctor
+          echo "CLI smoke OK"
