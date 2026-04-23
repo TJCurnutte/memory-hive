@@ -1,8 +1,17 @@
-# 🧠 Memory Hive Architecture
+# Memory Hive Architecture
+
+Conceptual model for the two-layer memory system. For installer
+behavior and CLI usage see [INTEGRATION.md](INTEGRATION.md); for the
+product overview see [README.md](README.md).
 
 ## Overview
 
-Memory Hive is a shared, continuously learning memory system for multi-agent AI architectures. Every agent has **two memory layers** — a private silo for personal continuity and a shared hive for collective intelligence. The system compounds over time: every task makes the hive smarter, every agent keeps its own context, and a curator maintains the shared knowledge base.
+Memory Hive is a shared, continuously learning memory system for
+multi-agent AI architectures. Every agent has **two memory layers** —
+a private silo for personal continuity and a shared hive for
+collective intelligence. The system compounds over time: every task
+makes the hive smarter, every agent keeps its own context, and a
+curator maintains the shared knowledge base.
 
 ---
 
@@ -250,25 +259,23 @@ This prevents speculation from polluting core knowledge.
 
 ## Integrating With Your Agents
 
-### OpenClaw
+The hive is framework-agnostic — nothing here depends on Claude Code,
+OpenClaw, or any specific runtime. Any agent, in any framework, can:
 
-All agents can be configured to use the hive boot sequence. Each agent's workspace becomes:
-- `~/.openclaw/workspace-[agent-id]/` — agent's own dir
-- `~/.memory-hive/hive/` — shared hive
-- `~/.memory-hive/hive/agents/[agent-id]/` — private silo
-
-### Custom Frameworks
-
-The hive is framework-agnostic. Any agent can:
 - Read from and write to the hive via standard file operations
 - Keep personal context in `agents/[id]/`
 - Implement the boot sequence and task completion flow independently
 
 Key integration points:
-1. On agent spawn → run boot sequence
+
+1. On agent spawn → run the boot sequence
 2. On task completion → write to `learnings/raw/[id]/` and `agents/[id]/log.md`
-3. If curator → run curation loop
+3. If curator → run the curation loop
 4. All agents → read `learnings/distilled/` before starting tasks
+
+For Claude Code and OpenClaw users, the installer wires this up
+automatically. See [INTEGRATION.md](INTEGRATION.md) for what it does
+and [MIGRATION.md](MIGRATION.md) if you're moving from an older setup.
 
 ---
 
