@@ -1128,6 +1128,15 @@ if [ "$WIZARD_TTY" = "fd3" ]; then
     exec 3<&- 2>/dev/null || true
 fi
 
+# Refresh hive/registry/AGENTS.md now that silos are (re)populated. Covers
+# fresh/import/reconcile flows alike; if the CLI isn't available for some
+# reason, silently skip — the registry is a convenience, not a correctness
+# gate.
+if [ -x "$INSTALL_DIR/memory-hive" ]; then
+    MEMORY_HIVE_DIR="$INSTALL_DIR" sh "$INSTALL_DIR/memory-hive" register \
+        >/dev/null 2>&1 || true
+fi
+
 # =============================================================================
 # Phase E: Context-aware success banner
 # =============================================================================
