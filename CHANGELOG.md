@@ -55,6 +55,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   personal 13-agent roster (Coder, Vibe Coder, SDR Alpha/Beta, CXaaS
   Specialist, Content Strategist, Security Auditor, etc.). New installs now
   look like their own system, not someone else's dotfiles.
+- **Docs second pass.** README gets a "Day One" walkthrough and a
+  representative (not enumerated) hive diagram; INTEGRATION.md and
+  CONTRIBUTING.md rewritten to match the wizard + import flow + CLI;
+  new `MIGRATION.md` covers upgrade paths from OpenClaw, bare Claude
+  Code, and pre-0.1 hives. Cross-links added across README ↔
+  INTEGRATION ↔ HIVE_ARCHITECTURE ↔ MIGRATION ↔ CHANGELOG.
 - **`create-agent.sh`** accepts `MH_AGENT_ROLE` (inline text) and
   `MH_AGENT_ROLE_FILE` (path to a role file, typically a `templates/roles/*`
   entry). Existing CLI (`sh create-agent.sh <agent-id>`) is unchanged.

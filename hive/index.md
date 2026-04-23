@@ -88,11 +88,19 @@ Every agent, on every spawn:
 
 ## Documentation
 
-- [HIVE_ARCHITECTURE.md](../HIVE_ARCHITECTURE.md) — full system design
+Inside the installed hive:
+
 - [registry/AGENTS.md](./registry/AGENTS.md) — agent roster + silo mapping
 - [registry/SKILLS_CATALOG.md](./registry/SKILLS_CATALOG.md) — skills matrix
 - [knowledge/HUMAN_CONTEXT.md](./knowledge/HUMAN_CONTEXT.md) — human context
 - [learnings/distilled/](./learnings/distilled/) — curated learnings
+
+In the repo root:
+
+- [README.md](../README.md) — product overview + Day One walkthrough
+- [HIVE_ARCHITECTURE.md](../HIVE_ARCHITECTURE.md) — full system design
+- [INTEGRATION.md](../INTEGRATION.md) — installer + CLI behavior
+- [MIGRATION.md](../MIGRATION.md) — upgrading from OpenClaw / pre-0.1
 
 ---
 

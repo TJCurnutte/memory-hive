@@ -43,37 +43,68 @@ Add `~/.memory-hive` to your `PATH` if you want to drop the prefix.
 
 ---
 
+## Day One
+
+A narrative walkthrough of what a fresh install actually feels like:
+
+1. **Run the installer.** On a real terminal, the wizard asks how many
+   agents you want beyond the curator. Say two. It prompts for each
+   name (`coder`, `researcher`) and role (pick the matching templates).
+2. **Three silos are scaffolded** under `~/.memory-hive/hive/agents/`:
+   `main/` (curator, always present), `coder/`, `researcher/`. Each gets
+   a seeded `log.md`, `context.md`, and `memory.md`.
+3. **Your Claude Code agents load the hive on boot.** If the installer
+   detected `~/.claude/`, it injected a managed block into
+   `~/.claude/CLAUDE.md` telling every agent to read
+   `~/.memory-hive/hive/index.md` and its own silo before responding.
+4. **List your roster.** `memory-hive list` shows the three silos and
+   the one-line role description the wizard seeded.
+5. **Tighten a role description.** `memory-hive role coder` opens
+   `hive/agents/coder/context.md` in `$EDITOR`. Rewrite the role to
+   match how you actually work. Save.
+6. **Your agents start logging.** After each non-trivial task, the agent
+   appends to its own `log.md` and, if it learned something generalizable,
+   drops a note in `hive/learnings/raw/`.
+7. **The curator takes over from there.** `main` reviews `learnings/raw/`
+   on whatever cadence you want, promotes the useful bits to
+   `learnings/distilled/`, and keeps the shared hive coherent.
+
+That's the whole loop. The hive learns because every agent writes back
+to it, and the curator keeps the signal strong.
+
+Coming from an existing setup (OpenClaw, Claude Code sub-agents, a
+pre-0.1 hive)? See [MIGRATION.md](MIGRATION.md) — the installer can
+import your existing agents in one step.
+
+---
+
 ## The Shape of a Hive
 
 ```
-                    ┌─────────────────────────────────────────┐
-                    │          THE SHARED HIVE                │
-                    │                                         │
-                    │   registry/     knowledge/              │
-                    │   ├── AGENTS.md  ├── SOUL.md            │
-                    │   └── SKILLS     └── HUMAN_CONTEXT.md   │
-                    │                                         │
-                    │   learnings/    tasks/                  │
-                    │   ├── raw/      ├── queue.md            │
-                    │   └── distilled └── active/             │
-                    │                                         │
-                    │           curator reviews               │
-                    │     writes ▲        ▲ reads             │
-                    └────────────┼────────┼───────────────────┘
-                                 │        │
-                 ┌───────────────┴────────┴──────────────────┐
-                 │                                           │
-        ┌────────▼──────────┐     ┌────────▼──────────┐
-        │  main (curator)   │     │  your agent #1    │  ...
-        │  private silo     │     │  private silo     │
-        │  └── log.md       │     │  └── log.md       │
-        │  └── context.md   │     │  └── context.md   │
-        │  └── memory.md    │     │  └── memory.md    │
-        └───────────────────┘     └───────────────────┘
+             ┌─────────────────────────────────────────┐
+             │             SHARED HIVE                 │
+             │                                         │
+             │  registry/     knowledge/               │
+             │  learnings/    tasks/                   │
+             │                                         │
+             │       curator promotes raw → distilled  │
+             └───────▲─────────────────────▲───────────┘
+             reads   │                     │  reads
+             writes  │                     │  writes raw/
+                     │                     │
+         ┌───────────┴──────┐      ┌───────┴─────────┐
+         │     main         │      │     agent       │   ...N
+         │  (curator, one)  │      │  (you defined)  │
+         ├──────────────────┤      ├─────────────────┤
+         │ log.md           │      │ log.md          │
+         │ context.md       │      │ context.md      │
+         │ memory.md        │      │ memory.md       │
+         └──────────────────┘      └─────────────────┘
 ```
 
-`main` is a reserved role — it's the Chief of Staff / curator, always
-present. Every other agent in the diagram is one you chose.
+Every hive has exactly one `main` (the curator) plus any number of
+user-defined agents. The diagram shows the shape, not a specific roster
+— you name your own agents at install time.
 
 ---
 
@@ -147,34 +178,8 @@ Hive is smarter than before
 
 ---
 
-## Core Architecture
-
-```
-~/.memory-hive/hive/                 ~/.memory-hive/hive/agents/[id]/
-├── index.md                         ├── log.md        ← private
-├── registry/                        ├── context.md    ← private
-│   ├── AGENTS.md                    └── memory.md     ← private
-│   └── SKILLS_CATALOG.md
-├── knowledge/
-│   ├── HUMAN_CONTEXT.md
-│   ├── SOUL.md
-│   └── DOMAINS.md
-├── learnings/
-│   ├── raw/[agent-id]/
-│   ├── distilled/
-│   │   ├── patterns.md
-│   │   ├── mistakes.md
-│   │   ├── wins.md
-│   │   └── cross-agent-insights.md
-│   └── META.json
-├── tasks/
-│   ├── queue.md
-│   └── active/
-└── curator/
-    ├── DRAFT.md
-    ├── CONFLICTS.md
-    └── DECISIONS.md
-```
+For the full directory layout, curation loop, confidence gates, and
+conflict-resolution rules, see [HIVE_ARCHITECTURE.md](HIVE_ARCHITECTURE.md).
 
 ---
 
@@ -234,19 +239,14 @@ them back out.
 
 ---
 
-## For Developers
-
-### Install
-
-```bash
-curl -fsSL memoryhive.neural-forge.io/install.sh | sh
-```
+## Installation details
 
 The installer auto-detects Claude Code and OpenClaw. See
-[INTEGRATION.md](INTEGRATION.md) for what gets wired up and how to opt
-into project-level `CLAUDE.md` merging.
+[INTEGRATION.md](INTEGRATION.md) for what gets wired up, the managed
+`CLAUDE.md` block, and opt-out env vars (`MEMORY_HIVE_SKIP_CLAUDE_MD`,
+`MEMORY_HIVE_DIR`, `MEMORY_HIVE_REPO`).
 
-### Re-install / Reconcile
+### Re-install / reconcile
 
 Re-running the installer on an existing hive offers four choices:
 
@@ -260,12 +260,16 @@ No agents are ever deleted; archiving moves them to
 
 ### Contributing
 
-See [CONTRIBUTING.md](CONTRIBUTING.md). Key areas:
+See [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup and the safe
+local-test workflow. Areas that welcome help:
+
 - Framework adapters (LangChain, AutoGen, CrewAI, etc.)
 - Additional role templates
 - Curation automation
 - Memory hygiene tools
 - Visualization
+
+For release history, see [CHANGELOG.md](CHANGELOG.md).
 
 ---
 
