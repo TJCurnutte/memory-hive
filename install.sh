@@ -1462,6 +1462,14 @@ _emit_platform_lines() {
     done
 }
 
+# Set the telemetry baseline AFTER all installer + wizard writes are done
+# but BEFORE the banner prints. Any file in the hive with mtime > this
+# baseline is real agent activity, not installer scaffolding.
+# `memory-hive stats` reads this file to filter out the initial template
+# writes — otherwise new installs would show ~13 "writes" just from the
+# scaffolding and the counter would lie.
+touch "$HIVE_DIR/.baseline-installed" 2>/dev/null || true
+
 _emit_platform_lines PLATFORM_WIRED  "wired"
 _emit_platform_lines PLATFORM_MANUAL "manual"
 _emit_platform_lines PLATFORM_SKIPPED "skip "

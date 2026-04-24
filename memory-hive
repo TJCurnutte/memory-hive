@@ -527,6 +527,19 @@ Usage:
       by default (prints advice, doesn't kill anything). Add --force
       to SIGTERM detected CLI agents.
 
+  memory-hive stats
+      Honest telemetry. Counts REAL file writes in the hive (silo
+      logs, memory bullets, raw learnings, curator promotions) by
+      agent and by time window. Every count maps to a file on disk
+      you can `ls -la` yourself. No timers, no proxies, no fake
+      activity.
+
+  memory-hive watch
+      Live stream of file events as agents write to the hive. Prints
+      timestamp + agent + file for each event and keeps a running
+      counter. Ctrl+C to exit. Uses fswatch or inotifywait if
+      available; falls back to polling (5s).
+
   memory-hive help
       Show this message.
 
@@ -660,6 +673,244 @@ mh_apply() {
         printf 'Desktop apps still need a manual quit + reopen: %s\n' "$_desktop"
     fi
     return 0
+}
+
+# --- telemetry: stats + watch ------------------------------------------------
+#
+# Every signal here comes from a real file write under $HIVE_DIR. We never
+# count time-based "activations"; we count files whose mtime is newer than
+# the window. That means:
+#   - if no agent writes to its silo, the counter stays at zero
+#   - if an agent claims to have written but didn't, the counter stays at zero
+#   - counts always match what `ls -la` + `find -mtime` will show
+# This is the anti-trick property the user asked for.
+
+# _mh_classify <abspath> → prints `agent:kind` to stdout, or empty to skip.
+# Maps a hive file path to (who did it, what kind of write it was).
+_mh_classify() {
+    _p="$1"
+    # Normalize: strip HIVE_DIR prefix so we operate on relative paths.
+    case "$_p" in
+        "$HIVE_DIR"/*) _rel="${_p#"$HIVE_DIR"/}" ;;
+        *) return 0 ;;
+    esac
+    case "$_rel" in
+        agents/_archived/*)              return 0 ;;  # archived — don't count
+        agents/*/log.md)
+            _who="$(printf '%s' "$_rel" | awk -F/ '{print $2}')"
+            printf '%s:log' "$_who" ;;
+        agents/*/memory.md)
+            _who="$(printf '%s' "$_rel" | awk -F/ '{print $2}')"
+            printf '%s:memory' "$_who" ;;
+        agents/*/context.md)
+            _who="$(printf '%s' "$_rel" | awk -F/ '{print $2}')"
+            printf '%s:context' "$_who" ;;
+        agents/*/learnings/*.md)
+            _who="$(printf '%s' "$_rel" | awk -F/ '{print $2}')"
+            printf '%s:learning' "$_who" ;;
+        learnings/raw/*/*.md)
+            _who="$(printf '%s' "$_rel" | awk -F/ '{print $3}')"
+            printf '%s:raw' "$_who" ;;
+        learnings/raw/*.md)
+            printf 'unknown:raw' ;;
+        learnings/distilled/*.md)
+            printf 'curator:distilled' ;;
+        curator/DECISIONS.md)            printf 'curator:decision' ;;
+        curator/CONFLICTS.md)            printf 'curator:conflict' ;;
+        curator/DRAFT.md)                printf 'curator:draft' ;;
+        knowledge/*.md)                  printf 'curator:knowledge' ;;
+        raw/*/*.md)                      # Tier 1 external ingestion
+            _who="$(printf '%s' "$_rel" | awk -F/ '{print $2}')"
+            printf 'ingester:%s' "$_who" ;;
+        *) return 0 ;;
+    esac
+}
+
+# _mh_hive_file_list — print one path per line for every file under $HIVE_DIR
+# that counts as a hive write (skips .git, .upstream, .local backups, dirs).
+_mh_hive_file_list() {
+    [ -d "$HIVE_DIR" ] || return 0
+    find "$HIVE_DIR" -type f \
+        ! -name "*.upstream" \
+        ! -name "*.local" \
+        ! -name ".DS_Store" \
+        ! -path "*/.git/*" \
+        2>/dev/null
+}
+
+# _mh_mtime_epoch <path> → seconds since epoch (portable macOS + GNU).
+_mh_mtime_epoch() {
+    # GNU stat first (Linux), then BSD stat (macOS).
+    stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null
+}
+
+# _mh_fmt_time <epoch> → "HH:MM:SS" in local time.
+_mh_fmt_time() {
+    _e="$1"
+    # GNU date accepts @epoch, BSD date accepts -r epoch. Try both.
+    date -d "@$_e" '+%H:%M:%S' 2>/dev/null || date -r "$_e" '+%H:%M:%S' 2>/dev/null || printf '??:??:??'
+}
+
+# _mh_fmt_date <epoch> → "YYYY-MM-DD".
+_mh_fmt_date() {
+    _e="$1"
+    date -d "@$_e" '+%Y-%m-%d' 2>/dev/null || date -r "$_e" '+%Y-%m-%d' 2>/dev/null || printf '????-??-??'
+}
+
+mh_stats() {
+    _mh_require_install
+
+    _now="$(date +%s)"
+    # Start-of-today in local time.
+    _today0="$(date -d 'today 00:00:00' +%s 2>/dev/null || date -v0H -v0M -v0S +%s 2>/dev/null || printf '%s' "$_now")"
+    _week_ago=$((_now - 7 * 86400))
+
+    # Baseline: the installer touches $HIVE_DIR/.baseline-installed as its
+    # last step. Files with mtime <= baseline are installer scaffolding, not
+    # agent activity, and get excluded from the counter. Without this the
+    # counter lies on a fresh install ("13 writes" from the templates).
+    _baseline_file="$HIVE_DIR/.baseline-installed"
+    _baseline_mtime=0
+    _baseline_missing=0
+    if [ -f "$_baseline_file" ]; then
+        _baseline_mtime="$(_mh_mtime_epoch "$_baseline_file")"
+        [ -n "$_baseline_mtime" ] || _baseline_mtime=0
+    else
+        _baseline_missing=1
+    fi
+
+    # Pipeline emits records; aggregation happens after to keep counters.
+    _mh_hive_file_list | while IFS= read -r _f; do
+        _cls="$(_mh_classify "$_f")"
+        [ -n "$_cls" ] || continue
+        _mt="$(_mh_mtime_epoch "$_f")"
+        [ -n "$_mt" ] || continue
+        # Drop installer scaffolding (files touched at or before baseline).
+        if [ "$_baseline_mtime" -gt 0 ] && [ "$_mt" -le "$_baseline_mtime" ]; then
+            continue
+        fi
+        printf '%s\t%s\t%s\n' "$_mt" "$_cls" "$_f"
+    done | sort -nr > /tmp/mh-stats.$$
+
+    _total=0; _today=0; _week=0
+    _agent_tally=""
+    _kind_tally=""
+    _latest_row=""
+    while IFS=$(printf '\t') read -r _mt _cls _f; do
+        [ -n "$_mt" ] || continue
+        _total=$((_total + 1))
+        [ "$_mt" -ge "$_today0" ] && _today=$((_today + 1))
+        [ "$_mt" -ge "$_week_ago" ] && _week=$((_week + 1))
+        _who="${_cls%%:*}"
+        _kind="${_cls##*:}"
+        _agent_tally="$_agent_tally $_who"
+        _kind_tally="$_kind_tally $_kind"
+        [ -z "$_latest_row" ] && _latest_row="$_mt|$_cls|$_f"
+    done < /tmp/mh-stats.$$
+    rm -f /tmp/mh-stats.$$
+
+    # --- render -------------------------------------------------------------
+    printf '\nMemory Hive — activity\n'
+    printf 'Hive: %s\n' "$HIVE_DIR"
+    if [ "$_baseline_missing" -eq 1 ]; then
+        printf '\n  (no .baseline-installed marker — re-run the installer to set it;\n'
+        printf '   stats below include install-time scaffolding until then)\n'
+    else
+        printf 'Since install: %s\n' "$(_mh_fmt_date "$_baseline_mtime")"
+    fi
+    printf '\n'
+    printf '  %-14s %s\n' "Today:"       "$_today writes"
+    printf '  %-14s %s\n' "Last 7 days:" "$_week writes"
+    printf '  %-14s %s\n' "All-time:"    "$_total writes"
+
+    if [ "$_total" -eq 0 ]; then
+        printf '\n  (no agent has written to the hive yet — run a task and come back)\n'
+        printf '\n  Every count here corresponds to a file under %s\n' "$HIVE_DIR"
+        printf '  whose mtime is newer than the install baseline.\n'
+        printf '  Verify with: find %s -type f -newer %s\n\n' "$HIVE_DIR" "$_baseline_file"
+        return 0
+    fi
+
+    printf '\nBy agent:\n'
+    printf '%s\n' $_agent_tally | sort | uniq -c | sort -rn | while read _c _a; do
+        printf '  %-24s %s\n' "$_a" "$_c"
+    done
+
+    printf '\nBy kind:\n'
+    printf '%s\n' $_kind_tally | sort | uniq -c | sort -rn | while read _c _k; do
+        printf '  %-24s %s\n' "$_k" "$_c"
+    done
+
+    if [ -n "$_latest_row" ]; then
+        _mt="${_latest_row%%|*}"
+        _rest="${_latest_row#*|}"
+        _cls="${_rest%%|*}"
+        _f="${_rest#*|}"
+        _rel="${_f#"$HIVE_DIR"/}"
+        printf '\nMost recent write: %s · %s · %s\n' "$(_mh_fmt_date "$_mt") $(_mh_fmt_time "$_mt")" "$_cls" "$_rel"
+    fi
+
+    # Honest-by-construction footer — tells users how to verify independently.
+    printf '\nVerify: find %s -type f -newer %s\n\n' "$HIVE_DIR" "$_baseline_file"
+}
+
+# mh_watch — live stream. Uses the best available watcher.
+mh_watch() {
+    _mh_require_install
+    [ -d "$HIVE_DIR" ] || _mh_die "Hive directory missing: $HIVE_DIR"
+
+    printf 'Memory Hive — live activity  (Ctrl+C to exit)\n'
+    printf 'Watching: %s\n' "$HIVE_DIR"
+    printf '──────────────────────────────────────────────\n'
+
+    _session_count=0
+
+    # _handle_event <path> — classify, count, print. Called for each event.
+    _handle_event() {
+        _path="$1"
+        [ -f "$_path" ] || return 0
+        _cls="$(_mh_classify "$_path")"
+        [ -n "$_cls" ] || return 0
+        _mt="$(_mh_mtime_epoch "$_path")"
+        [ -n "$_mt" ] || _mt="$(date +%s)"
+        _session_count=$((_session_count + 1))
+        _who="${_cls%%:*}"
+        _kind="${_cls##*:}"
+        _rel="${_path#"$HIVE_DIR"/}"
+        printf '%s  [%03d]  %-18s %-10s %s\n' \
+            "$(_mh_fmt_time "$_mt")" "$_session_count" "$_who" "$_kind" "$_rel"
+    }
+
+    if command -v fswatch >/dev/null 2>&1; then
+        # macOS / portable — fswatch emits one path per line.
+        fswatch -0 "$HIVE_DIR" 2>/dev/null | while IFS= read -r -d '' _path; do
+            _handle_event "$_path"
+        done
+    elif command -v inotifywait >/dev/null 2>&1; then
+        # Linux — inotifywait with -m keeps streaming.
+        inotifywait -mrq -e close_write,create,modify --format '%w%f' "$HIVE_DIR" 2>/dev/null | while IFS= read -r _path; do
+            _handle_event "$_path"
+        done
+    else
+        # Polling fallback: scan every 5s for files modified since the last
+        # scan. Uses a sentinel file for the time reference (portable vs.
+        # `find -newermt "<date>"` which isn't POSIX).
+        _sentinel="$(mktemp -t mh-watch.XXXXXX)"
+        printf '(polling every 5s — install fswatch or inotify-tools for instant updates)\n'
+        while :; do
+            sleep 5
+            _newer=""
+            # -newer <file> is POSIX. Collect changed files into a list.
+            _newer="$(find "$HIVE_DIR" -type f -newer "$_sentinel" 2>/dev/null \
+                ! -name '*.upstream' ! -name '*.local' ! -name '.DS_Store' \
+                ! -path '*/.git/*')"
+            touch "$_sentinel"
+            [ -z "$_newer" ] && continue
+            printf '%s\n' "$_newer" | while IFS= read -r _path; do
+                [ -n "$_path" ] && _handle_event "$_path"
+            done
+        done
+    fi
 }
 
 mh_setup() {
@@ -868,6 +1119,8 @@ case "$_verb" in
     doctor)   mh_doctor "$@" ;;
     setup)    mh_setup ;;
     apply)    _mh_require_install; mh_apply "$@" ;;
+    stats)    mh_stats ;;
+    watch)    mh_watch ;;
     help|-h|--help) mh_help ;;
     *)
         printf 'Unknown command: %s\n\n' "$_verb" >&2
