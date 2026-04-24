@@ -8,6 +8,58 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **Multi-platform integration.** The installer now auto-detects and wires up
+  every major agent platform that has a stable plain-text config file on
+  local disk. 17 auto-inject targets, 5 manual-instructions platforms, plus
+  an opt-in GitHub Copilot repo wiring:
+
+  | Platform | Integration | Config file |
+  |---|---|---|
+  | Claude Code | auto-inject | `~/.claude/CLAUDE.md` |
+  | OpenClaw | auto-inject | `~/.openclaw/CLAUDE.md` |
+  | NanoClaw | auto-inject | `~/.config/nanoclaw/AGENTS.md` |
+  | Hermes Agent | auto-inject | `~/.hermes/memories/MEMORY.md` |
+  | Cursor | auto-inject | `~/.cursor/rules/memory-hive.mdc` |
+  | Continue.dev | auto-inject | `~/.continue/rules/memory-hive.md` |
+  | Gemini CLI | auto-inject | `~/.gemini/GEMINI.md` |
+  | Goose (Block) | auto-inject | `~/.goosehints` |
+  | Amazon Q Developer CLI | auto-inject | `~/.aws/amazonq/rules/memory-hive.md` |
+  | OpenHands | auto-inject | `~/.openhands/microagents/memory-hive.md` |
+  | Roo Code | auto-inject | `~/.roo/rules/memory-hive.md` |
+  | Kilo Code | auto-inject | `~/.kilocode/rules/memory-hive.md` |
+  | Windsurf (Codeium) | auto-inject | `~/.codeium/windsurf/memories/global_rules.md` |
+  | Warp | auto-inject | `~/.agents/AGENTS.md` |
+  | Sourcegraph Amp | auto-inject | `~/.config/amp/AGENTS.md` |
+  | OpenAI Codex CLI | auto-inject | `~/.codex/AGENTS.md` |
+  | OpenCode | auto-inject | `~/.config/opencode/AGENTS.md` |
+  | Aider | manual snippet | `~/.aider.conf.yml` (structured YAML) |
+  | Open Interpreter | manual snippet | profile YAML |
+  | Cline (VS Code) | manual snippet | VS Code settings UI |
+  | Zed | manual snippet | `~/.config/zed/settings.json` |
+  | Crush (Charm) | manual snippet | `~/.local/share/crush/crush.json` |
+  | GitHub Copilot (repo) | opt-in (`MEMORY_HIVE_COPILOT_REPO=1`) | `$PWD/.github/copilot-instructions.md` |
+
+  Every auto-inject target uses the same `<!-- memory-hive:start -->` /
+  `<!-- memory-hive:end -->` markers, so re-installs are idempotent and
+  user content outside the markers is always preserved.
+- **Per-platform opt-out env vars.** Every platform has a matching
+  `MEMORY_HIVE_SKIP_<PLATFORM>=1` env var (e.g. `MEMORY_HIVE_SKIP_CURSOR=1`,
+  `MEMORY_HIVE_SKIP_GOOSE=1`). The legacy `MEMORY_HIVE_SKIP_CLAUDE_MD=1`
+  still works as an alias for `MEMORY_HIVE_SKIP_CLAUDE_CODE=1`.
+- **Platform docs** under [`templates/platforms/`](templates/platforms/).
+  One markdown file per supported platform explaining what gets wired,
+  where, and how to opt out. Shipped into `~/.memory-hive/templates/platforms/`
+  on install so users can read them without cloning the repo.
+- **`memory-hive doctor` is now multi-platform.** Instead of only checking
+  `~/.claude/CLAUDE.md`, `doctor` iterates every auto-inject platform whose
+  config file exists on disk and reports per-platform whether the managed
+  block is present and points at the right install directory.
+- **New CI smoke tests** for the platform loop: detection, auto-inject,
+  manual, opt-out, idempotency, and the multi-platform doctor. Runs on
+  both `ubuntu-latest` and `macos-latest`.
+
+### Added (prior Unreleased work)
+
 - **Three-tier memory flow documented** in `HIVE_ARCHITECTURE.md`:
   raw external capture (Tier 1) → agent synthesis (Tier 2) → curator
   distilled truth (Tier 3). Clarifies how external context enters the

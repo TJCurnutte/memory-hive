@@ -138,3 +138,143 @@ jobs:
           # doctor should exit 0 (CLAUDE.md absent in CI => skipped, not warning).
           sh "$INSTALL_DIR/memory-hive" doctor
           echo "CLI smoke OK"
+
+      - name: Platform integration smoke — auto-inject
+        shell: bash
+        run: |
+          set -eu
+          # Fake a clean HOME so we don't touch the runner's real dotfiles.
+          FAKE_HOME="$(mktemp -d)"
+          INSTALL_DIR="$(mktemp -d)"
+          export HOME="$FAKE_HOME"
+          export MEMORY_HIVE_DIR="$INSTALL_DIR"
+          export MEMORY_HIVE_REPO="$(pwd)"
+
+          # Seed every auto-inject platform's marker dir. Order matches
+          # the platform table in install.sh.
+          for dir in \
+              .claude .openclaw \
+              .config/nanoclaw .hermes \
+              .cursor .continue .gemini \
+              .config/goose .aws/amazonq .openhands \
+              .roo .kilocode .codeium/windsurf \
+              .warp .config/amp .codex .config/opencode; do
+              mkdir -p "$FAKE_HOME/$dir"
+          done
+          # And a couple of manual-only markers so we can see them reported.
+          mkdir -p "$FAKE_HOME/.cline" "$FAKE_HOME/.config/zed"
+
+          sh install.sh < /dev/null > /tmp/mh-plat.log 2>&1
+
+          # Assert: every auto-inject target file was written with the markers.
+          fail=0
+          for rel in \
+              .claude/CLAUDE.md \
+              .openclaw/CLAUDE.md \
+              .config/nanoclaw/AGENTS.md \
+              .hermes/memories/MEMORY.md \
+              .cursor/rules/memory-hive.mdc \
+              .continue/rules/memory-hive.md \
+              .gemini/GEMINI.md \
+              .goosehints \
+              .aws/amazonq/rules/memory-hive.md \
+              .openhands/microagents/memory-hive.md \
+              .roo/rules/memory-hive.md \
+              .kilocode/rules/memory-hive.md \
+              .codeium/windsurf/memories/global_rules.md \
+              .agents/AGENTS.md \
+              .config/amp/AGENTS.md \
+              .codex/AGENTS.md \
+              .config/opencode/AGENTS.md; do
+              if [ ! -f "$FAKE_HOME/$rel" ]; then
+                  echo "MISSING: $rel" >&2
+                  fail=1
+              elif ! grep -q "memory-hive:start" "$FAKE_HOME/$rel"; then
+                  echo "NO MARKERS: $rel" >&2
+                  fail=1
+              elif ! grep -q "$INSTALL_DIR" "$FAKE_HOME/$rel"; then
+                  echo "WRONG INSTALL_DIR: $rel" >&2
+                  fail=1
+              fi
+          done
+
+          # Manual platforms should appear in the banner without writing files.
+          grep -q "\[manual\] Cline" /tmp/mh-plat.log || { echo "Cline not reported as manual"; fail=1; }
+          grep -q "\[manual\] Zed"   /tmp/mh-plat.log || { echo "Zed not reported as manual";   fail=1; }
+          test ! -f "$FAKE_HOME/.cline/memory-hive.md" || { echo "Cline wrote a file (shouldn't)"; fail=1; }
+
+          [ "$fail" -eq 0 ] || exit 1
+          echo "Platform integration smoke OK"
+
+      - name: Platform integration smoke — opt-out
+        shell: bash
+        run: |
+          set -eu
+          FAKE_HOME="$(mktemp -d)"
+          INSTALL_DIR="$(mktemp -d)"
+          export HOME="$FAKE_HOME"
+          export MEMORY_HIVE_DIR="$INSTALL_DIR"
+          export MEMORY_HIVE_REPO="$(pwd)"
+
+          mkdir -p "$FAKE_HOME/.cursor" "$FAKE_HOME/.gemini"
+          # Opt out of Cursor; Gemini should still be wired.
+          export MEMORY_HIVE_SKIP_CURSOR=1
+          sh install.sh < /dev/null > /tmp/mh-optout.log 2>&1
+
+          test ! -f "$FAKE_HOME/.cursor/rules/memory-hive.mdc" || \
+              { echo "Cursor was wired despite skip env var"; exit 1; }
+          test -f "$FAKE_HOME/.gemini/GEMINI.md" || \
+              { echo "Gemini CLI was NOT wired"; exit 1; }
+          grep -q "\[skip \] Cursor" /tmp/mh-optout.log || \
+              { echo "Cursor skip not reported"; exit 1; }
+          echo "Opt-out smoke OK"
+
+      - name: Platform integration smoke — idempotent
+        shell: bash
+        run: |
+          set -eu
+          FAKE_HOME="$(mktemp -d)"
+          INSTALL_DIR="$(mktemp -d)"
+          export HOME="$FAKE_HOME"
+          export MEMORY_HIVE_DIR="$INSTALL_DIR"
+          export MEMORY_HIVE_REPO="$(pwd)"
+
+          mkdir -p "$FAKE_HOME/.cursor"
+          sh install.sh < /dev/null > /dev/null 2>&1
+          checksum_1=$(cksum "$FAKE_HOME/.cursor/rules/memory-hive.mdc" | awk '{print $1}')
+
+          sh install.sh < /dev/null > /dev/null 2>&1
+          checksum_2=$(cksum "$FAKE_HOME/.cursor/rules/memory-hive.mdc" | awk '{print $1}')
+
+          [ "$checksum_1" = "$checksum_2" ] || \
+              { echo "Re-install changed the managed block (not idempotent)"; exit 1; }
+          echo "Idempotency smoke OK"
+
+      - name: Doctor smoke — multi-platform health check
+        shell: bash
+        run: |
+          set -eu
+          FAKE_HOME="$(mktemp -d)"
+          INSTALL_DIR="$(mktemp -d)"
+          export HOME="$FAKE_HOME"
+          export MEMORY_HIVE_DIR="$INSTALL_DIR"
+          export MEMORY_HIVE_REPO="$(pwd)"
+
+          mkdir -p "$FAKE_HOME/.claude" "$FAKE_HOME/.cursor"
+          sh install.sh < /dev/null > /dev/null 2>&1
+
+          # Happy path: doctor clean.
+          sh "$INSTALL_DIR/memory-hive" doctor > /tmp/mh-doc.log 2>&1
+          grep -q "Claude Code block points at this install" /tmp/mh-doc.log
+          grep -q "Cursor block points at this install" /tmp/mh-doc.log
+
+          # Corrupt Cursor's block to point at a wrong install; doctor should warn.
+          sed -i.bak "s|$INSTALL_DIR|/wrong/path|g" "$FAKE_HOME/.cursor/rules/memory-hive.mdc"
+          set +e
+          sh "$INSTALL_DIR/memory-hive" doctor > /tmp/mh-doc2.log 2>&1
+          rc=$?
+          set -e
+          [ "$rc" -eq 1 ] || { echo "Doctor should exit 1 after corruption, got $rc"; exit 1; }
+          grep -q "Cursor block does not reference" /tmp/mh-doc2.log || \
+              { echo "Doctor did not flag Cursor drift"; exit 1; }
+          echo "Doctor multi-platform smoke OK"

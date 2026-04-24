@@ -3,6 +3,47 @@
 How Memory Hive wires itself into your existing agent environment after
 `curl -fsSL memoryhive.neural-forge.io/install.sh | sh`.
 
+## Supported platforms
+
+The installer auto-detects every major agent platform that exposes a
+stable plain-text config file, writes a managed block, and exits. Platforms
+where the only configuration lives inside a structured YAML/JSON file
+(where in-place splicing is unsafe) get printed manual instructions
+instead. Every auto-inject wiring uses the same `<!-- memory-hive:start -->` /
+`<!-- memory-hive:end -->` markers, so re-runs are idempotent and user
+content outside the markers is never touched.
+
+| Platform | Detection | Integration | Config target |
+|---|---|---|---|
+| Claude Code | `~/.claude/` | auto-inject | `~/.claude/CLAUDE.md` |
+| OpenClaw | `~/.openclaw/` | auto-inject | `~/.openclaw/CLAUDE.md` |
+| NanoClaw | `~/.config/nanoclaw/` | auto-inject | `~/.config/nanoclaw/AGENTS.md` |
+| Hermes Agent | `~/.hermes/` | auto-inject | `~/.hermes/memories/MEMORY.md` |
+| Cursor | `~/.cursor/` | auto-inject | `~/.cursor/rules/memory-hive.mdc` |
+| Continue.dev | `~/.continue/` | auto-inject | `~/.continue/rules/memory-hive.md` |
+| Aider | `~/.aider.conf.yml` or `aider` on PATH | manual | `~/.aider.conf.yml` (structured YAML) |
+| Gemini CLI | `~/.gemini/` | auto-inject | `~/.gemini/GEMINI.md` |
+| Goose (Block) | `~/.config/goose/` or `~/.goose/` | auto-inject | `~/.goosehints` |
+| Open Interpreter | `~/.config/open-interpreter/` or `interpreter` on PATH | manual | profile YAML |
+| Amazon Q Developer CLI | `~/.aws/amazonq/` | auto-inject | `~/.aws/amazonq/rules/memory-hive.md` |
+| OpenHands | `~/.openhands/` | auto-inject | `~/.openhands/microagents/memory-hive.md` |
+| Cline (VS Code) | `~/.cline/` | manual | VS Code settings UI |
+| Roo Code | `~/.roo/` | auto-inject | `~/.roo/rules/memory-hive.md` |
+| Kilo Code | `~/.kilocode/` | auto-inject | `~/.kilocode/rules/memory-hive.md` |
+| Windsurf (Codeium) | `~/.codeium/windsurf/` | auto-inject | `~/.codeium/windsurf/memories/global_rules.md` |
+| Zed | `~/.config/zed/` | manual | `~/.config/zed/settings.json` |
+| Warp | `~/.warp/` | auto-inject | `~/.agents/AGENTS.md` |
+| Sourcegraph Amp | `~/.config/amp/` or `amp` on PATH | auto-inject | `~/.config/amp/AGENTS.md` |
+| OpenAI Codex CLI | `~/.codex/` | auto-inject | `~/.codex/AGENTS.md` |
+| OpenCode | `~/.config/opencode/` | auto-inject | `~/.config/opencode/AGENTS.md` |
+| Crush (Charm) | `~/.local/share/crush/` | manual | project-level `AGENTS.md` |
+| GitHub Copilot (repo) | `MEMORY_HIVE_COPILOT_REPO=1` + `$PWD/.git/` | auto-inject (opt-in) | `$PWD/.github/copilot-instructions.md` |
+
+Every platform has a dedicated doc under
+[`templates/platforms/<id>.md`](templates/platforms/) with the exact
+integration details, and the installer ships all of them into
+`~/.memory-hive/templates/platforms/` so you can read them post-install.
+
 ## What the installer does
 
 The installer drops the hive at `~/.memory-hive/` (override with
@@ -130,9 +171,33 @@ silos you keep.
 
 | Variable | Purpose |
 |---|---|
-| `MEMORY_HIVE_DIR` | Install location (default: `$HOME/.memory-hive`) |
+| `MEMORY_HIVE_DIR` | Install location (default: `$HOME/.memory-hive`). |
 | `MEMORY_HIVE_REPO` | Install from a local working copy instead of cloning GitHub. Points at a directory with a `hive/` subdir. |
-| `MEMORY_HIVE_SKIP_CLAUDE_MD` | Set to `1` to skip the managed block in `~/.claude/CLAUDE.md`. |
+| `MEMORY_HIVE_MERGE_CWD` | Set to `1` to also merge the managed block into `$PWD/CLAUDE.md`. |
+| `MEMORY_HIVE_COPILOT_REPO` | Set to `1` to opt into writing `.github/copilot-instructions.md` in the current repo. |
+| `MEMORY_HIVE_SKIP_CLAUDE_CODE` | Opt out of the Claude Code wiring. Legacy `MEMORY_HIVE_SKIP_CLAUDE_MD=1` is still honored as an alias. |
+| `MEMORY_HIVE_SKIP_OPENCLAW` | Opt out of OpenClaw wiring. |
+| `MEMORY_HIVE_SKIP_NANOCLAW` | Opt out of NanoClaw wiring. |
+| `MEMORY_HIVE_SKIP_HERMES` | Opt out of Hermes Agent wiring. |
+| `MEMORY_HIVE_SKIP_CURSOR` | Opt out of Cursor wiring. |
+| `MEMORY_HIVE_SKIP_CONTINUE` | Opt out of Continue.dev wiring. |
+| `MEMORY_HIVE_SKIP_AIDER` | Suppress the Aider manual-setup note. |
+| `MEMORY_HIVE_SKIP_GEMINI_CLI` | Opt out of Gemini CLI wiring. |
+| `MEMORY_HIVE_SKIP_GOOSE` | Opt out of Goose (Block) wiring. |
+| `MEMORY_HIVE_SKIP_OPEN_INTERPRETER` | Suppress the Open Interpreter manual-setup note. |
+| `MEMORY_HIVE_SKIP_AMAZON_Q` | Opt out of Amazon Q Developer CLI wiring. |
+| `MEMORY_HIVE_SKIP_OPENHANDS` | Opt out of OpenHands wiring. |
+| `MEMORY_HIVE_SKIP_CLINE` | Suppress the Cline manual-setup note. |
+| `MEMORY_HIVE_SKIP_ROO_CODE` | Opt out of Roo Code wiring. |
+| `MEMORY_HIVE_SKIP_KILO_CODE` | Opt out of Kilo Code wiring. |
+| `MEMORY_HIVE_SKIP_WINDSURF` | Opt out of Windsurf (Codeium) wiring. |
+| `MEMORY_HIVE_SKIP_ZED` | Suppress the Zed manual-setup note. |
+| `MEMORY_HIVE_SKIP_WARP` | Opt out of Warp wiring. |
+| `MEMORY_HIVE_SKIP_AMP` | Opt out of Sourcegraph Amp wiring. |
+| `MEMORY_HIVE_SKIP_CODEX` | Opt out of OpenAI Codex CLI wiring. |
+| `MEMORY_HIVE_SKIP_OPENCODE` | Opt out of OpenCode wiring. |
+| `MEMORY_HIVE_SKIP_CRUSH` | Suppress the Crush manual-setup note. |
+| `MEMORY_HIVE_SKIP_GITHUB_COPILOT` | Suppress GitHub Copilot even if `MEMORY_HIVE_COPILOT_REPO=1`. |
 
 ## Uninstalling
 
