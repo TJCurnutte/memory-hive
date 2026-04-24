@@ -29,7 +29,7 @@ Append-only journal. Newest entries at the top.
 
 ## 2026-04-01
 
-- Reviewed `research-analyst`'s cost-optimization report before they
+- Reviewed `researcher`'s cost-optimization report before they
   submitted to the curator. Suggested sharper framing for the
   "token-budget vs. quality" tradeoff. They took two of three edits.
 

@@ -46,5 +46,5 @@ relevant.
 
 - `reviewer` flags my style nits before submitting PRs. I return the
   favor on their refactors.
-- Don't cross into `security-auditor`'s lane — flag vulnerabilities
+- Don't cross into `reviewer`'s lane — flag vulnerabilities
   and hand off, don't try to fix auth-model issues unilaterally.
