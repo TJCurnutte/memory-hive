@@ -521,11 +521,145 @@ Usage:
       their names, and roles. Also offers to import agents from
       ~/.claude/agents/ and ~/.openclaw/hive/agents/ if either exists.
 
+  memory-hive apply
+      Find running agent processes and print the exact commands to
+      restart them so the managed block takes effect. Non-destructive
+      by default (prints advice, doesn't kill anything). Add --force
+      to SIGTERM detected CLI agents.
+
   memory-hive help
       Show this message.
 
 Install root: $INSTALL_DIR
 EOF
+}
+
+# mh_apply — detect running agent processes and tell the user how to
+# restart them so the installer's managed block takes effect. Pure
+# diagnostic by default; --force sends SIGTERM to CLI agents (not
+# desktop apps — a shell installer has no business killing those).
+mh_apply() {
+    _force=0
+    _yes=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -f|--force) _force=1 ;;
+            -y|--yes)   _yes=1 ;;
+            -h|--help)
+                printf 'Usage: memory-hive apply [--force] [--yes]\n'
+                printf '  Without --force: prints what to restart.\n'
+                printf '  With --force:    SIGTERMs detected CLI agents (asks first unless --yes).\n'
+                return 0
+                ;;
+            *) printf 'Unknown flag: %s\n' "$1" >&2; return 2 ;;
+        esac
+        shift
+    done
+
+    # Process name patterns we understand. Exact-match on basename so
+    # we don't sweep up unrelated binaries. Keep this list conservative
+    # — it's safer to miss a niche agent than to kill an unrelated
+    # process that happens to match.
+    _patterns='aider goose claude codex opencode crush'
+
+    _found=""
+    for _pat in $_patterns; do
+        # pgrep -x = exact command-name match. Portable across macOS
+        # and Linux; fails silently if pgrep isn't on PATH.
+        _pids="$(pgrep -x "$_pat" 2>/dev/null || true)"
+        [ -n "$_pids" ] || continue
+        for _pid in $_pids; do
+            # Skip our own shell + any parent in the tree.
+            [ "$_pid" = "$$" ] && continue
+            if [ -z "$_found" ]; then
+                _found="$_pat:$_pid"
+            else
+                _found="$_found $_pat:$_pid"
+            fi
+        done
+    done
+
+    # Also note desktop apps — we won't touch them, but users need to
+    # know a restart is required. Detection is best-effort: pgrep -f
+    # against well-known app bundle names (macOS-ish). Doesn't populate
+    # on Linux if the app binary has a different name; that's fine.
+    _desktop=""
+    for _app in "Claude" "Cursor" "Windsurf" "Zed" "Warp"; do
+        if pgrep -x "$_app" >/dev/null 2>&1; then
+            if [ -z "$_desktop" ]; then _desktop="$_app"; else _desktop="$_desktop $_app"; fi
+        fi
+    done
+
+    if [ -z "$_found" ] && [ -z "$_desktop" ]; then
+        printf 'No running agent processes detected. Nothing to apply.\n'
+        printf 'Changes take effect the next time you start an agent.\n'
+        return 0
+    fi
+
+    printf 'Agents detected:\n'
+    if [ -n "$_found" ]; then
+        for _entry in $_found; do
+            _name="${_entry%%:*}"
+            _pid="${_entry##*:}"
+            printf '  CLI     %-10s pid=%s\n' "$_name" "$_pid"
+        done
+    fi
+    if [ -n "$_desktop" ]; then
+        for _app in $_desktop; do
+            printf '  Desktop %-10s (quit + reopen to apply)\n' "$_app"
+        done
+    fi
+
+    if [ "$_force" -ne 1 ]; then
+        printf '\nTo restart the CLI agents, run:\n'
+        if [ -n "$_found" ]; then
+            for _entry in $_found; do
+                _name="${_entry%%:*}"
+                _pid="${_entry##*:}"
+                printf '  kill %s  # %s — then re-run `%s` in your terminal\n' "$_pid" "$_name" "$_name"
+            done
+        fi
+        if [ -n "$_desktop" ]; then
+            printf '\nDesktop apps need a manual quit + reopen:\n'
+            for _app in $_desktop; do
+                printf '  - Quit and reopen %s\n' "$_app"
+            done
+        fi
+        printf '\nRe-run with `memory-hive apply --force` to send SIGTERM to the CLI agents.\n'
+        return 0
+    fi
+
+    # --force path: confirm unless --yes
+    if [ "$_yes" -ne 1 ]; then
+        printf '\n--force will SIGTERM every CLI agent listed above. Desktop apps are\n'
+        printf 'never touched. Proceed? [y/N]: '
+        _ans=""
+        IFS= read -r _ans || return 1
+        case "$_ans" in
+            y|Y|yes|YES|Yes) ;;
+            *) printf 'Aborted.\n'; return 0 ;;
+        esac
+    fi
+
+    _killed=0
+    _failed=0
+    for _entry in $_found; do
+        _name="${_entry%%:*}"
+        _pid="${_entry##*:}"
+        if kill "$_pid" 2>/dev/null; then
+            printf '  SIGTERM %s (%s)\n' "$_pid" "$_name"
+            _killed=$((_killed + 1))
+        else
+            printf '  FAILED  %s (%s) — permission or process gone\n' "$_pid" "$_name" >&2
+            _failed=$((_failed + 1))
+        fi
+    done
+
+    printf '\nDone. %d terminated, %d failed.\n' "$_killed" "$_failed"
+    if [ -n "$_desktop" ]; then
+        printf 'Desktop apps still need a manual quit + reopen: %s\n' "$_desktop"
+    fi
+    return 0
 }
 
 mh_setup() {
@@ -733,6 +867,7 @@ case "$_verb" in
     register) _mh_require_install; mh_register ;;
     doctor)   mh_doctor "$@" ;;
     setup)    mh_setup ;;
+    apply)    _mh_require_install; mh_apply "$@" ;;
     help|-h|--help) mh_help ;;
     *)
         printf 'Unknown command: %s\n\n' "$_verb" >&2

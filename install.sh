@@ -1480,7 +1480,10 @@ printf '  Shared hive:  %s/\n' "$_hive_display"
 printf '\n'
 
 if [ -n "$PLATFORM_WIRED" ]; then
-    printf 'Your agents will pick up the hive on next boot — no restart required.\n'
+    printf '%s→ Changes take effect on next agent boot.%s\n' "$BOLD" "$RESET"
+    printf '  Restart your agent(s) to apply immediately, or run:\n'
+    printf '    sh %s/memory-hive apply\n' "$_install_display"
+    printf '\n'
     printf 'Read the docs: %shttps://github.com/TJCurnutte/memory-hive%s\n' "$CYAN" "$RESET"
     printf '  Check compliance: sh %s/check-compliance.sh\n' "$_install_display"
 elif [ -n "$PLATFORM_MANUAL" ]; then
