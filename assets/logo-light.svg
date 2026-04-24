@@ -1,0 +1,33 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 200" fill="none">
+  <title>Memory Hive</title>
+  <!--
+    Memory Hive brand mark — light-theme variant.
+    Rendered on transparent background. Same geometry as the dark
+    variant; colors shifted for contrast against a cream / white
+    background: "Memory" in stone-900, honeycomb + "Hive" in amber-700.
+  -->
+
+  <!-- Honeycomb cluster (scaled 3x from the nav's 42x38 viewBox) -->
+  <g transform="translate(30 44) scale(3)" stroke="#b45309" stroke-width="1.6" stroke-linejoin="round">
+    <polygon points="21,2 30,7.2 30,17.6 21,22.8 12,17.6 12,7.2" fill="#b45309" fill-opacity="0.16" />
+    <polygon points="11,17 20,22.2 20,32.6 11,37.8 2,32.6 2,22.2" />
+    <polygon points="31,17 40,22.2 40,32.6 31,37.8 22,32.6 22,22.2" fill="#b45309" fill-opacity="0.9" />
+  </g>
+
+  <!-- "Memory" — italic serif, stone-900 -->
+  <text x="198" y="140"
+        font-family="'Instrument Serif', 'EB Garamond', Georgia, 'Times New Roman', serif"
+        font-style="italic"
+        font-weight="400"
+        font-size="110"
+        letter-spacing="-1"
+        fill="#1c1917">Memory</text>
+
+  <!-- "Hive" — bold sans, amber-700 -->
+  <text x="545" y="140"
+        font-family="'Inter', system-ui, -apple-system, 'Helvetica Neue', sans-serif"
+        font-weight="700"
+        font-size="110"
+        letter-spacing="-2"
+        fill="#b45309">Hive</text>
+</svg>
