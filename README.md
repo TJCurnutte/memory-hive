@@ -1,18 +1,27 @@
-# Memory Hive
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.png">
+    <img alt="Memory Hive" src="assets/logo-light.png" width="420">
+  </picture>
+</p>
 
-**A shared, continuously learning memory system for multi-agent AI.**
+<p align="center">
+  <em>A shared, continuously learning memory system for multi-agent AI.</em>
+</p>
 
-- Live: https://memoryhive.neural-forge.io
-- Source: https://github.com/TJCurnutte/memory-hive
+<p align="center">
+  <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-F59E0B.svg"></a>
+  <a href="https://github.com/TJCurnutte/memory-hive/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/TJCurnutte/memory-hive/ci.yml?branch=main&label=CI&color=F59E0B"></a>
+  <a href="INTEGRATION.md"><img alt="Platforms: 23" src="https://img.shields.io/badge/platforms-23-F59E0B"></a>
+  <img alt="Shell: POSIX" src="https://img.shields.io/badge/shell-POSIX-lightgrey">
+  <a href="https://memoryhive.neural-forge.io"><img alt="Site: memoryhive.neural-forge.io" src="https://img.shields.io/badge/site-memoryhive.neural--forge.io-14B8A6"></a>
+</p>
 
-Memory Hive gives every agent two memory layers:
-
-- **Private silo** — personal continuity for each agent
-- **Shared hive** — collective intelligence that compounds
-
-Every agent reads from the hive on boot. Every agent writes learnings
-after tasks. A curator synthesizes contributions. The system gets smarter
-with every task.
+<p align="center">
+  Multi-agent AI has an amnesia problem. Memory Hive gives every agent a
+  private silo and a shared hive so every task compounds instead of
+  starting from scratch.
+</p>
 
 ---
 
@@ -22,10 +31,10 @@ with every task.
 curl -fsSL memoryhive.neural-forge.io/install.sh | sh
 ```
 
-Works with Claude Code, OpenClaw, NanoClaw, Hermes, Cursor, Continue,
+Works with **Claude Code, OpenClaw, NanoClaw, Hermes, Cursor, Continue,
 Aider, Gemini CLI, Goose, Open Interpreter, Amazon Q, OpenHands, Cline,
 Roo Code, Kilo Code, Windsurf, Zed, Warp, Sourcegraph Amp, OpenAI Codex,
-OpenCode, Crush, and GitHub Copilot — auto-detected and wired in one
+OpenCode, Crush, and GitHub Copilot** — auto-detected and wired in one
 step. See [INTEGRATION.md](INTEGRATION.md) for the full platform table
 and opt-out env vars.
 
@@ -48,8 +57,8 @@ The wizard asks how many agents you want, their names, and role
 templates. If it finds agents in `~/.claude/agents/` or
 `~/.openclaw/hive/agents/`, it offers to import them.
 
-You can add, rename, archive, and edit agents at any time with the
-`memory-hive` CLI:
+Add, rename, archive, and edit agents at any time with the `memory-hive`
+CLI:
 
 ```bash
 sh ~/.memory-hive/memory-hive add backend-eng --role coder
@@ -76,8 +85,8 @@ A narrative walkthrough of what a fresh install actually feels like:
 3. **Your Claude Code agents load the hive on boot.** The managed
    block tells every agent to read `~/.memory-hive/hive/index.md` and
    its own silo before responding.
-4. **List your roster.** `memory-hive list` shows the three silos and
-   the one-line role description each was seeded with.
+4. **List your roster.** `memory-hive list` shows the silos and the
+   one-line role description each was seeded with.
 5. **Tighten a role description.** `memory-hive role coder` opens
    `hive/agents/coder/context.md` in `$EDITOR`. Rewrite the role to
    match how you actually work. Save.
@@ -195,8 +204,6 @@ Task completes
 Hive is smarter than before
 ```
 
----
-
 For the full directory layout, curation loop, confidence gates, and
 conflict-resolution rules, see [HIVE_ARCHITECTURE.md](HIVE_ARCHITECTURE.md).
 
@@ -312,17 +319,14 @@ their specialties.
 
 ---
 
-## Who Built This
+## Links
 
-[Travis Curnutte](https://github.com/TJCurnutte) open-sourced this after
-running it inside his own multi-agent setup. The repo is meant to work
-for anyone's roster, not any one person's — pick the agents that match
-how you work.
-
-## License
-
-MIT — use it, build on it, make it better.
+- **Live site:** <https://memoryhive.neural-forge.io>
+- **Repo:** <https://github.com/TJCurnutte/memory-hive>
+- **License:** [MIT](LICENSE) — use it, build on it, make it better.
 
 ---
 
-**The hive learns. Every task. Every agent. Every time.**
+<p align="center">
+  <strong>The hive learns. Every task. Every agent. Every time.</strong>
+</p>
