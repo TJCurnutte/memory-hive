@@ -442,29 +442,20 @@ _mh_platform_detected() {
     _mh_platform_field "$_id" marker
 }
 
-# Legacy compatibility: the old install.sh exposed a handful of
-# DETECTED_* vars. Keep Claude Code + OpenClaw detection state for the
-# downstream silo-import flow, which still uses it.
-DETECTED_CLAUDE_CODE=0
+# Detection state used outside the platform-table loop. The platform
+# table handles per-platform config-file wiring; these vars support
+# orthogonal flows: sub-agent auto-silo creation and the optional
+# MEMORY_HIVE_MERGE_CWD behavior.
 DETECTED_CLAUDE_AGENTS=""  # space-separated list of ~/.claude/agents/* subdir names
-DETECTED_OPENCLAW=0
 DETECTED_CWD_CLAUDE_MD=0
 
-CLAUDE_HOME="$HOME/.claude"
-CLAUDE_AGENTS_DIR="$CLAUDE_HOME/agents"
-OPENCLAW_HOME="$HOME/.openclaw"
+CLAUDE_AGENTS_DIR="$HOME/.claude/agents"
 CWD_CLAUDE_MD="$PWD/CLAUDE.md"
 
 info "Detecting agent environment"
 
-# Claude Code sub-agent enumeration still lives outside the platform table —
-# it's only used for auto-silo creation, not for config-file wiring.
-if [ -d "$CLAUDE_HOME" ]; then
-    DETECTED_CLAUDE_CODE=1
-fi
-if [ -d "$OPENCLAW_HOME" ]; then
-    DETECTED_OPENCLAW=1
-fi
+# Claude Code sub-agent enumeration — only used for auto-silo creation,
+# not for config-file wiring (that's handled by the platform table).
 if [ -d "$CLAUDE_AGENTS_DIR" ]; then
     for _agent_path in "$CLAUDE_AGENTS_DIR"/*; do
         [ -d "$_agent_path" ] || continue
