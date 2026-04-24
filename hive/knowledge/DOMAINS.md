@@ -1,53 +1,39 @@
 # Domain Expertise
 
-Areas of knowledge the system operates in.
+Areas of knowledge the agents in this hive operate in.
 
-## Telecom / Voice Infrastructure
+This file ships empty by design. As your agents accumulate real work,
+the curator promotes recurring domains here so every agent reads them
+on boot.
 
-- SIP trunking
-- Microsoft Teams Direct Routing
-- UCaaS (Unified Communications as a Service)
-- SMS and E911
-- Carrier-grade voice
-- 99.99% uptime SLAs
-- Fortinet / FortiVoice partnerships
-- Key players: Volli Communications, InteliSys, Sinch, Lumen, AudioCodes
+## Format
 
-## CX / CCaaS
+One heading per domain. Under each, a short bullet list of the
+sub-topics, tools, or concepts the team works with. Keep bullets
+specific enough to anchor an agent — generic labels don't help
+continuity across sessions.
 
-- Contact Center as a Service platforms
-- AWS Connect
-- Genesys
-- Five9
-- Twilio Flex
-- Customer experience technology
-- Channel partner models
+## Example shape (replace with your own)
 
-## Software Development
+```markdown
+## <Domain name>
 
-- Architecture and system design
-- Frontend (React, Next.js, etc.)
-- Backend APIs
-- Debugging and refactoring
-- Deployment and DevOps
-- Security auditing
+- Sub-topic / tool / concept
+- Sub-topic
+- Key players or references (if relevant)
 
-## Marketing & Brand
+## <Another domain>
 
-- Content strategy
-- Social media (LinkedIn, Twitter/X, Instagram)
-- Brand growth
-- Thought leadership positioning
-- Email sequences
+- ...
+```
 
-## Sales
+## Curation
 
-- Outbound prospecting
-- Lead qualification
-- Appointment setting
-- Pipeline management
-- Follow-up campaigns
+Only the curator writes to this file. Agents observe recurring
+subject matter during tasks, contribute to `learnings/raw/`, and the
+curator promotes into a domain heading here when a topic has earned
+its own section.
 
 ---
 
-**Last updated:** 2026-04-22
+**Last updated:** (yyyy-mm-dd)
