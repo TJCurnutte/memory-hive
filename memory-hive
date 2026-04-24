@@ -346,34 +346,77 @@ mh_doctor() {
         printf '  %s no non-main silos yet (add with `memory-hive add <name>`)\n' "$_D_OK"
     fi
 
-    # --- 4. CLAUDE.md managed block references $INSTALL_DIR ----------------
-    _claude_md="$HOME/.claude/CLAUDE.md"
+    # --- 4. Managed-block health for every supported platform --------------
+    # For each platform whose config file exists on this machine, verify
+    # the managed block is present and points at $INSTALL_DIR. Platforms
+    # with a `manual` strategy aren't checked here (the user wired them by
+    # hand; we can't verify what we don't own).
+    #
+    # Stdout-only pipeline: we want to both print status lines AND count
+    # warnings. POSIX pipelines run in subshells, so we accumulate findings
+    # in a temp file and read totals back after the loop.
     _start="<!-- memory-hive:start -->"
     _end="<!-- memory-hive:end -->"
-    if [ ! -f "$_claude_md" ]; then
-        # Not an error: the user may not use Claude Code at all.
-        printf '  %s ~/.claude/CLAUDE.md not found (skipping managed-block check)\n' "$_D_OK"
-    else
-        if grep -q -F "$_start" "$_claude_md" 2>/dev/null \
-            && grep -q -F "$_end" "$_claude_md" 2>/dev/null; then
+
+    # (id, display-name, relative-path) per auto-injected platform. Keep
+    # in sync with install.sh's platform table.
+    _plat_table="$INSTALL_DIR/.doctor-plats.$$"
+    cat > "$_plat_table" <<'PLATS'
+claude-code	Claude Code	.claude/CLAUDE.md
+openclaw	OpenClaw	.openclaw/CLAUDE.md
+nanoclaw	NanoClaw	.config/nanoclaw/AGENTS.md
+hermes	Hermes Agent	.hermes/memories/MEMORY.md
+cursor	Cursor	.cursor/rules/memory-hive.mdc
+continue	Continue.dev	.continue/rules/memory-hive.md
+gemini-cli	Gemini CLI	.gemini/GEMINI.md
+goose	Goose	.goosehints
+amazon-q	Amazon Q	.aws/amazonq/rules/memory-hive.md
+openhands	OpenHands	.openhands/microagents/memory-hive.md
+roo-code	Roo Code	.roo/rules/memory-hive.md
+kilo-code	Kilo Code	.kilocode/rules/memory-hive.md
+windsurf	Windsurf	.codeium/windsurf/memories/global_rules.md
+warp	Warp	.agents/AGENTS.md
+amp	Sourcegraph Amp	.config/amp/AGENTS.md
+codex	Codex CLI	.codex/AGENTS.md
+opencode	OpenCode	.config/opencode/AGENTS.md
+PLATS
+
+    _plat_seen=0
+    _plat_warnings=0
+    while IFS='	' read -r _pid _pname _prel; do
+        [ -n "$_pid" ] || continue
+        _target="$HOME/$_prel"
+        [ -f "$_target" ] || continue
+        _plat_seen=$((_plat_seen + 1))
+        if grep -q -F "$_start" "$_target" 2>/dev/null \
+            && grep -q -F "$_end" "$_target" 2>/dev/null; then
             _block="$(awk -v s="$_start" -v e="$_end" '
                 BEGIN { inb = 0 }
                 { if (index($0, s) > 0) { inb = 1; next } }
                 inb == 1 { if (index($0, e) > 0) { inb = 0; next }; print }
-            ' "$_claude_md")"
+            ' "$_target")"
             if printf '%s' "$_block" | grep -q -F "$INSTALL_DIR" 2>/dev/null; then
-                printf '  %s CLAUDE.md managed block points at this install\n' "$_D_OK"
+                printf '  %s %s block points at this install (~/%s)\n' \
+                    "$_D_OK" "$_pname" "$_prel"
             else
-                printf '  %s CLAUDE.md managed block does not reference %s\n' "$_D_WARN" "$INSTALL_DIR"
+                printf '  %s %s block does not reference %s\n' \
+                    "$_D_WARN" "$_pname" "$INSTALL_DIR"
                 printf '     run `sh %s/install.sh` to refresh.\n' "$INSTALL_DIR"
-                _warnings=$((_warnings + 1))
+                _plat_warnings=$((_plat_warnings + 1))
             fi
         else
-            printf '  %s CLAUDE.md exists but has no memory-hive managed block\n' "$_D_WARN"
+            printf '  %s %s config exists but has no memory-hive block (~/%s)\n' \
+                "$_D_WARN" "$_pname" "$_prel"
             printf '     run `sh %s/install.sh` to add it.\n' "$INSTALL_DIR"
-            _warnings=$((_warnings + 1))
+            _plat_warnings=$((_plat_warnings + 1))
         fi
+    done < "$_plat_table"
+    rm -f "$_plat_table"
+
+    if [ "$_plat_seen" -eq 0 ]; then
+        printf '  %s no agent-platform config files detected (skipping block check)\n' "$_D_OK"
     fi
+    _warnings=$((_warnings + _plat_warnings))
 
     # --- 5. registry AGENTS.md is in sync ----------------------------------
     _reg="$HIVE_DIR/registry/AGENTS.md"

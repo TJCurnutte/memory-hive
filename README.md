@@ -22,9 +22,17 @@ with every task.
 curl -fsSL memoryhive.neural-forge.io/install.sh | sh
 ```
 
+Works with Claude Code, OpenClaw, NanoClaw, Hermes, Cursor, Continue,
+Aider, Gemini CLI, Goose, Open Interpreter, Amazon Q, OpenHands, Cline,
+Roo Code, Kilo Code, Windsurf, Zed, Warp, Sourcegraph Amp, OpenAI Codex,
+OpenCode, Crush, and GitHub Copilot — auto-detected and wired in one
+step. See [INTEGRATION.md](INTEGRATION.md) for the full platform table
+and opt-out env vars.
+
 **Default is zero-input.** The installer scaffolds the reserved `main`
-curator silo, wires a managed block into `~/.claude/CLAUDE.md` if Claude
-Code is detected, and exits. No prompts, no questions.
+curator silo, writes a managed block into every detected agent
+platform's config file (`~/.claude/CLAUDE.md`, `~/.cursor/rules/`,
+`~/.gemini/GEMINI.md`, etc.), and exits. No prompts, no questions.
 
 Want the guided setup? Opt in:
 
@@ -252,10 +260,13 @@ them back out.
 
 ## Installation details
 
-The installer auto-detects Claude Code and OpenClaw. See
-[INTEGRATION.md](INTEGRATION.md) for what gets wired up, the managed
-`CLAUDE.md` block, and opt-out env vars (`MEMORY_HIVE_SKIP_CLAUDE_MD`,
-`MEMORY_HIVE_DIR`, `MEMORY_HIVE_REPO`).
+The installer auto-detects 20+ agent platforms (Claude Code, OpenClaw,
+Cursor, Continue, Gemini CLI, Goose, Amazon Q, OpenHands, Roo, Kilo,
+Windsurf, Warp, Sourcegraph Amp, OpenAI Codex, OpenCode, and more) and
+wires a managed block into each platform's config file. See
+[INTEGRATION.md](INTEGRATION.md) for the full platform table, the
+managed-block format, and every opt-out env var
+(`MEMORY_HIVE_SKIP_CURSOR`, `MEMORY_HIVE_SKIP_GOOSE`, etc.).
 
 ### Re-install / reconcile
 

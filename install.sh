@@ -220,42 +220,255 @@ else
 fi
 
 # =============================================================================
-# Phase A: Environment detection
+# Phase A: Platform registry + detection
 # =============================================================================
-# Detection must never abort the install -- wrap probes so a missing dir or
-# permission error just means "not detected".
+# One source of truth for which agent platforms we integrate with. Each row
+# has: id, human-readable name, shell predicate that detects whether it's
+# installed on this machine, target config file path, injection strategy,
+# and the skip env var. Add a new platform by extending `_mh_platform_ids`
+# and adding a case arm for each field getter.
+#
+# Injection strategies:
+#   auto-inject   — write the managed block directly (Claude Code style)
+#   manual        — detected only, print instructions pointing at
+#                   templates/platforms/<id>.md so the user wires it themselves
+#
+# An `append` strategy is reserved for future cases where we want to
+# append-without-markers; today every auto-inject target is markdown-safe
+# for the markers so we use the same codepath as Claude Code.
 
+# Space-separated list of platform ids, in the order we want to report.
+# Order is deliberate: Claude Code first (existing behavior), then CLAUDE.md
+# cousins, then the rest grouped loosely by ecosystem.
+_mh_platform_ids="claude-code openclaw nanoclaw hermes cursor continue aider gemini-cli goose open-interpreter amazon-q openhands cline roo-code kilo-code windsurf zed warp amp codex opencode crush github-copilot"
+
+# _mh_platform_field <id> <field>
+# Prints the field value to stdout. Fields:
+#   name       human-readable label
+#   marker     shell expression; returns 0 if detected
+#   target     absolute path the installer writes to (if auto-inject)
+#   strategy   one of: auto-inject, manual
+#   skip_env   name of the env var that opts this platform out
+_mh_platform_field() {
+    _id="$1"; _field="$2"
+    case "$_id:$_field" in
+        # ------- Claude Code (the original) -------
+        claude-code:name)      printf 'Claude Code' ;;
+        claude-code:marker)    [ -d "$HOME/.claude" ] ;;
+        claude-code:target)    printf '%s/.claude/CLAUDE.md' "$HOME" ;;
+        claude-code:strategy)  printf 'auto-inject' ;;
+        claude-code:skip_env)  printf 'MEMORY_HIVE_SKIP_CLAUDE_CODE' ;;
+
+        # ------- OpenClaw -------
+        openclaw:name)         printf 'OpenClaw' ;;
+        openclaw:marker)       [ -d "$HOME/.openclaw" ] ;;
+        openclaw:target)       printf '%s/.openclaw/CLAUDE.md' "$HOME" ;;
+        openclaw:strategy)     printf 'auto-inject' ;;
+        openclaw:skip_env)     printf 'MEMORY_HIVE_SKIP_OPENCLAW' ;;
+
+        # ------- NanoClaw -------
+        nanoclaw:name)         printf 'NanoClaw' ;;
+        nanoclaw:marker)       [ -d "$HOME/.config/nanoclaw" ] || [ -d "$HOME/.nanoclaw" ] ;;
+        nanoclaw:target)       printf '%s/.config/nanoclaw/AGENTS.md' "$HOME" ;;
+        nanoclaw:strategy)     printf 'auto-inject' ;;
+        nanoclaw:skip_env)     printf 'MEMORY_HIVE_SKIP_NANOCLAW' ;;
+
+        # ------- Hermes Agent -------
+        hermes:name)           printf 'Hermes Agent' ;;
+        hermes:marker)         [ -d "$HOME/.hermes" ] ;;
+        hermes:target)         printf '%s/.hermes/memories/MEMORY.md' "$HOME" ;;
+        hermes:strategy)       printf 'auto-inject' ;;
+        hermes:skip_env)       printf 'MEMORY_HIVE_SKIP_HERMES' ;;
+
+        # ------- Cursor -------
+        cursor:name)           printf 'Cursor' ;;
+        cursor:marker)         [ -d "$HOME/.cursor" ] ;;
+        cursor:target)         printf '%s/.cursor/rules/memory-hive.mdc' "$HOME" ;;
+        cursor:strategy)       printf 'auto-inject' ;;
+        cursor:skip_env)       printf 'MEMORY_HIVE_SKIP_CURSOR' ;;
+
+        # ------- Continue.dev -------
+        continue:name)         printf 'Continue.dev' ;;
+        continue:marker)       [ -d "$HOME/.continue" ] ;;
+        continue:target)       printf '%s/.continue/rules/memory-hive.md' "$HOME" ;;
+        continue:strategy)     printf 'auto-inject' ;;
+        continue:skip_env)     printf 'MEMORY_HIVE_SKIP_CONTINUE' ;;
+
+        # ------- Aider (manual — YAML config is structured) -------
+        aider:name)            printf 'Aider' ;;
+        aider:marker)          [ -f "$HOME/.aider.conf.yml" ] || command -v aider >/dev/null 2>&1 ;;
+        aider:target)          printf '%s/templates/platforms/aider-conventions.md' "$INSTALL_DIR" ;;
+        aider:strategy)        printf 'manual' ;;
+        aider:skip_env)        printf 'MEMORY_HIVE_SKIP_AIDER' ;;
+
+        # ------- Gemini CLI -------
+        gemini-cli:name)       printf 'Gemini CLI' ;;
+        gemini-cli:marker)     [ -d "$HOME/.gemini" ] ;;
+        gemini-cli:target)     printf '%s/.gemini/GEMINI.md' "$HOME" ;;
+        gemini-cli:strategy)   printf 'auto-inject' ;;
+        gemini-cli:skip_env)   printf 'MEMORY_HIVE_SKIP_GEMINI_CLI' ;;
+
+        # ------- Goose (Block) -------
+        goose:name)            printf 'Goose (Block)' ;;
+        goose:marker)          [ -d "$HOME/.config/goose" ] || [ -d "$HOME/.goose" ] ;;
+        goose:target)          printf '%s/.goosehints' "$HOME" ;;
+        goose:strategy)        printf 'auto-inject' ;;
+        goose:skip_env)        printf 'MEMORY_HIVE_SKIP_GOOSE' ;;
+
+        # ------- Open Interpreter (manual — profile YAML) -------
+        open-interpreter:name)     printf 'Open Interpreter' ;;
+        open-interpreter:marker)   [ -d "$HOME/.config/open-interpreter" ] || command -v interpreter >/dev/null 2>&1 ;;
+        open-interpreter:target)   printf 'manual' ;;
+        open-interpreter:strategy) printf 'manual' ;;
+        open-interpreter:skip_env) printf 'MEMORY_HIVE_SKIP_OPEN_INTERPRETER' ;;
+
+        # ------- Amazon Q Developer CLI -------
+        amazon-q:name)         printf 'Amazon Q Developer CLI' ;;
+        amazon-q:marker)       [ -d "$HOME/.aws/amazonq" ] ;;
+        amazon-q:target)       printf '%s/.aws/amazonq/rules/memory-hive.md' "$HOME" ;;
+        amazon-q:strategy)     printf 'auto-inject' ;;
+        amazon-q:skip_env)     printf 'MEMORY_HIVE_SKIP_AMAZON_Q' ;;
+
+        # ------- OpenHands -------
+        openhands:name)        printf 'OpenHands' ;;
+        openhands:marker)      [ -d "$HOME/.openhands" ] ;;
+        openhands:target)      printf '%s/.openhands/microagents/memory-hive.md' "$HOME" ;;
+        openhands:strategy)    printf 'auto-inject' ;;
+        openhands:skip_env)    printf 'MEMORY_HIVE_SKIP_OPENHANDS' ;;
+
+        # ------- Cline (manual — VS Code state DB) -------
+        cline:name)            printf 'Cline (VS Code)' ;;
+        cline:marker)          [ -d "$HOME/.cline" ] ;;
+        cline:target)          printf 'manual' ;;
+        cline:strategy)        printf 'manual' ;;
+        cline:skip_env)        printf 'MEMORY_HIVE_SKIP_CLINE' ;;
+
+        # ------- Roo Code -------
+        roo-code:name)         printf 'Roo Code' ;;
+        roo-code:marker)       [ -d "$HOME/.roo" ] ;;
+        roo-code:target)       printf '%s/.roo/rules/memory-hive.md' "$HOME" ;;
+        roo-code:strategy)     printf 'auto-inject' ;;
+        roo-code:skip_env)     printf 'MEMORY_HIVE_SKIP_ROO_CODE' ;;
+
+        # ------- Kilo Code -------
+        kilo-code:name)        printf 'Kilo Code' ;;
+        kilo-code:marker)      [ -d "$HOME/.kilocode" ] ;;
+        kilo-code:target)      printf '%s/.kilocode/rules/memory-hive.md' "$HOME" ;;
+        kilo-code:strategy)    printf 'auto-inject' ;;
+        kilo-code:skip_env)    printf 'MEMORY_HIVE_SKIP_KILO_CODE' ;;
+
+        # ------- Windsurf (Codeium) -------
+        windsurf:name)         printf 'Windsurf (Codeium)' ;;
+        windsurf:marker)       [ -d "$HOME/.codeium/windsurf" ] ;;
+        windsurf:target)       printf '%s/.codeium/windsurf/memories/global_rules.md' "$HOME" ;;
+        windsurf:strategy)     printf 'auto-inject' ;;
+        windsurf:skip_env)     printf 'MEMORY_HIVE_SKIP_WINDSURF' ;;
+
+        # ------- Zed (manual — settings.json is structured) -------
+        zed:name)              printf 'Zed' ;;
+        zed:marker)            [ -d "$HOME/.config/zed" ] ;;
+        zed:target)            printf 'manual' ;;
+        zed:strategy)          printf 'manual' ;;
+        zed:skip_env)          printf 'MEMORY_HIVE_SKIP_ZED' ;;
+
+        # ------- Warp -------
+        warp:name)             printf 'Warp' ;;
+        warp:marker)           [ -d "$HOME/.warp" ] ;;
+        warp:target)           printf '%s/.agents/AGENTS.md' "$HOME" ;;
+        warp:strategy)         printf 'auto-inject' ;;
+        warp:skip_env)         printf 'MEMORY_HIVE_SKIP_WARP' ;;
+
+        # ------- Sourcegraph Amp -------
+        amp:name)              printf 'Sourcegraph Amp' ;;
+        amp:marker)            [ -d "$HOME/.config/amp" ] || command -v amp >/dev/null 2>&1 ;;
+        amp:target)            printf '%s/.config/amp/AGENTS.md' "$HOME" ;;
+        amp:strategy)          printf 'auto-inject' ;;
+        amp:skip_env)          printf 'MEMORY_HIVE_SKIP_AMP' ;;
+
+        # ------- OpenAI Codex CLI -------
+        codex:name)            printf 'OpenAI Codex CLI' ;;
+        codex:marker)          [ -d "$HOME/.codex" ] ;;
+        codex:target)          printf '%s/.codex/AGENTS.md' "$HOME" ;;
+        codex:strategy)        printf 'auto-inject' ;;
+        codex:skip_env)        printf 'MEMORY_HIVE_SKIP_CODEX' ;;
+
+        # ------- OpenCode -------
+        opencode:name)         printf 'OpenCode' ;;
+        opencode:marker)       [ -d "$HOME/.config/opencode" ] ;;
+        opencode:target)       printf '%s/.config/opencode/AGENTS.md' "$HOME" ;;
+        opencode:strategy)     printf 'auto-inject' ;;
+        opencode:skip_env)     printf 'MEMORY_HIVE_SKIP_OPENCODE' ;;
+
+        # ------- Crush (Charm) -------
+        crush:name)            printf 'Crush (Charm)' ;;
+        crush:marker)          [ -d "$HOME/.local/share/crush" ] ;;
+        crush:target)          printf 'manual' ;;
+        crush:strategy)        printf 'manual' ;;
+        crush:skip_env)        printf 'MEMORY_HIVE_SKIP_CRUSH' ;;
+
+        # ------- GitHub Copilot (repo-level, opt-in) -------
+        github-copilot:name)   printf 'GitHub Copilot (repo)' ;;
+        github-copilot:marker) [ "${MEMORY_HIVE_COPILOT_REPO:-0}" = "1" ] && [ -d "$PWD/.git" ] ;;
+        github-copilot:target) printf '%s/.github/copilot-instructions.md' "$PWD" ;;
+        github-copilot:strategy) printf 'auto-inject' ;;
+        github-copilot:skip_env) printf 'MEMORY_HIVE_SKIP_GITHUB_COPILOT' ;;
+
+        *) return 1 ;;
+    esac
+    # Propagate the exit status of the matched arm. Critical for `marker`
+    # predicates: they're `[ -d ... ]` tests whose truthiness is the answer.
+    # printf-only arms exit 0 naturally, which is what we want too.
+    return $?
+}
+
+# _mh_platform_is_skipped <id>
+# Returns 0 if the platform's skip env var is set to 1, 1 otherwise.
+_mh_platform_is_skipped() {
+    _id="$1"
+    _env_name="$(_mh_platform_field "$_id" skip_env 2>/dev/null || printf '')"
+    [ -n "$_env_name" ] || return 1
+    eval "_val=\${$_env_name:-0}"
+    [ "$_val" = "1" ]
+}
+
+# _mh_platform_detected <id>
+# Calls the marker predicate, honoring the skip env var. Returns 0 if
+# detected AND not skipped.
+_mh_platform_detected() {
+    _id="$1"
+    if _mh_platform_is_skipped "$_id"; then
+        return 1
+    fi
+    _mh_platform_field "$_id" marker
+}
+
+# Legacy compatibility: the old install.sh exposed a handful of
+# DETECTED_* vars. Keep Claude Code + OpenClaw detection state for the
+# downstream silo-import flow, which still uses it.
 DETECTED_CLAUDE_CODE=0
-DETECTED_CLAUDE_MD=0
 DETECTED_CLAUDE_AGENTS=""  # space-separated list of ~/.claude/agents/* subdir names
 DETECTED_OPENCLAW=0
-DETECTED_OPENCLAW_DIR=""
 DETECTED_CWD_CLAUDE_MD=0
 
 CLAUDE_HOME="$HOME/.claude"
-CLAUDE_MD_PATH="$CLAUDE_HOME/CLAUDE.md"
 CLAUDE_AGENTS_DIR="$CLAUDE_HOME/agents"
 OPENCLAW_HOME="$HOME/.openclaw"
 CWD_CLAUDE_MD="$PWD/CLAUDE.md"
 
 info "Detecting agent environment"
 
+# Claude Code sub-agent enumeration still lives outside the platform table —
+# it's only used for auto-silo creation, not for config-file wiring.
 if [ -d "$CLAUDE_HOME" ]; then
     DETECTED_CLAUDE_CODE=1
-    ok "Found Claude Code config at $CLAUDE_HOME"
 fi
-
-if [ -f "$CLAUDE_MD_PATH" ]; then
-    DETECTED_CLAUDE_MD=1
+if [ -d "$OPENCLAW_HOME" ]; then
+    DETECTED_OPENCLAW=1
 fi
-
 if [ -d "$CLAUDE_AGENTS_DIR" ]; then
-    # Collect agent names whose path is a directory. Suppress errors from
-    # an empty glob.
     for _agent_path in "$CLAUDE_AGENTS_DIR"/*; do
         [ -d "$_agent_path" ] || continue
         _agent_name="$(basename "$_agent_path")"
-        # Skip dotfiles just in case a shell expanded them.
         case "$_agent_name" in
             .*) continue ;;
         esac
@@ -269,23 +482,12 @@ if [ -d "$CLAUDE_AGENTS_DIR" ]; then
         ok "Found Claude Code sub-agents: $DETECTED_CLAUDE_AGENTS"
     fi
 fi
-
-if [ -d "$OPENCLAW_HOME" ]; then
-    DETECTED_OPENCLAW=1
-    DETECTED_OPENCLAW_DIR="$OPENCLAW_HOME"
-    ok "Found OpenClaw config at $OPENCLAW_HOME"
-fi
-
 if [ -f "$CWD_CLAUDE_MD" ]; then
     DETECTED_CWD_CLAUDE_MD=1
 fi
 
-if [ "$DETECTED_CLAUDE_CODE" -eq 0 ] && [ "$DETECTED_OPENCLAW" -eq 0 ]; then
-    info "No known agent environment detected -- continuing with generic install"
-fi
-
 # =============================================================================
-# Phase B: Auto-merge into CLAUDE.md
+# Phase B: Render boot block + wire detected platforms
 # =============================================================================
 
 HIVE_BLOCK_START="<!-- memory-hive:start -->"
@@ -293,13 +495,13 @@ HIVE_BLOCK_END="<!-- memory-hive:end -->"
 
 # Build the block body in a temp file so we can splice it cleanly.
 # Source of truth is templates/claude-boot-block.md in the cloned repo;
-# substitute the ${HIVE_DIR} placeholder with the real install path.
+# substitute the ${HIVE_DIR} placeholder with the real install path. This
+# block is platform-agnostic — every auto-inject target gets the same text.
 HIVE_BLOCK_FILE="$TMP_DIR/hive-block.md"
 HIVE_BLOCK_TEMPLATE="$TMP_DIR/memory-hive/templates/claude-boot-block.md"
 if [ ! -f "$HIVE_BLOCK_TEMPLATE" ]; then
     die "Boot block template missing at $HIVE_BLOCK_TEMPLATE"
 fi
-# Use a sed delimiter unlikely to appear in a filesystem path.
 _hive_dir_escaped="$(printf '%s' "$HIVE_DIR" | sed 's/[&|]/\\&/g')"
 _install_dir_escaped="$(printf '%s' "$INSTALL_DIR" | sed 's/[&|]/\\&/g')"
 sed -e "s|\${HIVE_DIR}|$_hive_dir_escaped|g" \
@@ -307,7 +509,37 @@ sed -e "s|\${HIVE_DIR}|$_hive_dir_escaped|g" \
     "$HIVE_BLOCK_TEMPLATE" > "$HIVE_BLOCK_FILE" \
     || die "Failed to render boot block from $HIVE_BLOCK_TEMPLATE"
 
-# merge_hive_block <target-claude-md-path>
+# Also render the aider-conventions.md template with the same
+# substitutions, since it ships with unresolved ${HIVE_DIR} placeholders
+# (so the source file in the repo stays portable). This is a tools-level
+# file — keep it fresh on every install.
+_aider_src="$TMP_DIR/memory-hive/templates/platforms/aider-conventions.md"
+_aider_dst="$INSTALL_DIR/templates/platforms/aider-conventions.md"
+if [ -f "$_aider_src" ]; then
+    mkdir -p "$(dirname "$_aider_dst")" 2>/dev/null || true
+    sed -e "s|\${HIVE_DIR}|$_hive_dir_escaped|g" \
+        -e "s|\${INSTALL_DIR}|$_install_dir_escaped|g" \
+        "$_aider_src" > "$_aider_dst" 2>/dev/null || true
+fi
+
+# Also ship all platform docs to the install dir so users can read them
+# post-install without going back to the repo. Copy verbatim — no
+# substitutions needed (the docs describe the setup, they aren't loaded
+# by any agent).
+_plat_src_dir="$TMP_DIR/memory-hive/templates/platforms"
+_plat_dst_dir="$INSTALL_DIR/templates/platforms"
+if [ -d "$_plat_src_dir" ]; then
+    mkdir -p "$_plat_dst_dir" 2>/dev/null || true
+    for _pf in "$_plat_src_dir"/*.md; do
+        [ -f "$_pf" ] || continue
+        _pname="$(basename "$_pf")"
+        # Skip aider-conventions.md — already rendered above.
+        [ "$_pname" = "aider-conventions.md" ] && continue
+        cp "$_pf" "$_plat_dst_dir/$_pname" 2>/dev/null || true
+    done
+fi
+
+# merge_hive_block <target-markdown-path>
 # Idempotently inject (or replace) the managed block in the file. POSIX awk
 # handles the splice: if the markers are present we replace lines between
 # them; otherwise we append a fresh copy separated by a blank line. Write to
@@ -319,25 +551,19 @@ merge_hive_block() {
     mkdir -p "$_parent" 2>/dev/null || true
 
     if [ ! -f "$_target" ]; then
-        # Create from scratch with just the managed block.
         _tmp="$_target.memhive.$$"
         cp "$HIVE_BLOCK_FILE" "$_tmp" || return 1
         mv "$_tmp" "$_target" || { rm -f "$_tmp"; return 1; }
-        ok "Created $_target with Memory Hive block"
         return 0
     fi
 
     _tmp="$_target.memhive.$$"
-    # Does the file already contain the managed block?
     if grep -q -F "$HIVE_BLOCK_START" "$_target" 2>/dev/null \
         && grep -q -F "$HIVE_BLOCK_END" "$_target" 2>/dev/null; then
-        # Replace the existing block in place.
         awk -v start="$HIVE_BLOCK_START" -v end="$HIVE_BLOCK_END" -v blockfile="$HIVE_BLOCK_FILE" '
             BEGIN { inblock = 0; emitted = 0 }
             {
                 if (inblock == 0 && index($0, start) > 0) {
-                    # Emit the replacement block once, then swallow lines
-                    # until we see the end marker.
                     while ((getline line < blockfile) > 0) print line
                     close(blockfile)
                     inblock = 1
@@ -352,13 +578,9 @@ merge_hive_block() {
             }
         ' "$_target" > "$_tmp" || { rm -f "$_tmp"; return 1; }
         mv "$_tmp" "$_target" || { rm -f "$_tmp"; return 1; }
-        ok "Updated Memory Hive block in $_target"
     else
-        # Append a fresh block. Make sure we separate from existing content
-        # with a blank line so we don't glue onto the previous paragraph.
         {
             cat "$_target"
-            # Ensure trailing newline before the block.
             _last_char="$(tail -c 1 "$_target" 2>/dev/null || printf '')"
             if [ "$_last_char" != "" ] && [ "$_last_char" != "
 " ]; then
@@ -368,25 +590,92 @@ merge_hive_block() {
             cat "$HIVE_BLOCK_FILE"
         } > "$_tmp" || { rm -f "$_tmp"; return 1; }
         mv "$_tmp" "$_target" || { rm -f "$_tmp"; return 1; }
-        ok "Added Memory Hive block to $_target"
     fi
     return 0
 }
 
-WIRED_TARGETS=""
+# Track per-platform outcomes for the end-of-install banner.
+#   PLATFORM_WIRED    — auto-inject succeeded
+#   PLATFORM_MANUAL   — detected but user must copy a snippet
+#   PLATFORM_SKIPPED  — detected but the skip env var was set
+#
+# Each is a newline-separated list of "<id>\t<message>".
+PLATFORM_WIRED=""
+PLATFORM_MANUAL=""
+PLATFORM_SKIPPED=""
+WIRED_TARGETS=""  # legacy — kept for banner compatibility below
 
-if [ "$DETECTED_CLAUDE_CODE" -eq 1 ] && [ "${MEMORY_HIVE_SKIP_CLAUDE_MD:-0}" != "1" ]; then
-    if merge_hive_block "$CLAUDE_MD_PATH"; then
-        WIRED_TARGETS="$CLAUDE_MD_PATH"
+_mh_record() {
+    # _mh_record <list-var> <id> <message>
+    _lv="$1"; _lid="$2"; _lmsg="$3"
+    eval "_cur=\$$_lv"
+    if [ -z "$_cur" ]; then
+        eval "$_lv=\"\$_lid	\$_lmsg\""
     else
-        warn "Could not update $CLAUDE_MD_PATH -- continuing"
+        eval "$_lv=\"\$_cur
+\$_lid	\$_lmsg\""
     fi
-elif [ "$DETECTED_CLAUDE_CODE" -eq 1 ]; then
-    info "Skipping $CLAUDE_MD_PATH (MEMORY_HIVE_SKIP_CLAUDE_MD=1)"
+}
+
+# Handle the Claude Code legacy env var: if MEMORY_HIVE_SKIP_CLAUDE_MD=1
+# is set, also treat MEMORY_HIVE_SKIP_CLAUDE_CODE as 1 for backward
+# compatibility with pre-multi-platform installers.
+if [ "${MEMORY_HIVE_SKIP_CLAUDE_MD:-0}" = "1" ]; then
+    MEMORY_HIVE_SKIP_CLAUDE_CODE=1
 fi
 
+for _pid in $_mh_platform_ids; do
+    _pname="$(_mh_platform_field "$_pid" name)"
+    # Detect (honoring per-platform skip env var).
+    if _mh_platform_is_skipped "$_pid"; then
+        # Only note skip if the platform would otherwise have been detected.
+        if _mh_platform_field "$_pid" marker 2>/dev/null; then
+            _mh_record PLATFORM_SKIPPED "$_pid" "$_pname skipped by env var"
+        fi
+        continue
+    fi
+    if ! _mh_platform_field "$_pid" marker 2>/dev/null; then
+        continue
+    fi
+
+    _pstrat="$(_mh_platform_field "$_pid" strategy)"
+    _ptarget="$(_mh_platform_field "$_pid" target)"
+
+    case "$_pstrat" in
+        auto-inject)
+            if merge_hive_block "$_ptarget"; then
+                _mh_record PLATFORM_WIRED "$_pid" "$_pname: wired $_ptarget"
+                if [ -z "$WIRED_TARGETS" ]; then
+                    WIRED_TARGETS="$_ptarget"
+                else
+                    WIRED_TARGETS="$WIRED_TARGETS $_ptarget"
+                fi
+                ok "$_pname: managed block written to $(printf '%s' "$_ptarget" | sed -e "s|^$HOME|~|")"
+            else
+                warn "$_pname: could not update $_ptarget -- continuing"
+            fi
+            ;;
+        manual)
+            _docs_display="$INSTALL_DIR/templates/platforms/$_pid.md"
+            _mh_record PLATFORM_MANUAL "$_pid" "$_pname: manual setup, see $(printf '%s' "$_docs_display" | sed -e "s|^$HOME|~|")"
+            ok "$_pname: detected — manual setup instructions at $(printf '%s' "$_docs_display" | sed -e "s|^$HOME|~|")"
+            ;;
+        *)
+            warn "$_pname: unknown strategy '$_pstrat' — skipping"
+            ;;
+    esac
+done
+
+if [ -z "$PLATFORM_WIRED" ] && [ -z "$PLATFORM_MANUAL" ] && [ -z "$PLATFORM_SKIPPED" ]; then
+    info "No known agent platform detected -- continuing with generic install"
+fi
+
+# Optional: merge into $PWD/CLAUDE.md when the user explicitly opts in.
+# Kept as a separate knob (MEMORY_HIVE_MERGE_CWD=1) rather than a platform
+# entry because project-level CLAUDE.md is per-repo, not per-machine.
 if [ "$DETECTED_CWD_CLAUDE_MD" -eq 1 ] && [ "${MEMORY_HIVE_MERGE_CWD:-0}" = "1" ]; then
     if merge_hive_block "$CWD_CLAUDE_MD"; then
+        ok "Project CLAUDE.md: managed block written to $CWD_CLAUDE_MD"
         if [ -z "$WIRED_TARGETS" ]; then
             WIRED_TARGETS="$CWD_CLAUDE_MD"
         else
@@ -1169,11 +1458,22 @@ printf '\n'
 printf '%s%s✓ Memory Hive installed at %s%s\n' "$BOLD" "$GREEN" "$_install_display" "$RESET"
 printf '\n'
 
-if [ -n "$WIRED_TARGETS" ]; then
-    for _t in $WIRED_TARGETS; do
-        printf '  Wired into: %s (managed block added)\n' "$(display_path "$_t")"
+# Per-platform status lines. One row per detected platform so the user
+# sees exactly what got wired, what needs manual setup, and what was
+# skipped. Newline-separated lists with "<id>\t<message>" per entry.
+_emit_platform_lines() {
+    _lv="$1"; _label="$2"
+    eval "_content=\$$_lv"
+    [ -n "$_content" ] || return 0
+    printf '%s\n' "$_content" | while IFS='	' read -r _pid _pmsg; do
+        [ -n "$_pid" ] || continue
+        printf '  [%s] %s\n' "$_label" "$_pmsg"
     done
-fi
+}
+
+_emit_platform_lines PLATFORM_WIRED  "wired"
+_emit_platform_lines PLATFORM_MANUAL "manual"
+_emit_platform_lines PLATFORM_SKIPPED "skip "
 
 if [ -n "$CREATED_SILOS" ] && [ -n "$EXISTING_SILOS" ]; then
     printf '  Silos created: %s\n' "$CREATED_SILOS"
@@ -1186,19 +1486,19 @@ fi
 
 printf '  Shared hive:  %s/\n' "$_hive_display"
 
-if [ "$DETECTED_OPENCLAW" -eq 1 ]; then
-    printf '  OpenClaw:     %s (detected, no config changes made)\n' "$(display_path "$DETECTED_OPENCLAW_DIR")"
-fi
-
 printf '\n'
 
-if [ "$DETECTED_CLAUDE_CODE" -eq 1 ] || [ "$DETECTED_OPENCLAW" -eq 1 ]; then
+if [ -n "$PLATFORM_WIRED" ]; then
     printf 'Your agents will pick up the hive on next boot — no restart required.\n'
     printf 'Read the docs: %shttps://github.com/TJCurnutte/memory-hive%s\n' "$CYAN" "$RESET"
     printf '  Check compliance: sh %s/check-compliance.sh\n' "$_install_display"
+elif [ -n "$PLATFORM_MANUAL" ]; then
+    printf 'Some detected platforms need manual setup — see the per-platform docs\n'
+    printf 'under %s/templates/platforms/ for copy-paste snippets.\n' "$_install_display"
+    printf 'Docs: %shttps://github.com/TJCurnutte/memory-hive%s\n' "$CYAN" "$RESET"
 else
-    printf "We didn't detect Claude Code or OpenClaw on this machine. To wire this\n"
-    printf 'into your own agent system, point it at %s/ for shared\n' "$_hive_display"
+    printf "We didn't detect any supported agent platform on this machine. To wire\n"
+    printf 'into your own setup, point your agent at %s/ for shared\n' "$_hive_display"
     printf 'context and %s/agents/main/ for the default silo.\n' "$_hive_display"
     printf 'Docs: %shttps://github.com/TJCurnutte/memory-hive%s\n' "$CYAN" "$RESET"
     printf '  Check compliance: sh %s/check-compliance.sh\n' "$_install_display"
