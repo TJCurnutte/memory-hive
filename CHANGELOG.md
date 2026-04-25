@@ -6,7 +6,51 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Added
+## [0.3.0] — 2026-04-25 — `autonomous curator + onboarding`
+
+### Added — 5 new verbs that close the agent self-loop
+
+A second wave of parallel feature work shipped five more CLI verbs.
+They turn the curator loop from "agents write, human reviews" into
+"agents write, agents reflect, system suggests, human ratifies."
+
+- **`memory-hive curate [--dry-run | --apply]`** — Autonomous one-pass
+  curator. Chains `dedup` → `confidence` → `promote` → `lint --strict`
+  → `stale` and prints a single summary line: `X clusters need
+  attention, Y promotions ready, Z lint violations, N stale items`.
+  Default is dry-run (suggest only). `--apply` runs `mh_promote` for
+  every promotion-ready cluster (3+ aligned high-confidence raw
+  learnings). Pure orchestration over existing verbs — no
+  reimplementation, so cluster keys and kind-aliasing stay aligned
+  across `dedup`, `confidence`, and `promote`.
+
+- **`memory-hive conflicts [--agent <name>] [--strict] [--write]`** —
+  Surfaces raw learnings that contradict each other. Three
+  deterministic signals (no LLM in the loop): lexical antonym pairs
+  in body text (always/never, fix/broken, works/fails, etc.),
+  frontmatter `kind:` mismatch (one says `kind: win`, another `kind:
+  mistake` on the same topic), confidence high-vs-low split.
+  `--write` stages a stub block in `curator/CONFLICTS.md` for the
+  curator to resolve per `HIVE_ARCHITECTURE.md`.
+
+- **`memory-hive reflect <agent> [--days N] [--write] [--raw]`** —
+  Agent self-reflection. Distills an agent's recent log activity into
+  a memory.md addendum. Pure-shell theme detection: tokenize log
+  bodies, credit each token once per entry (DF-style — three different
+  entries each mentioning a word once is a pattern, one ranty entry
+  using it twelve times is not), surface words hitting 3+ distinct
+  entries as themes with citations. Lets agents close their own loop
+  without waiting for the curator.
+
+- **`memory-hive bundle [--for <agent>] [--max-tokens N] [--out <file>]`** —
+  Concatenates the canonical hive surfaces into a single
+  prompt-injection-ready markdown blob. Section ordering is
+  canon-first (`index.md` → `registry/AGENTS.md` → knowledge →
+  distilled → agent silo last) so prompt overflow drops the
+  least-portable content. `.baseline-installed` honored at file
+  granularity — unedited installer scaffolding doesn't pollute the
+  bundle. Footer (chars/files/tokens) goes to stderr so
+  `bundle | consumer` works cleanly.
 
 - **`memory-hive seed [--scenario <name>] [--dry-run] [--force]`** —
   Populate a fresh hive with synthetic but realistic content so the
@@ -14,12 +58,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `query`) produce non-trivial output the moment a new user finishes
   installing. Bundled scenarios: `default` (3-agent team — coder,
   reviewer, researcher — with two weeks of activity, 9 raw learnings,
-  3 distilled files, populated DECISIONS.md and PROJECTS.md), `solo`
-  (1 agent), `large-team` (5 agents). Refuses to run against a
-  non-empty hive unless `--force` is set; `--dry-run` lists what
-  would be written. Date markers (`__DAYS_AGO_N__`) in the bundled
-  templates are substituted at seed time so the activity always
-  looks recent. Templates live under `templates/scenarios/<name>/`.
+  3 distilled files, populated `DECISIONS.md` and `PROJECTS.md`),
+  `solo` (1 agent), `large-team` (5 agents). Refuses to run against
+  a non-empty hive unless `--force`; `--dry-run` lists what would be
+  written. Date markers (`__DAYS_AGO_N__`) substituted at seed time
+  so activity always looks recent. Templates live under
+  `templates/scenarios/<name>/`.
+
+### Changed
+
+- **`install.sh`** now copies `templates/scenarios/` alongside
+  `templates/roles/` and `templates/platforms/`, so the seed verb
+  works post-install without cloning the repo.
 
 ## [0.2.0] — 2026-04-24 — `multi-platform + curator loop`
 
