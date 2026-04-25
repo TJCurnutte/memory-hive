@@ -1294,6 +1294,133 @@ jobs:
 
           echo "Bundle smoke OK"
 
+      - name: CLI smoke — reflect distills recurring themes
+        shell: bash
+        run: |
+          set -eu
+          INSTALL_DIR="$(mktemp -d)"
+          export MEMORY_HIVE_DIR="$INSTALL_DIR"
+          export MEMORY_HIVE_SKIP_CLAUDE_MD=1
+          export MEMORY_HIVE_REPO="$(pwd)"
+          sh install.sh < /dev/null > /dev/null
+
+          # Reflect needs a silo with a real log.md. Create one.
+          sh "$INSTALL_DIR/memory-hive" add reflectee --role coder > /dev/null
+
+          # Compute a window-relative date set so the CI test does not break
+          # when the calendar moves. Five entries, three sharing the canary
+          # theme "isolation" (must surface as a recurring pattern), one
+          # off-topic (perf), and one unrelated (docs). Use printf rather
+          # than a heredoc so YAML's literal-block indent does not poison
+          # the file content (would break the `^## ` matches).
+          d0=$(date '+%Y-%m-%d')
+          # GNU and BSD date both accept these forms; try each.
+          d1=$(date -d '1 day ago' '+%Y-%m-%d' 2>/dev/null || date -v-1d '+%Y-%m-%d')
+          d2=$(date -d '2 days ago' '+%Y-%m-%d' 2>/dev/null || date -v-2d '+%Y-%m-%d')
+          d3=$(date -d '3 days ago' '+%Y-%m-%d' 2>/dev/null || date -v-3d '+%Y-%m-%d')
+          d4=$(date -d '4 days ago' '+%Y-%m-%d' 2>/dev/null || date -v-4d '+%Y-%m-%d')
+
+          {
+              printf -- '%s\n' '# reflectee -- log'
+              printf -- '%s\n' ''
+              printf '## %s\n' "$d0"
+              printf -- '%s\n' ''
+              printf -- '%s\n' '- Hit a flaky pytest run because the database fixture leaked across parallel workers; switched to function-scoped fixtures to fix the test isolation problem.'
+              printf -- '%s\n' ''
+              printf '## %s\n' "$d1"
+              printf -- '%s\n' ''
+              printf -- '%s\n' '- Investigated test isolation failures under pytest-xdist. Root cause: shared mutable state in the database fixture across pytest workers.'
+              printf -- '%s\n' ''
+              printf '## %s\n' "$d2"
+              printf -- '%s\n' ''
+              printf -- '%s\n' '- Reviewed pytest harness for the embedding service. Identified another test isolation gap where workers shared a temp directory.'
+              printf -- '%s\n' ''
+              printf '## %s\n' "$d3"
+              printf -- '%s\n' ''
+              printf -- '%s\n' '- Embedding service latency: averaged 8ms per sentence on M1. Not isolation-related but logged here for the perf board.'
+              printf -- '%s\n' ''
+              printf '## %s\n' "$d4"
+              printf -- '%s\n' ''
+              printf -- '%s\n' '- Documentation pass on the architecture diagram. Clarified the curator loop.'
+          } > "$INSTALL_DIR/hive/agents/reflectee/log.md"
+
+          # 1) Default reflect (dry-run): the recurring theme must surface.
+          sh "$INSTALL_DIR/memory-hive" reflect reflectee > /tmp/mh-ref.out 2>&1
+          cat /tmp/mh-ref.out
+          grep -q "isolation" /tmp/mh-ref.out || \
+              { echo "FAIL: 'isolation' theme missing from reflect output"; exit 1; }
+          grep -q "Patterns from" /tmp/mh-ref.out || \
+              { echo "FAIL: addendum heading missing"; exit 1; }
+          grep -q "Citations (entries scanned):" /tmp/mh-ref.out || \
+              { echo "FAIL: citations block missing"; exit 1; }
+          grep -q "dry-run" /tmp/mh-ref.out || \
+              { echo "FAIL: dry-run note missing"; exit 1; }
+
+          # 2) Default mode must NOT modify memory.md.
+          MEM="$INSTALL_DIR/hive/agents/reflectee/memory.md"
+          BEFORE_BYTES="$(wc -c < "$MEM" | tr -d ' ')"
+          sh "$INSTALL_DIR/memory-hive" reflect reflectee > /dev/null 2>&1
+          AFTER_BYTES="$(wc -c < "$MEM" | tr -d ' ')"
+          [ "$BEFORE_BYTES" = "$AFTER_BYTES" ] || \
+              { echo "FAIL: dry-run wrote to memory.md ($BEFORE_BYTES -> $AFTER_BYTES)"; exit 1; }
+
+          # 3) --write appends; memory.md must grow and contain the heading.
+          sh "$INSTALL_DIR/memory-hive" reflect reflectee --write > /tmp/mh-ref-w.out 2>&1
+          AFTER_W="$(wc -c < "$MEM" | tr -d ' ')"
+          [ "$AFTER_W" -gt "$BEFORE_BYTES" ] || \
+              { echo "FAIL: --write did not grow memory.md"; cat /tmp/mh-ref-w.out; exit 1; }
+          grep -q "Patterns from" "$MEM" || \
+              { echo "FAIL: addendum heading not appended"; exit 1; }
+          grep -q "isolation" "$MEM" || \
+              { echo "FAIL: theme not appended to memory.md"; exit 1; }
+
+          # 4) --raw drops a raw learning under learnings/raw/<agent>/.
+          sh "$INSTALL_DIR/memory-hive" reflect reflectee --raw > /tmp/mh-ref-r.out 2>&1
+          # Find the freshly-written reflect file.
+          RAW_DIR="$INSTALL_DIR/hive/learnings/raw/reflectee"
+          test -d "$RAW_DIR" || { echo "FAIL: raw dir not created"; exit 1; }
+          RAW_HITS="$(find "$RAW_DIR" -name '*-reflect*.md' | wc -l | tr -d ' ')"
+          [ "$RAW_HITS" -ge 1 ] || \
+              { echo "FAIL: no reflect raw learning written under $RAW_DIR"; ls -la "$RAW_DIR"; exit 1; }
+          RAW_FILE="$(find "$RAW_DIR" -name '*-reflect*.md' | head -1)"
+          grep -q "^date: " "$RAW_FILE" || \
+              { echo "FAIL: raw file missing frontmatter date"; cat "$RAW_FILE"; exit 1; }
+          grep -q "^agent: reflectee$" "$RAW_FILE" || \
+              { echo "FAIL: raw file missing agent line"; exit 1; }
+          grep -q "kind: reflection" "$RAW_FILE" || \
+              { echo "FAIL: raw file missing kind:reflection"; exit 1; }
+          grep -q "isolation" "$RAW_FILE" || \
+              { echo "FAIL: theme missing from raw learning"; exit 1; }
+
+          # 5) --days narrows the window; --days 1 should drop most entries
+          # (only the d0 entry survives) → "isolation" should NOT cluster
+          # because there are not 3+ distinct entries inside the window.
+          sh "$INSTALL_DIR/memory-hive" reflect reflectee --days 1 > /tmp/mh-ref-d1.out 2>&1
+          grep -q "No recurring themes" /tmp/mh-ref-d1.out || \
+              { echo "FAIL: --days 1 should produce no themes"; cat /tmp/mh-ref-d1.out; exit 1; }
+
+          # 6) Bad agent fails non-zero with a clear message.
+          set +e
+          sh "$INSTALL_DIR/memory-hive" reflect ghostagent > /tmp/mh-ref-bad.out 2>&1
+          rc=$?
+          set -e
+          [ "$rc" -ne 0 ] || { echo "FAIL: bad agent should error"; exit 1; }
+          grep -q "no silo" /tmp/mh-ref-bad.out || \
+              { echo "FAIL: error message did not mention silo"; cat /tmp/mh-ref-bad.out; exit 1; }
+
+          # 7) Bad --days fails non-zero.
+          set +e
+          sh "$INSTALL_DIR/memory-hive" reflect reflectee --days abc > /tmp/mh-ref-d.out 2>&1
+          rc=$?
+          set -e
+          [ "$rc" -ne 0 ] || { echo "FAIL: bad --days should error"; exit 1; }
+
+          # 8) Top-level help mentions the new verb.
+          sh "$INSTALL_DIR/memory-hive" help | grep -q "memory-hive reflect" || \
+              { echo "FAIL: help missing reflect entry"; exit 1; }
+
+          echo "Reflect smoke OK"
+
       - name: Doctor smoke — multi-platform health check
         shell: bash
         run: |
