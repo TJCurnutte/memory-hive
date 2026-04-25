@@ -796,6 +796,103 @@ jobs:
 
           echo "Dedup smoke OK"
 
+      - name: CLI smoke — conflicts surfaces contradictions
+        shell: bash
+        run: |
+          set -eu
+          INSTALL_DIR="$(mktemp -d)"
+          export MEMORY_HIVE_DIR="$INSTALL_DIR"
+          export MEMORY_HIVE_SKIP_CLAUDE_MD=1
+          export MEMORY_HIVE_REPO="$(pwd)"
+          sh install.sh < /dev/null > /dev/null 2>&1
+
+          # Seed two raw learnings under different agents with the same
+          # normalized title but contradictory bodies + frontmatter. The
+          # heredoc body MUST align with the `cat <<'EOF'` verb so YAML
+          # common-indent strip leaves flat content (per coder memory).
+          mkdir -p "$INSTALL_DIR/hive/learnings/raw/coder"
+          mkdir -p "$INSTALL_DIR/hive/learnings/raw/reviewer"
+
+          cat > "$INSTALL_DIR/hive/learnings/raw/coder/2026-04-23-shell-heredocs.md" <<'L1'
+          ---
+          date: 2026-04-23
+          agent: coder
+          context: ci tests
+          confidence: high
+          kind: win
+          ---
+
+          # Use shell heredocs for tests
+
+          Heredocs always work great for seeding fixtures. Use heredocs in CI;
+          they enable clean multi-line content.
+          L1
+
+          cat > "$INSTALL_DIR/hive/learnings/raw/reviewer/2026-04-24-shell-heredocs.md" <<'L2'
+          ---
+          date: 2026-04-24
+          agent: reviewer
+          context: ci tests
+          confidence: low
+          kind: mistake
+          ---
+
+          # Use shell heredocs for tests
+
+          Heredocs never work. Avoid heredocs in CI; they fail because of
+          YAML indent contamination.
+          L2
+
+          # 1. Default run: cluster appears with at least one signal.
+          sh "$INSTALL_DIR/memory-hive" conflicts | tee /tmp/mh-conflicts.out
+          grep -q "Cluster:" /tmp/mh-conflicts.out
+          grep -q "coder/2026-04-23-shell-heredocs.md" /tmp/mh-conflicts.out
+          grep -q "reviewer/2026-04-24-shell-heredocs.md" /tmp/mh-conflicts.out
+          # All three signals should fire on this fixture.
+          grep -q "opposing-claim words" /tmp/mh-conflicts.out
+          grep -q "confidence mismatch" /tmp/mh-conflicts.out
+          grep -q "opposite frontmatter verdicts" /tmp/mh-conflicts.out
+          grep -q "1 conflict cluster(s) found" /tmp/mh-conflicts.out
+
+          # 2. --write appends a stub block to curator/CONFLICTS.md.
+          BEFORE=$(wc -l < "$INSTALL_DIR/hive/curator/CONFLICTS.md")
+          sh "$INSTALL_DIR/memory-hive" conflicts --write > /tmp/mh-conflicts-w.out 2>&1
+          AFTER=$(wc -l < "$INSTALL_DIR/hive/curator/CONFLICTS.md")
+          if [ "$AFTER" -le "$BEFORE" ]; then
+              echo "FAIL: CONFLICTS.md did not grow ($BEFORE -> $AFTER)"
+              exit 1
+          fi
+          grep -q "heredocs shell tests use" "$INSTALL_DIR/hive/curator/CONFLICTS.md"
+          grep -q "Auto-detected by" "$INSTALL_DIR/hive/curator/CONFLICTS.md"
+          grep -q "Status:.*unresolved" "$INSTALL_DIR/hive/curator/CONFLICTS.md"
+
+          # 3. --strict exits non-zero when conflicts exist.
+          set +e
+          sh "$INSTALL_DIR/memory-hive" conflicts --strict > /dev/null 2>&1
+          rc=$?
+          set -e
+          if [ "$rc" -eq 0 ]; then
+              echo "FAIL: --strict should exit non-zero with conflicts"
+              exit 1
+          fi
+
+          # 4. --agent filter narrows scope. coder is in the cluster, so it
+          #    should still find the conflict. "nobody" is not, so no match.
+          sh "$INSTALL_DIR/memory-hive" conflicts --agent coder > /tmp/mh-conflicts-a1.out 2>&1
+          grep -q "Cluster:" /tmp/mh-conflicts-a1.out
+          sh "$INSTALL_DIR/memory-hive" conflicts --agent nobody > /tmp/mh-conflicts-a2.out 2>&1
+          grep -q "No conflicts found" /tmp/mh-conflicts-a2.out
+
+          # 5. Top-level help mentions the new verb.
+          sh "$INSTALL_DIR/memory-hive" help | grep -q "memory-hive conflicts"
+
+          # 6. Raw files untouched.
+          test "$(find "$INSTALL_DIR/hive/learnings/raw" -name '*.md' | wc -l | tr -d ' ')" = "2"
+          grep -q "Heredocs always work" "$INSTALL_DIR/hive/learnings/raw/coder/2026-04-23-shell-heredocs.md"
+          grep -q "Heredocs never work"  "$INSTALL_DIR/hive/learnings/raw/reviewer/2026-04-24-shell-heredocs.md"
+
+          echo "Conflicts smoke OK"
+
       - name: Query smoke — searchable hive
         shell: bash
         run: |

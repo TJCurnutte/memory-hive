@@ -1216,6 +1216,16 @@ Usage:
       filter (default 50%, tunable with --threshold). Print-only;
       raw files are never modified.
 
+  memory-hive conflicts [--agent <name>] [--strict] [--write]
+      Surface raw learnings that contradict each other so the curator can
+      resolve them via curator/CONFLICTS.md. Clusters by normalized title,
+      then within each 2+ cluster scans for three signals: opposing-claim
+      words (always/never, fix/broken, do/dont, use/avoid, ...), opposite
+      frontmatter \`kind:\` (win vs mistake), or confidence high/low split.
+      --agent narrows to clusters touching one silo. --strict exits 1 on
+      any conflict (CI gating). --write appends a stub block per cluster
+      to curator/CONFLICTS.md ready for the curator to investigate.
+
   memory-hive watch
       Live stream of file events as agents write to the hive. Prints
       timestamp + agent + file for each event and keeps a running
@@ -3998,6 +4008,406 @@ $_line"
 }
 
 
+# --- conflicts ---------------------------------------------------------------
+#
+# Surface raw learnings that contradict each other so the curator can resolve
+# them via curator/CONFLICTS.md per HIVE_ARCHITECTURE.md's conflict-resolution
+# rules.
+#
+# Heuristic (no LLM in the loop). Three signals, any one of which trips a
+# conflict on a normalized-title cluster:
+#
+#   1. Opposing token pairs in body text.
+#      The detector scans each file's first paragraph for tokens belonging to
+#      hard-coded antonym pairs (always/never, fix/broken, works/fails, do/don't,
+#      use/avoid, fast/slow, safe/unsafe, success/fail, true/false,
+#      enable/disable). If two files in a cluster fall on opposite sides of any
+#      pair, they conflict on that signal. Cheap, deterministic, language-blind
+#      but useful for the specific lexicon agents actually use in raw bullets.
+#
+#   2. Different distilled targets in frontmatter `kind:`.
+#      One file says `kind: win`, another says `kind: mistake` on the same
+#      normalized topic — opposite verdicts on the same observation.
+#      `_mh_promote_infer_target` already maps these to distilled basenames;
+#      we reuse that classification.
+#
+#   3. Confidence mismatch within a cluster.
+#      One file is `confidence: high`, another is `confidence: low` on the
+#      same topic. (Medium-vs-anything is NOT a conflict — the curator
+#      tolerates middle ground; only the high/low split is loud enough.)
+#
+# Output: cluster title -> contributing files -> the contradiction signal(s).
+#
+# Flags:
+#   --agent <name>  Only report conflicts whose cluster includes that agent.
+#   --strict        Exit non-zero (1) if any conflict is found.
+#   --write         Append a stub block to curator/CONFLICTS.md per cluster.
+
+# _mh_conflicts_antonym_pairs -- print one pair per line, "left right".
+# Any token-only match (whole word) on either side counts.
+_mh_conflicts_antonym_pairs() {
+    cat <<'PAIRS'
+always never
+fix broken
+works fails
+do dont
+use avoid
+fast slow
+safe unsafe
+success fail
+true false
+enable disable
+PAIRS
+}
+
+# _mh_conflicts_body_tokens <file> -> print one lowercased token per line for
+# the file's first paragraph. Reuses _mh_dedup_first_para. Stopwords are NOT
+# dropped here (we want "do" / "don't" etc), but we DO normalize "don't" ->
+# "dont" so the antonym match stays whole-word.
+_mh_conflicts_body_tokens() {
+    _f="$1"
+    _mh_dedup_first_para "$_f" \
+        | tr '[:upper:]' '[:lower:]' \
+        | tr -c 'a-z0-9' ' ' \
+        | tr -s ' ' '\n' \
+        | awk 'NF { print }'
+}
+
+# _mh_conflicts_frontmatter_kind <file> -> reuse promote helper, then map via
+# _mh_promote_infer_target so casing/aliases collapse (win|wins -> wins.md).
+_mh_conflicts_kind_target() {
+    _mh_promote_infer_target "$1"
+}
+
+# _mh_conflicts_frontmatter_confidence <file> -> low|medium|high|"" .
+_mh_conflicts_confidence() {
+    _v="$(_mh_promote_extract_frontmatter "$1" confidence 2>/dev/null)"
+    _v="$(printf '%s' "$_v" | tr '[:upper:]' '[:lower:]' | tr -d '"\047' \
+        | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]].*$//')"
+    case "$_v" in
+        low|medium|high) printf '%s' "$_v" ;;
+        *) : ;;
+    esac
+}
+
+# _mh_conflicts_pair_signals <fileA> <fileB> -> print one signal per line.
+# Each signal: <kind>|<detail>
+#   antonym|<left>/<right>
+#   kind|<targetA>/<targetB>
+#   confidence|<confA>/<confB>
+# Empty output means no signal.
+_mh_conflicts_pair_signals() {
+    _fa="$1"; _fb="$2"
+
+    # 1. Antonym scan. Build whitespace-padded token strings for each file
+    #    so `index(... " word ", ...)` matches whole tokens.
+    _toks_a="$(_mh_conflicts_body_tokens "$_fa" | tr '\n' ' ')"
+    _toks_b="$(_mh_conflicts_body_tokens "$_fb" | tr '\n' ' ')"
+    _toks_a=" ${_toks_a} "
+    _toks_b=" ${_toks_b} "
+    _mh_conflicts_antonym_pairs | while IFS=' ' read -r _l _r; do
+        [ -n "$_l" ] || continue
+        _a_has_l=0; _a_has_r=0; _b_has_l=0; _b_has_r=0
+        case "$_toks_a" in *" $_l "*) _a_has_l=1 ;; esac
+        case "$_toks_a" in *" $_r "*) _a_has_r=1 ;; esac
+        case "$_toks_b" in *" $_l "*) _b_has_l=1 ;; esac
+        case "$_toks_b" in *" $_r "*) _b_has_r=1 ;; esac
+        if [ "$_a_has_l" -eq 1 ] && [ "$_b_has_r" -eq 1 ]; then
+            printf 'antonym|%s/%s\n' "$_l" "$_r"
+        elif [ "$_a_has_r" -eq 1 ] && [ "$_b_has_l" -eq 1 ]; then
+            printf 'antonym|%s/%s\n' "$_l" "$_r"
+        fi
+    done
+
+    # 2. kind: target mismatch.
+    _ka="$(_mh_conflicts_kind_target "$_fa")"
+    _kb="$(_mh_conflicts_kind_target "$_fb")"
+    if [ -n "$_ka" ] && [ -n "$_kb" ] && [ "$_ka" != "$_kb" ]; then
+        # Only emit if BOTH sides are explicit verdicts. patterns.md is the
+        # default fallback when frontmatter `kind:` is absent — comparing
+        # patterns.md vs wins.md would be noise.
+        _kind_a="$(_mh_promote_extract_frontmatter "$_fa" kind 2>/dev/null)"
+        _kind_b="$(_mh_promote_extract_frontmatter "$_fb" kind 2>/dev/null)"
+        if [ -n "$_kind_a" ] && [ -n "$_kind_b" ]; then
+            printf 'kind|%s/%s\n' "$_ka" "$_kb"
+        fi
+    fi
+
+    # 3. Confidence mismatch (only the loud high/low split).
+    _ca="$(_mh_conflicts_confidence "$_fa")"
+    _cb="$(_mh_conflicts_confidence "$_fb")"
+    if [ -n "$_ca" ] && [ -n "$_cb" ]; then
+        if { [ "$_ca" = "high" ] && [ "$_cb" = "low" ]; } \
+            || { [ "$_ca" = "low" ] && [ "$_cb" = "high" ]; }; then
+            printf 'confidence|%s/%s\n' "$_ca" "$_cb"
+        fi
+    fi
+}
+
+# _mh_conflicts_describe_signal <signal> -> human prose
+_mh_conflicts_describe_signal() {
+    _sig="$1"
+    _kind="${_sig%%|*}"
+    _detail="${_sig#*|}"
+    case "$_kind" in
+        antonym)
+            printf 'opposing-claim words (%s)' "$_detail"
+            ;;
+        kind)
+            printf 'opposite frontmatter verdicts (kind: %s)' "$_detail"
+            ;;
+        confidence)
+            printf 'confidence mismatch (%s)' "$_detail"
+            ;;
+        *)
+            printf '%s (%s)' "$_kind" "$_detail"
+            ;;
+    esac
+}
+
+mh_conflicts() {
+    _mh_require_install
+
+    _agent_filter=""
+    _strict=0
+    _write=0
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --agent)
+                shift
+                [ $# -gt 0 ] || _mh_die "--agent needs a value"
+                _agent_filter="$1"
+                ;;
+            --agent=*)
+                _agent_filter="${1#--agent=}"
+                ;;
+            --strict)
+                _strict=1
+                ;;
+            --write)
+                _write=1
+                ;;
+            -h|--help)
+                cat <<EOF
+Usage: memory-hive conflicts [--agent <name>] [--strict] [--write]
+  --agent <name>  Only report clusters that include that agent's silo.
+  --strict        Exit 1 if any conflict is found (CI gating).
+  --write         Append a stub block per conflict to curator/CONFLICTS.md
+                  for the curator to resolve.
+
+Surface raw learnings that contradict each other. Three signals, any one
+trips a conflict on a normalized-title cluster:
+  1. Opposing-claim words in body text (always/never, fix/broken, etc.)
+  2. Different frontmatter \`kind:\` -- one says win, another says mistake.
+  3. Confidence mismatch -- one high, another low on the same topic.
+Print-only by default; raw files are never modified.
+EOF
+                return 0
+                ;;
+            *) _mh_die "Unknown flag: $1 (try: memory-hive conflicts --help)" ;;
+        esac
+        shift
+    done
+
+    _raw_root="$HIVE_DIR/learnings/raw"
+    if [ ! -d "$_raw_root" ]; then
+        printf 'No raw learnings directory at %s -- nothing to scan.\n' "$_raw_root"
+        return 0
+    fi
+
+    # Build cluster tuples: "<normkey>\t<agent>\t<relpath>\t<abspath>".
+    _tuples="${TMPDIR:-/tmp}/mh-conflicts-tuples.$$"
+    : > "$_tuples"
+    _file_count=0
+    for _agent_dir in "$_raw_root"/*; do
+        [ -d "$_agent_dir" ] || continue
+        _agent="$(basename "$_agent_dir")"
+        for _f in "$_agent_dir"/*.md; do
+            [ -f "$_f" ] || continue
+            _file_count=$((_file_count + 1))
+            _title="$(_mh_dedup_title "$_f")"
+            _norm="$(_mh_dedup_normalize "$_title")"
+            [ -n "$_norm" ] || continue
+            _rel="${_f#"$HIVE_DIR"/}"
+            printf '%s\t%s\t%s\t%s\n' "$_norm" "$_agent" "$_rel" "$_f" >> "$_tuples"
+        done
+    done
+
+    if [ "$_file_count" -eq 0 ]; then
+        rm -f "$_tuples"
+        printf 'No raw learnings found under %s -- nothing to scan.\n' "$_raw_root"
+        return 0
+    fi
+
+    _sorted="${TMPDIR:-/tmp}/mh-conflicts-sorted.$$"
+    LC_ALL=C sort "$_tuples" > "$_sorted"
+    rm -f "$_tuples"
+
+    printf '\nMemory Hive -- conflict candidates\n'
+    printf '%s\n\n' '----------------------------------'
+
+    _conflicts_found=0
+    _written=0
+    _conflicts_dir="${TMPDIR:-/tmp}/mh-conflicts-clusters.$$"
+    mkdir -p "$_conflicts_dir"
+
+    # Walk sorted tuples, group by normkey, evaluate clusters of 2+.
+    _cur_key=""
+    _cur_records=""
+    # We append a sentinel line so the final cluster flushes inside the loop.
+    {
+        cat "$_sorted"
+        printf '__SENTINEL__\t\t\t\n'
+    } | while IFS="$(printf '\t')" read -r _key _agent _rel _abs; do
+        if [ "$_key" = "__SENTINEL__" ] || [ "$_key" != "$_cur_key" ]; then
+            # Flush prior cluster.
+            if [ -n "$_cur_key" ]; then
+                _count=$(printf '%s\n' "$_cur_records" | grep -c .)
+                if [ "$_count" -ge 2 ]; then
+                    # Optional --agent filter at cluster level.
+                    _keep=1
+                    if [ -n "$_agent_filter" ]; then
+                        _keep=0
+                        printf '%s\n' "$_cur_records" | while IFS="$(printf '\t')" read -r _a _r _p; do
+                            [ -n "$_a" ] || continue
+                            if [ "$_a" = "$_agent_filter" ]; then
+                                printf 'MATCH'
+                                break
+                            fi
+                        done > "$_conflicts_dir/agent-check.$$"
+                        if [ -s "$_conflicts_dir/agent-check.$$" ]; then
+                            _keep=1
+                        fi
+                        rm -f "$_conflicts_dir/agent-check.$$"
+                    fi
+
+                    if [ "$_keep" -eq 1 ]; then
+                        # Pairwise scan files in cluster for any signal.
+                        _all_paths="$(printf '%s\n' "$_cur_records" | awk -F"$(printf '\t')" '{print $3}')"
+                        _all_rels="$(printf '%s\n' "$_cur_records" | awk -F"$(printf '\t')" '{print $2}')"
+                        _all_agents="$(printf '%s\n' "$_cur_records" | awk -F"$(printf '\t')" '{print $1}')"
+                        _signals_buf=""
+                        _i=1
+                        _n=$(printf '%s\n' "$_all_paths" | grep -c .)
+                        while [ "$_i" -lt "$_n" ]; do
+                            _j=$((_i + 1))
+                            while [ "$_j" -le "$_n" ]; do
+                                _pa="$(printf '%s\n' "$_all_paths" | sed -n "${_i}p")"
+                                _pb="$(printf '%s\n' "$_all_paths" | sed -n "${_j}p")"
+                                _ra="$(printf '%s\n' "$_all_rels"  | sed -n "${_i}p")"
+                                _rb="$(printf '%s\n' "$_all_rels"  | sed -n "${_j}p")"
+                                _sigs="$(_mh_conflicts_pair_signals "$_pa" "$_pb")"
+                                if [ -n "$_sigs" ]; then
+                                    printf '%s\n' "$_sigs" | while IFS= read -r _s; do
+                                        [ -n "$_s" ] || continue
+                                        printf '%s\t%s\t%s\n' "$_ra" "$_rb" "$_s"
+                                    done >> "$_conflicts_dir/sigs.$$"
+                                fi
+                                _j=$((_j + 1))
+                            done
+                            _i=$((_i + 1))
+                        done
+
+                        if [ -s "$_conflicts_dir/sigs.$$" ]; then
+                            _conflicts_found=$((_conflicts_found + 1))
+                            # Bump conflict count via marker file (subshell-safe).
+                            printf '.' >> "$_conflicts_dir/found.cnt"
+                            _disp="$_cur_key"
+                            printf 'Cluster: "%s"\n' "$_disp"
+                            printf '  Files:\n'
+                            printf '%s\n' "$_all_rels" | while IFS= read -r _r; do
+                                [ -n "$_r" ] && printf '    %s\n' "$_r"
+                            done
+                            printf '  Contradiction signals:\n'
+                            # Dedup signals across pairs.
+                            sort -u "$_conflicts_dir/sigs.$$" \
+                                | while IFS="$(printf '\t')" read -r _ra _rb _s; do
+                                    _desc="$(_mh_conflicts_describe_signal "$_s")"
+                                    printf '    %s vs %s -> %s\n' "$_ra" "$_rb" "$_desc"
+                                done
+                            printf '\n'
+
+                            if [ "$_write" -eq 1 ]; then
+                                _conflicts_md="$HIVE_DIR/curator/CONFLICTS.md"
+                                mkdir -p "$HIVE_DIR/curator"
+                                if [ ! -f "$_conflicts_md" ]; then
+                                    printf '# Conflicts\n\n' > "$_conflicts_md"
+                                fi
+                                {
+                                    printf '\n## %s -- "%s"\n\n' "$(date +%Y-%m-%d)" "$_disp"
+                                    printf '_Auto-detected by `memory-hive conflicts --write`. Curator: investigate per HIVE_ARCHITECTURE.md and resolve to DECISIONS.md._\n\n'
+                                    printf '**Files in cluster:**\n\n'
+                                    printf '%s\n' "$_all_rels" | while IFS= read -r _r; do
+                                        [ -n "$_r" ] && printf -- '- `%s`\n' "$_r"
+                                    done
+                                    printf '\n**Contradiction signals:**\n\n'
+                                    sort -u "$_conflicts_dir/sigs.$$" \
+                                        | while IFS="$(printf '\t')" read -r _ra _rb _s; do
+                                            _desc="$(_mh_conflicts_describe_signal "$_s")"
+                                            printf -- '- `%s` vs `%s` -- %s\n' "$_ra" "$_rb" "$_desc"
+                                        done
+                                    printf '\n**Status:** unresolved\n'
+                                } >> "$_conflicts_md"
+                                printf '. ' >> "$_conflicts_dir/written.cnt"
+                            fi
+                        fi
+                        rm -f "$_conflicts_dir/sigs.$$"
+                    fi
+                fi
+            fi
+            _cur_key="$_key"
+            _cur_records=""
+            [ "$_key" = "__SENTINEL__" ] && continue
+        fi
+        # Append "<agent>\t<rel>\t<abs>" to records.
+        _line="$(printf '%s\t%s\t%s' "$_agent" "$_rel" "$_abs")"
+        if [ -z "$_cur_records" ]; then
+            _cur_records="$_line"
+        else
+            _cur_records="$(printf '%s\n%s' "$_cur_records" "$_line")"
+        fi
+    done
+
+    rm -f "$_sorted"
+
+    # Recover counts (the while-loop ran in a subshell because of the pipe).
+    _conflicts_found=0
+    if [ -f "$_conflicts_dir/found.cnt" ]; then
+        _conflicts_found=$(wc -c < "$_conflicts_dir/found.cnt" | tr -d ' ')
+    fi
+    _written=0
+    if [ -f "$_conflicts_dir/written.cnt" ]; then
+        _written=$(awk '{n+=NF} END {print n+0}' "$_conflicts_dir/written.cnt")
+    fi
+    rm -rf "$_conflicts_dir"
+
+    if [ "$_conflicts_found" -eq 0 ]; then
+        if [ -n "$_agent_filter" ]; then
+            printf 'No conflicts found involving agent "%s" (scanned %d files).\n\n' \
+                "$_agent_filter" "$_file_count"
+        else
+            printf 'No conflicts found (scanned %d files).\n\n' "$_file_count"
+        fi
+        return 0
+    fi
+
+    printf '%d conflict cluster(s) found across %d raw learning(s).\n' \
+        "$_conflicts_found" "$_file_count"
+    if [ "$_write" -eq 1 ]; then
+        printf 'Wrote %d stub block(s) to curator/CONFLICTS.md.\n' "$_written"
+    fi
+    printf 'Curator next step:\n'
+    printf '  Investigate each cluster (per HIVE_ARCHITECTURE.md), resolve in\n'
+    printf '  curator/DECISIONS.md, and leave the CONFLICTS.md entry as record.\n\n'
+
+    if [ "$_strict" -eq 1 ]; then
+        return 1
+    fi
+    return 0
+}
+
+
 #   memory-hive lint [--fix] [--strict] [<path>]
 
 # --- lint --------------------------------------------------------------------
@@ -4713,6 +5123,7 @@ case "$_verb" in
     checkpoint) mh_checkpoint "$@" ;;
     diff)     mh_diff "$@" ;;
     dedup)    mh_dedup "$@" ;;
+    conflicts) mh_conflicts "$@" ;;
     query|search) mh_query "$@" ;;
     lint)     mh_lint "$@" ;;
     digest)   mh_digest "$@" ;;
