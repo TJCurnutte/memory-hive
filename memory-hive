@@ -1340,30 +1340,38 @@ mh_tags() {
     if [ -n "$_filter_tag" ]; then
         # List files using this tag.
         _matches="$(printf '%s\n' "$_records" \
-            | awk -F'\t' -v want="$_filter_tag" '$1 == want { print $2 }' \
+            | awk -F'	' -v want="$_filter_tag" '$1 == want { print $2 }' \
             | sort -u)"
         if [ -z "$_matches" ]; then
             printf '(no files use tag "%s")\n' "$_filter_tag"
             return 0
         fi
-        printf 'Files tagged "%s":\n' "$_filter_tag"
-        printf '%s\n' "$_matches" | while IFS= read -r _f; do
-            _rel="${_f#"$HIVE_DIR"/}"
-            printf '  %s\n' "$_rel"
-        done
+        # Build the output as one string so a downstream `| grep -q` exiting
+        # early can't EPIPE us mid-loop. macOS bash-as-sh under `set -e`
+        # was tripping on broken-pipe in a piped while-loop.
+        _out="$(printf 'Files tagged "%s":\n' "$_filter_tag"
+            printf '%s\n' "$_matches" | while IFS= read -r _f; do
+                _rel="${_f#"$HIVE_DIR"/}"
+                printf '  %s\n' "$_rel"
+            done)"
+        printf '%s\n' "$_out"
         return 0
     fi
 
-    # Default: tag → count, sorted desc.
-    printf 'Tags in hive'
-    [ -n "$_filter_agent" ] && printf ' (agent=%s)' "$_filter_agent"
-    printf ':\n'
-    printf '%s\n' "$_records" \
-        | awk -F'\t' '{ print $1 }' \
+    # Default: tag → count, sorted desc. Same EPIPE-safe pattern as above —
+    # accumulate then print once.
+    _header="Tags in hive"
+    [ -n "$_filter_agent" ] && _header="$_header (agent=$_filter_agent)"
+    _body="$(printf '%s\n' "$_records" \
+        | awk -F'	' '{ print $1 }' \
         | sort | uniq -c | sort -rn \
-        | while read -r _c _t; do
-            printf '  %4d  %s\n' "$_c" "$_t"
-        done
+        | awk '{
+            count = $1
+            $1 = ""
+            sub(/^ /, "")
+            printf "  %4d  %s\n", count, $0
+        }')"
+    printf '%s:\n%s\n' "$_header" "$_body"
 }
 
 # --- dispatch ----------------------------------------------------------------
