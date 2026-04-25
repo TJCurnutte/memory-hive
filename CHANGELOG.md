@@ -6,6 +6,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **`memory-hive seed [--scenario <name>] [--dry-run] [--force]`** —
+  Populate a fresh hive with synthetic but realistic content so the
+  observability verbs (`tail`, `digest`, `confidence`, `stats`,
+  `query`) produce non-trivial output the moment a new user finishes
+  installing. Bundled scenarios: `default` (3-agent team — coder,
+  reviewer, researcher — with two weeks of activity, 9 raw learnings,
+  3 distilled files, populated DECISIONS.md and PROJECTS.md), `solo`
+  (1 agent), `large-team` (5 agents). Refuses to run against a
+  non-empty hive unless `--force` is set; `--dry-run` lists what
+  would be written. Date markers (`__DAYS_AGO_N__`) in the bundled
+  templates are substituted at seed time so the activity always
+  looks recent. Templates live under `templates/scenarios/<name>/`.
+
 ## [0.2.0] — 2026-04-24 — `multi-platform + curator loop`
 
 ### Added — Curator + observability verbs (11 new commands)
