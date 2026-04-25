@@ -1296,6 +1296,19 @@ Usage:
       grouped by file, ANSI-highlighted on a tty, exits 1 if no
       matches. Run \`memory-hive query --help\` for full flag docs.
 
+  memory-hive lint [--fix] [--strict] [<path>]
+      Validate every raw learning file's frontmatter + content against
+      the documented schema (HIVE_ARCHITECTURE.md). Reports issues with
+      file:level. Does NOT modify files unless --fix is set. Lint is
+      the gate that keeps signal high in the learning pool.
+        --fix      Auto-fix safe filename issues (uppercase ->
+                   lowercase, underscores -> dashes).
+        --strict   Treat warnings as errors (CI-friendly).
+      Exit codes: 0 clean, 1 warnings only, 2 errors. Examples:
+        memory-hive lint
+        memory-hive lint --strict
+        memory-hive lint hive/learnings/raw/coder/2026-04-23-foo.md
+
   memory-hive help
       Show this message.
 
@@ -3973,6 +3986,366 @@ $_line"
 }
 
 
+#   memory-hive lint [--fix] [--strict] [<path>]
+
+# --- lint --------------------------------------------------------------------
+#
+# Validate raw learning files under hive/learnings/raw/ against the schema
+# documented in HIVE_ARCHITECTURE.md and templates/memory-entry.md. Lint is
+# the gate that keeps signal high in the learning pool — without it,
+# frontmatter drifts and downstream curation breaks.
+#
+# Schema:
+#   - Frontmatter delimited by ---/---
+#   - Required: date (YYYY-MM-DD), agent, context, confidence (low|medium|high)
+#   - Filename: <YYYY-MM-DD>-<slug>.md  (slug is lowercase a-z 0-9 dashes)
+#   - First H1 ('# ...') present after frontmatter
+#   - Path matches: learnings/raw/<agent>/<file>.md  (agent in path == frontmatter)
+#   - File size cap: 50KB (HIVE_ARCHITECTURE.md hygiene rule)
+#
+# Output: one block per file with `<level>  <message>` rows. Tally line
+# at the end. Exit codes: 0 clean, 1 warnings only, 2 errors.
+
+# _mh_lint_one <abspath> <agent_from_path> <fix_flag>
+# Emits "<level>|<msg>" lines on stdout (errors and warnings only).
+# Updates counter files via env: $_LINT_ERR_FILE / $_LINT_WARN_FILE.
+_mh_lint_one() {
+    _f="$1"
+    _agent_path="$2"
+    _fix="$3"
+
+    # Single awk pass for structural extraction. Emits FM_<key>=<val> for
+    # any field=value lines inside the frontmatter, plus FM_OPEN, FM_CLOSE,
+    # H1 markers. Anything we don't understand is silently ignored.
+    _parsed="$(awk '
+        BEGIN { fm_open = 0; fm_close = 0; in_fm = 0; h1 = 0 }
+        NR == 1 {
+            if ($0 == "---") { in_fm = 1; fm_open = 1; next }
+        }
+        in_fm == 1 && NR > 1 {
+            if ($0 == "---") { in_fm = 0; fm_close = NR; next }
+            if (match($0, /^[A-Za-z_][A-Za-z0-9_-]*[[:space:]]*:[[:space:]]*/)) {
+                key = substr($0, 1, RLENGTH)
+                val = substr($0, RLENGTH + 1)
+                sub(/[[:space:]]*:[[:space:]]*$/, "", key)
+                klow = tolower(key)
+                sub(/[[:space:]]+$/, "", val)
+                if (substr(val,1,1) == "\"" && substr(val,length(val),1) == "\"") {
+                    val = substr(val, 2, length(val) - 2)
+                }
+                print "FM_" klow "=" val
+            }
+            next
+        }
+        in_fm == 0 && fm_open == 1 && h1 == 0 {
+            if (match($0, /^#[[:space:]]+/)) { h1 = NR; print "H1=" NR }
+        }
+        END {
+            print "FM_OPEN=" fm_open
+            print "FM_CLOSE=" fm_close
+        }
+    ' "$_f" 2>/dev/null)"
+
+    # Pluck values in a single awk pass. Field values may contain '=', so
+    # we match key by prefix and emit the rest verbatim. Eval'ing the
+    # output keeps us to one fork per file instead of seven.
+    _shvars="$(printf '%s\n' "$_parsed" | awk '
+        BEGIN { fopen=0; fclose=0; h1=""; fdate=""; fagent=""; fctx=""; fconf="" }
+        /^FM_OPEN=/  { fopen  = substr($0, 9) }
+        /^FM_CLOSE=/ { fclose = substr($0, 10) }
+        /^H1=/       { if (h1 == "") h1 = substr($0, 4) }
+        /^FM_date=/        { if (fdate  == "") fdate  = substr($0, 9) }
+        /^FM_agent=/       { if (fagent == "") fagent = substr($0, 10) }
+        /^FM_context=/     { if (fctx   == "") fctx   = substr($0, 12) }
+        /^FM_confidence=/  { if (fconf  == "") fconf  = substr($0, 15) }
+        END {
+            # Quote with single quotes; escape any embedded single quotes
+            # so eval is safe against frontmatter values containing quotes.
+            gsub(/'\''/, "'\''\\'\'\''", fdate)
+            gsub(/'\''/, "'\''\\'\'\''", fagent)
+            gsub(/'\''/, "'\''\\'\'\''", fctx)
+            gsub(/'\''/, "'\''\\'\'\''", fconf)
+            printf "_fm_open='\''%s'\''\n_fm_close='\''%s'\''\n_h1='\''%s'\''\n_fm_date='\''%s'\''\n_fm_agent='\''%s'\''\n_fm_context='\''%s'\''\n_fm_confidence='\''%s'\''\n", fopen, fclose, h1, fdate, fagent, fctx, fconf
+        }
+    ')"
+    eval "$_shvars"
+
+    # File size in bytes (portable across macOS + Linux).
+    _bytes="$(wc -c < "$_f" 2>/dev/null | tr -d ' ')"
+    [ -n "$_bytes" ] || _bytes=0
+
+    # 1. Frontmatter open/close
+    if [ "${_fm_open:-0}" != "1" ]; then
+        printf 'error|frontmatter: file does not start with `---`\n'
+    elif [ "${_fm_close:-0}" = "0" ]; then
+        printf 'error|frontmatter: missing closing `---`\n'
+    fi
+
+    # 2. Required fields (only meaningful if frontmatter opened — otherwise
+    # the earlier error already covers it).
+    if [ "${_fm_open:-0}" = "1" ]; then
+        for _req in date agent context confidence; do
+            eval "_val=\$_fm_$_req"
+            if [ -z "$_val" ]; then
+                printf 'error|frontmatter: missing required field `%s`\n' "$_req"
+            fi
+        done
+    fi
+
+    # 3. date YYYY-MM-DD parseable + month/day sanity
+    if [ -n "$_fm_date" ]; then
+        case "$_fm_date" in
+            [0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9])
+                _mm="$(printf '%s' "$_fm_date" | cut -c6-7)"
+                _dd="$(printf '%s' "$_fm_date" | cut -c9-10)"
+                if [ "$_mm" -lt 1 ] 2>/dev/null || [ "$_mm" -gt 12 ] 2>/dev/null \
+                   || [ "$_dd" -lt 1 ] 2>/dev/null || [ "$_dd" -gt 31 ] 2>/dev/null; then
+                    printf 'error|frontmatter: `date` not a valid YYYY-MM-DD (`%s`)\n' "$_fm_date"
+                fi
+                ;;
+            *)
+                printf 'error|frontmatter: `date` must be YYYY-MM-DD (got `%s`)\n' "$_fm_date"
+                ;;
+        esac
+    fi
+
+    # 4. agent matches parent dir name
+    if [ -n "$_fm_agent" ] && [ -n "$_agent_path" ]; then
+        if [ "$_fm_agent" != "$_agent_path" ]; then
+            printf 'error|frontmatter: `agent: %s` does not match parent directory `%s`\n' \
+                "$_fm_agent" "$_agent_path"
+        fi
+    fi
+
+    # 5. confidence in {low, medium, high}
+    if [ -n "$_fm_confidence" ]; then
+        case "$_fm_confidence" in
+            low|medium|high) ;;
+            *)
+                printf 'warn|frontmatter: `confidence` should be low|medium|high (got `%s`)\n' \
+                    "$_fm_confidence"
+                ;;
+        esac
+    fi
+
+    # 6. Filename convention
+    _base="$(basename "$_f")"
+    case "$_base" in
+        [0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]-*[a-z0-9]*.md) ;;
+        *)
+            if [ "$_fix" = "1" ]; then
+                _new_base="$(printf '%s' "$_base" \
+                    | tr '[:upper:]' '[:lower:]' \
+                    | tr '_' '-' \
+                    | sed -e 's/-\{2,\}/-/g')"
+                if [ "$_new_base" != "$_base" ]; then
+                    case "$_new_base" in
+                        [0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]-*[a-z0-9]*.md)
+                            _dir="$(dirname "$_f")"
+                            if [ ! -e "$_dir/$_new_base" ]; then
+                                if mv "$_f" "$_dir/$_new_base" 2>/dev/null; then
+                                    printf 'fixed|renamed `%s` -> `%s`\n' "$_base" "$_new_base"
+                                else
+                                    printf 'warn|filename does not match <YYYY-MM-DD>-<slug>.md (rename failed)\n'
+                                fi
+                            else
+                                printf 'warn|filename does not match <YYYY-MM-DD>-<slug>.md (auto-fix target `%s` already exists)\n' "$_new_base"
+                            fi
+                            ;;
+                        *)
+                            printf 'warn|filename does not match <YYYY-MM-DD>-<slug>.md convention\n'
+                            ;;
+                    esac
+                else
+                    printf 'warn|filename does not match <YYYY-MM-DD>-<slug>.md convention\n'
+                fi
+            else
+                printf 'warn|filename does not match <YYYY-MM-DD>-<slug>.md convention\n'
+            fi
+            ;;
+    esac
+
+    # 7. First H1 after frontmatter
+    if [ "${_fm_open:-0}" = "1" ] && [ -z "$_h1" ]; then
+        printf 'warn|content: no H1 (`# Title`) found after frontmatter\n'
+    fi
+
+    # 8. File size < 50KB (51200 bytes) — matches HIVE_ARCHITECTURE.md cap.
+    if [ "$_bytes" -ge 51200 ] 2>/dev/null; then
+        printf 'warn|file size %s bytes exceeds 50KB hygiene cap\n' "$_bytes"
+    fi
+
+    return 0
+}
+
+mh_lint() {
+    _mh_require_install
+
+    _fix=0
+    _strict=0
+    _explicit=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --fix)    _fix=1 ;;
+            --strict) _strict=1 ;;
+            -h|--help)
+                cat <<'LINTHELP'
+Usage: memory-hive lint [--fix] [--strict] [<path>]
+
+Validate every raw learning file's frontmatter + content against the
+documented schema. Reports issues with file:level — does not auto-fix
+unless --fix is set.
+
+Checks:
+  error  frontmatter delimiters present (--- / ---)
+  error  required fields: date, agent, context, confidence
+  error  date parseable as YYYY-MM-DD
+  error  agent matches the parent directory name
+  warn   confidence is one of low|medium|high
+  warn   filename matches <YYYY-MM-DD>-<slug>.md
+  warn   first H1 present after frontmatter
+  warn   file size under 50KB
+
+Flags:
+  --fix     Auto-fix safe issues (lowercase / underscore-to-dash in
+            filenames). Prints what was fixed.
+  --strict  Treat warnings as errors (exit 2 on any warning).
+
+Exit codes:
+  0  clean
+  1  warnings only
+  2  errors (or warnings under --strict)
+
+Examples:
+  memory-hive lint
+  memory-hive lint --strict
+  memory-hive lint --fix
+  memory-hive lint hive/learnings/raw/coder/2026-04-23-foo.md
+LINTHELP
+                return 0
+                ;;
+            -*)
+                printf 'Unknown flag: %s\n' "$1" >&2
+                return 2
+                ;;
+            *)
+                if [ -z "$_explicit" ]; then
+                    _explicit="$1"
+                else
+                    printf 'lint: only one path argument is supported\n' >&2
+                    return 2
+                fi
+                ;;
+        esac
+        shift
+    done
+
+    _raw_dir="$HIVE_DIR/learnings/raw"
+
+    _tmpdir="$(mktemp -d 2>/dev/null || mktemp -d -t mhlint)"
+    _list="$_tmpdir/files"
+    : > "$_list"
+    if [ -n "$_explicit" ]; then
+        if [ ! -f "$_explicit" ]; then
+            printf 'lint: file not found: %s\n' "$_explicit" >&2
+            rm -rf "$_tmpdir"
+            return 2
+        fi
+        printf '%s\n' "$_explicit" > "$_list"
+    elif [ -d "$_raw_dir" ]; then
+        # Sort for deterministic output across runs / filesystems.
+        find "$_raw_dir" -type f -name '*.md' \
+            ! -name 'README.md' ! -name '.*' \
+            2>/dev/null | LC_ALL=C sort > "$_list"
+    fi
+
+    if [ ! -s "$_list" ]; then
+        printf 'lint: no raw learning files to check.\n'
+        rm -rf "$_tmpdir"
+        return 0
+    fi
+
+    _LINT_ERR_FILE="$_tmpdir/errs"
+    _LINT_WARN_FILE="$_tmpdir/warns"
+    : > "$_LINT_ERR_FILE"
+    : > "$_LINT_WARN_FILE"
+
+    _files=0
+    _files_with_issues=0
+    _first_block=1
+    while IFS= read -r _f; do
+        [ -n "$_f" ] || continue
+        _files=$((_files + 1))
+
+        # Derive agent-from-path: only when file lives under raw/<agent>/.
+        # If the file sits directly under raw/ (no agent subdir), agent_path
+        # is empty and the agent-match check is skipped.
+        _agent_path=""
+        case "$_f" in
+            "$_raw_dir"/*/*)
+                _rest="${_f#"$_raw_dir"/}"
+                _agent_path="${_rest%%/*}"
+                ;;
+        esac
+
+        _out="$(_mh_lint_one "$_f" "$_agent_path" "$_fix")"
+        if [ -n "$_out" ]; then
+            _files_with_issues=$((_files_with_issues + 1))
+            # Tally per-issue: count error/warn lines emitted for this file.
+            _ne=$(printf '%s\n' "$_out" | grep -c '^error|' || true)
+            _nw=$(printf '%s\n' "$_out" | grep -c '^warn|'  || true)
+            [ -n "$_ne" ] || _ne=0
+            [ -n "$_nw" ] || _nw=0
+            printf '%s\n' "$_ne" >> "$_LINT_ERR_FILE"
+            printf '%s\n' "$_nw" >> "$_LINT_WARN_FILE"
+            # Display path: relative to install root if possible.
+            _disp="$_f"
+            case "$_f" in
+                "$INSTALL_DIR"/*) _disp="${_f#"$INSTALL_DIR"/}" ;;
+            esac
+            if [ "$_first_block" -eq 1 ]; then
+                _first_block=0
+            else
+                printf '\n'
+            fi
+            printf '%s\n' "$_disp"
+            printf '%s\n' "$_out" | while IFS='|' read -r _lvl _msg; do
+                [ -n "$_lvl" ] || continue
+                printf '  %-7s %s\n' "$_lvl" "$_msg"
+            done
+        fi
+    done < "$_list"
+
+    # Sum the per-file counts. awk handles the empty-file case cleanly.
+    _err_count="$(awk '{s+=$1} END{print s+0}' "$_LINT_ERR_FILE" 2>/dev/null)"
+    _warn_count="$(awk '{s+=$1} END{print s+0}' "$_LINT_WARN_FILE" 2>/dev/null)"
+    [ -n "$_err_count" ]  || _err_count=0
+    [ -n "$_warn_count" ] || _warn_count=0
+
+    if [ "$_files_with_issues" -gt 0 ]; then
+        printf '\n'
+    fi
+    _err_word="errors"; [ "$_err_count" = "1" ] && _err_word="error"
+    _warn_word="warnings"; [ "$_warn_count" = "1" ] && _warn_word="warning"
+    _file_word="files"; [ "$_files" = "1" ] && _file_word="file"
+    printf '%s %s, %s %s across %s %s.\n' \
+        "$_err_count" "$_err_word" "$_warn_count" "$_warn_word" "$_files" "$_file_word"
+
+    rm -rf "$_tmpdir"
+
+    if [ "$_err_count" -gt 0 ]; then
+        return 2
+    fi
+    if [ "$_warn_count" -gt 0 ]; then
+        if [ "$_strict" = "1" ]; then
+            return 2
+        fi
+        return 1
+    fi
+    return 0
+}
+
+
 # --- dispatch ----------------------------------------------------------------
 
 if [ $# -eq 0 ]; then
@@ -4005,6 +4378,7 @@ case "$_verb" in
     diff)     mh_diff "$@" ;;
     dedup)    mh_dedup "$@" ;;
     query|search) mh_query "$@" ;;
+    lint)     mh_lint "$@" ;;
     help|-h|--help) mh_help ;;
     *)
         printf 'Unknown command: %s\n\n' "$_verb" >&2

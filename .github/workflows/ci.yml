@@ -876,6 +876,106 @@ jobs:
           sh "$INSTALL_DIR/memory-hive" help | grep -q "memory-hive query"
           echo "Query smoke OK"
 
+
+      - name: Lint smoke — frontmatter schema validation
+        shell: bash
+        run: |
+          set -eu
+          INSTALL_DIR="$(mktemp -d)"
+          export MEMORY_HIVE_DIR="$INSTALL_DIR"
+          export MEMORY_HIVE_SKIP_CLAUDE_MD=1
+          export MEMORY_HIVE_REPO="$(pwd)"
+          sh install.sh < /dev/null > /dev/null 2>&1
+
+          RAW="$INSTALL_DIR/hive/learnings/raw"
+          mkdir -p "$RAW/coder" "$RAW/researcher"
+
+          # 1. Empty raw dir — lint must succeed (exit 0).
+          sh "$INSTALL_DIR/memory-hive" lint
+          echo "Empty lint OK"
+
+          # 2. Single good file — exit 0.
+          cat > "$RAW/coder/2026-04-23-good-entry.md" <<'GOOD'
+          ---
+          date: 2026-04-23
+          agent: coder
+          context: validating the lint feature itself
+          confidence: medium
+          ---
+
+          # A good entry
+
+          Body content.
+          GOOD
+          sh "$INSTALL_DIR/memory-hive" lint
+          echo "Good-file lint OK"
+
+          # 3. Bad file — must exit 2, must mention the right errors.
+          cat > "$RAW/coder/BadName_2026-04-23.md" <<'BAD'
+          ---
+          date: 2026-13-99
+          agent: researcher
+          context: malformed
+          ---
+
+          Body without H1.
+          BAD
+          cat > "$RAW/researcher/no-frontmatter.md" <<'NOFM'
+          # Title but no frontmatter
+          NOFM
+
+          set +e
+          sh "$INSTALL_DIR/memory-hive" lint > /tmp/mh-lint.log 2>&1
+          rc=$?
+          set -e
+          [ "$rc" -eq 2 ] || { echo "Bad-file lint should exit 2, got $rc"; cat /tmp/mh-lint.log; exit 1; }
+          grep -q "missing required field .confidence." /tmp/mh-lint.log || \
+              { echo "Did not flag missing confidence"; cat /tmp/mh-lint.log; exit 1; }
+          grep -q "agent: researcher.* does not match parent directory .coder." /tmp/mh-lint.log || \
+              { echo "Did not flag agent mismatch"; cat /tmp/mh-lint.log; exit 1; }
+          grep -q "file does not start with" /tmp/mh-lint.log || \
+              { echo "Did not flag missing frontmatter"; cat /tmp/mh-lint.log; exit 1; }
+          grep -q "errors,.*warnings across" /tmp/mh-lint.log || \
+              { echo "Tally line missing"; cat /tmp/mh-lint.log; exit 1; }
+          echo "Bad-file lint OK"
+
+          # 4. --strict on warnings-only must exit 2.
+          rm -f "$RAW/coder/BadName_2026-04-23.md" "$RAW/researcher/no-frontmatter.md"
+          # File with only a filename warning (otherwise valid frontmatter).
+          # Uppercase + underscores in the slug, but the date prefix is
+          # already correct so --fix can produce a conformant filename.
+          cat > "$RAW/coder/2026-04-23_Wrong_Name.md" <<'WARN'
+          ---
+          date: 2026-04-23
+          agent: coder
+          context: warning-only file
+          confidence: low
+          ---
+          # Title
+          WARN
+          set +e
+          sh "$INSTALL_DIR/memory-hive" lint > /tmp/mh-lint-w.log 2>&1
+          rc1=$?
+          sh "$INSTALL_DIR/memory-hive" lint --strict > /tmp/mh-lint-s.log 2>&1
+          rc2=$?
+          set -e
+          [ "$rc1" -eq 1 ] || { echo "Warnings-only lint should exit 1, got $rc1"; cat /tmp/mh-lint-w.log; exit 1; }
+          [ "$rc2" -eq 2 ] || { echo "--strict on warnings should exit 2, got $rc2"; cat /tmp/mh-lint-s.log; exit 1; }
+          echo "Strict-mode lint OK"
+
+          # 5. --fix should rename uppercase/underscore filenames in place.
+          sh "$INSTALL_DIR/memory-hive" lint --fix > /tmp/mh-lint-f.log 2>&1
+          test -f "$RAW/coder/2026-04-23-wrong-name.md" || \
+              { echo "--fix did not rename"; ls "$RAW/coder/"; cat /tmp/mh-lint-f.log; exit 1; }
+          test ! -f "$RAW/coder/2026-04-23_Wrong_Name.md" || \
+              { echo "--fix left the original file behind"; exit 1; }
+          grep -q "fixed.*renamed" /tmp/mh-lint-f.log || \
+              { echo "--fix did not log the rename"; cat /tmp/mh-lint-f.log; exit 1; }
+          # And after --fix the lint should be clean.
+          sh "$INSTALL_DIR/memory-hive" lint
+          echo "Fix-mode lint OK"
+
+          echo "Lint smoke OK"
       - name: Doctor smoke — multi-platform health check
         shell: bash
         run: |
