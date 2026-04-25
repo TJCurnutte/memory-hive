@@ -483,6 +483,321 @@ PLATS
     fi
 }
 
+# --- confidence: cluster raw learnings + suggest upgrades --------------------
+#
+# Walks $HIVE_DIR/learnings/raw/<agent>/*.md, extracts the `confidence:`
+# value from frontmatter and the first `# H1` heading after it, then
+# groups across agents by a normalized H1 (cluster key). For each
+# cluster, applies the upgrade rules from HIVE_ARCHITECTURE.md:
+#
+#   - 3+ low    → suggest UPGRADE TO MEDIUM
+#   - 3+ medium → suggest UPGRADE TO HIGH
+#   - 3+ high   → suggest PROMOTE TO distilled/
+#
+# This is suggest-only; the curator decides what to actually promote.
+# Files without a `confidence:` frontmatter line are listed at the end
+# so the user can run `memory-hive lint` (or fix them by hand).
+
+# _mh_confidence_extract <file>
+# Print one tab-separated record to stdout if the file has both a
+# `confidence:` value AND a normalized title; print nothing otherwise.
+# Format: <conf>\t<norm-title>\t<raw-title>\t<file>
+# Skips files where either field is missing — caller treats those as
+# "needs lint".
+_mh_confidence_extract() {
+    _f="$1"
+    [ -f "$_f" ] || return 0
+    awk '
+        BEGIN {
+            in_fm = 0; saw_fm = 0; fm_done = 0
+            conf = ""; title = ""
+        }
+        # Frontmatter is bracketed by --- on its own line. Only treat the
+        # opening fence if it is the very first line.
+        NR == 1 && /^---[[:space:]]*$/ { in_fm = 1; saw_fm = 1; next }
+        in_fm == 1 && /^---[[:space:]]*$/ { in_fm = 0; fm_done = 1; next }
+        in_fm == 1 {
+            # confidence: low|medium|high  (case-insensitive, tolerant of quotes)
+            if (tolower($0) ~ /^[[:space:]]*confidence[[:space:]]*:/) {
+                v = $0
+                sub(/^[^:]*:[[:space:]]*/, "", v)
+                gsub(/["\x27]/, "", v)         # strip quotes
+                sub(/[[:space:]]+$/, "", v)
+                sub(/[[:space:]].*$/, "", v)   # take first whitespace-bounded token
+                conf = tolower(v)
+            }
+            next
+        }
+        # First H1 outside frontmatter wins.
+        title == "" && /^#[[:space:]]+/ {
+            t = $0
+            sub(/^#+[[:space:]]+/, "", t)
+            sub(/[[:space:]]+$/, "", t)
+            title = t
+            # Do not exit — we still want to allow detecting either field
+            # in unusual orderings, but H1 should be the first heading.
+        }
+        END {
+            if (conf == "" || title == "") exit 0
+            # Normalize the title: lowercase, drop non-alnum (collapse to
+            # single spaces), trim. This is the cluster key.
+            norm = tolower(title)
+            gsub(/[^a-z0-9]+/, " ", norm)
+            sub(/^[[:space:]]+/, "", norm)
+            sub(/[[:space:]]+$/, "", norm)
+            if (norm == "") exit 0
+            # Validate confidence is one of the known levels.
+            if (conf != "low" && conf != "medium" && conf != "high") exit 0
+            printf "%s\t%s\t%s\n", conf, norm, title
+        }
+    ' "$_f"
+}
+
+# _mh_confidence_walk: emit one record per raw-learning file:
+#   <conf>\t<norm-title>\t<raw-title>\t<agent>\t<file>
+# OR (for files missing fields):
+#   __NEEDS_LINT__\t<file>
+_mh_confidence_walk() {
+    _root="$HIVE_DIR/learnings/raw"
+    [ -d "$_root" ] || return 0
+    for _agent_dir in "$_root"/*; do
+        [ -d "$_agent_dir" ] || continue
+        _agent="$(basename "$_agent_dir")"
+        # Iterate .md files directly under the agent dir.
+        for _f in "$_agent_dir"/*.md; do
+            [ -f "$_f" ] || continue
+            _rec="$(_mh_confidence_extract "$_f")"
+            if [ -z "$_rec" ]; then
+                printf '__NEEDS_LINT__\t%s\n' "$_f"
+                continue
+            fi
+            # _rec is "conf<TAB>norm<TAB>raw"; append agent + file.
+            printf '%s\t%s\t%s\n' "$_rec" "$_agent" "$_f"
+        done
+    done
+    # Also accept loose files directly under learnings/raw/ (no agent dir).
+    # The classify map calls these "unknown:raw" — group as agent="_loose".
+    for _f in "$_root"/*.md; do
+        [ -f "$_f" ] || continue
+        _rec="$(_mh_confidence_extract "$_f")"
+        if [ -z "$_rec" ]; then
+            printf '__NEEDS_LINT__\t%s\n' "$_f"
+            continue
+        fi
+        printf '%s\t_loose\t%s\n' "$_rec" "$_f"
+    done
+}
+
+mh_confidence() {
+    _mh_require_install
+
+    # Apply mode is a placeholder for now — print a notice and return.
+    # Curators promote raw → distilled by hand (or via a future verb);
+    # confidence's job is to surface candidates, not edit files.
+    case "${1:-}" in
+        --apply|--apply=*)
+            printf 'memory-hive confidence: --apply is not implemented yet.\n'
+            printf 'Review the suggestions below and promote files manually for now.\n\n'
+            ;;
+        -h|--help)
+            cat <<EOF
+Usage: memory-hive confidence
+
+Scan hive/learnings/raw/<agent>/*.md, cluster aligned observations by
+normalized title, and suggest upgrades when a cluster crosses an
+HIVE_ARCHITECTURE.md threshold:
+
+  - 3 aligned low     → UPGRADE TO MEDIUM
+  - 3 aligned medium  → UPGRADE TO HIGH
+  - 3 aligned high    → PROMOTE TO distilled/
+
+Suggest-only. Curator decides what to actually promote.
+EOF
+            return 0
+            ;;
+    esac
+
+    if [ -t 1 ]; then
+        _C_BOLD="$(printf '\033[1m')"
+        _C_DIM="$(printf '\033[2m')"
+        _C_RESET="$(printf '\033[0m')"
+        _C_AMBER="$(printf '\033[33m')"
+        _C_GREEN="$(printf '\033[32m')"
+        _C_RED="$(printf '\033[31m')"
+    else
+        _C_BOLD=""; _C_DIM=""; _C_RESET=""; _C_AMBER=""; _C_GREEN=""; _C_RED=""
+    fi
+
+    _root="$HIVE_DIR/learnings/raw"
+    if [ ! -d "$_root" ]; then
+        printf 'No raw learnings yet (%s does not exist).\n' "$_root"
+        return 0
+    fi
+
+    _scratch="$(mktemp -t mh-conf.XXXXXX)" || _mh_die "Could not create temp file"
+    _mh_confidence_walk > "$_scratch"
+
+    # Split out files that need linting (missing confidence: or missing H1).
+    _lint_list="$(awk -F'\t' '$1 == "__NEEDS_LINT__" { print $2 }' "$_scratch")"
+
+    # Header.
+    printf '\n%sMemory Hive — confidence upgrades%s\n' "$_C_BOLD" "$_C_RESET"
+    printf '%s──────────────────────────────────%s\n\n' "$_C_DIM" "$_C_RESET"
+
+    # Aggregate clusters: group by normalized title, count by confidence.
+    # awk emits one block per cluster sorted by total descending. Each
+    # block contains:
+    #    CLUSTER<TAB>norm<TAB>raw_title<TAB>low<TAB>med<TAB>high<TAB>total
+    #    FILE<TAB>conf<TAB>agent<TAB>file
+    #    ...
+    awk -F'\t' '
+        # Skip the lint records.
+        $1 == "__NEEDS_LINT__" { next }
+        {
+            conf  = $1
+            norm  = $2
+            raw   = $3
+            agent = $4
+            file  = $5
+            seen[norm]++
+            if (!(norm in raw_title)) raw_title[norm] = raw
+            cnt[norm "\t" conf]++
+            files[norm] = files[norm] file SUBSEP conf SUBSEP agent SUBSEP "\n"
+        }
+        END {
+            n = 0
+            for (k in seen) {
+                norms[n++] = k
+                tot[k] = (cnt[k "\tlow"]+0) + (cnt[k "\tmedium"]+0) + (cnt[k "\thigh"]+0)
+            }
+            # Sort cluster keys by descending total then ascending name.
+            for (i = 0; i < n; i++) {
+                for (j = i + 1; j < n; j++) {
+                    if (tot[norms[j]] > tot[norms[i]] \
+                        || (tot[norms[j]] == tot[norms[i]] && norms[j] < norms[i])) {
+                        t = norms[i]; norms[i] = norms[j]; norms[j] = t
+                    }
+                }
+            }
+            for (i = 0; i < n; i++) {
+                k = norms[i]
+                printf "CLUSTER\t%s\t%s\t%d\t%d\t%d\t%d\n", \
+                    k, raw_title[k], \
+                    (cnt[k "\tlow"]+0), (cnt[k "\tmedium"]+0), (cnt[k "\thigh"]+0), \
+                    tot[k]
+                # Emit per-file lines.
+                m = split(files[k], rows, "\n")
+                for (r = 1; r <= m; r++) {
+                    if (rows[r] == "") continue
+                    # rows[r] is "file<SUBSEP>conf<SUBSEP>agent<SUBSEP>"
+                    split(rows[r], parts, SUBSEP)
+                    # Emit FILE record as: <file>\t<conf>\t<agent>
+                    printf "FILE\t%s\t%s\t%s\n", parts[1], parts[2], parts[3]
+                }
+            }
+        }
+    ' "$_scratch" > "$_scratch.agg"
+
+    # Render. Track whether any cluster had a suggestion.
+    _had_suggestion=0
+    _cluster_total=0
+
+    while IFS=$(printf '\t') read -r _tag _a _b _c _d _e _f; do
+        case "$_tag" in
+            CLUSTER)
+                _cluster_total=$((_cluster_total + 1))
+                _norm="$_a"; _raw="$_b"
+                _low="$_c"; _med="$_d"; _high="$_e"; _tot="$_f"
+
+                # Decide the suggestion. Highest applicable threshold wins.
+                _suggestion=""
+                _rule=""
+                if [ "$_high" -ge 3 ]; then
+                    _suggestion="${_C_GREEN}PROMOTE TO distilled/${_C_RESET}"
+                    _rule="3+ aligned high → promotion-ready"
+                elif [ "$_med" -ge 3 ]; then
+                    _suggestion="${_C_AMBER}UPGRADE TO HIGH${_C_RESET}"
+                    _rule="3 aligned medium → high"
+                elif [ "$_low" -ge 3 ]; then
+                    _suggestion="${_C_AMBER}UPGRADE TO MEDIUM${_C_RESET}"
+                    _rule="3 aligned low → medium"
+                fi
+
+                # Tally line.
+                _tally=""
+                [ "$_low"  -gt 0 ] && _tally="${_tally}${_low} low"
+                if [ "$_med" -gt 0 ]; then
+                    [ -n "$_tally" ] && _tally="$_tally, "
+                    _tally="${_tally}${_med} medium"
+                fi
+                if [ "$_high" -gt 0 ]; then
+                    [ -n "$_tally" ] && _tally="$_tally, "
+                    _tally="${_tally}${_high} high"
+                fi
+
+                printf '"%s%s%s" — %s\n' "$_C_BOLD" "$_raw" "$_C_RESET" "$_tally"
+                if [ -n "$_suggestion" ]; then
+                    _had_suggestion=$((_had_suggestion + 1))
+                    printf '  → %s  %s(rule: %s)%s\n' "$_suggestion" "$_C_DIM" "$_rule" "$_C_RESET"
+                else
+                    # No threshold met — describe what's still needed at the
+                    # lowest non-empty bucket so the curator knows the gap.
+                    if [ "$_low" -gt 0 ]; then
+                        _need=$((3 - _low))
+                        printf '  → %sno upgrade yet%s  %s(needs %d more low to reach medium)%s\n' \
+                            "$_C_DIM" "$_C_RESET" "$_C_DIM" "$_need" "$_C_RESET"
+                    elif [ "$_med" -gt 0 ]; then
+                        _need=$((3 - _med))
+                        printf '  → %sno upgrade yet%s  %s(needs %d more medium to reach high)%s\n' \
+                            "$_C_DIM" "$_C_RESET" "$_C_DIM" "$_need" "$_C_RESET"
+                    else
+                        _need=$((3 - _high))
+                        printf '  → %sno upgrade yet%s  %s(needs %d more high to be promotion-ready)%s\n' \
+                            "$_C_DIM" "$_C_RESET" "$_C_DIM" "$_need" "$_C_RESET"
+                    fi
+                fi
+                printf '  Files:\n'
+                ;;
+            FILE)
+                # _a=file, _b=conf, _c=agent
+                _file_path="$_a"; _file_conf="$_b"; _file_agent="$_c"
+                # Display path relative to learnings/raw/ for readability.
+                _rel="${_file_path#"$HIVE_DIR"/learnings/raw/}"
+                printf '    %-50s %s(%s)%s\n' "$_rel" "$_C_DIM" "$_file_conf" "$_C_RESET"
+                ;;
+        esac
+    done < "$_scratch.agg"
+
+    if [ "$_cluster_total" -eq 0 ]; then
+        printf '(no clustered raw learnings found)\n'
+    else
+        printf '\n'
+    fi
+
+    # Lint reminder.
+    if [ -n "$_lint_list" ]; then
+        _lint_count=$(printf '%s\n' "$_lint_list" | grep -c .)
+        printf '%s%d file(s) skipped — missing `confidence:` frontmatter or `# H1` heading:%s\n' \
+            "$_C_RED" "$_lint_count" "$_C_RESET"
+        printf '%s\n' "$_lint_list" | while IFS= read -r _lf; do
+            [ -n "$_lf" ] || continue
+            _rel="${_lf#"$HIVE_DIR"/}"
+            printf '  %s\n' "$_rel"
+        done
+        printf '%sFix with: add `confidence: low|medium|high` to frontmatter and a `# Title` H1.%s\n\n' \
+            "$_C_DIM" "$_C_RESET"
+    fi
+
+    # Footer.
+    printf '%sSummary:%s %d cluster(s), %d upgrade suggestion(s).\n' \
+        "$_C_BOLD" "$_C_RESET" "$_cluster_total" "$_had_suggestion"
+    printf '%sCurator decides — re-run after promoting to recheck.%s\n\n' \
+        "$_C_DIM" "$_C_RESET"
+
+    rm -f "$_scratch" "$_scratch.agg"
+    return 0
+}
+
 # --- verbs -------------------------------------------------------------------
 
 mh_help() {
@@ -567,6 +882,12 @@ Usage:
         memory-hive promote hive/learnings/raw/coder/2026-04-23-x.md
         memory-hive promote raw/coder/x.md --into wins.md
         memory-hive promote raw/coder/x.md --title "Test isolation"
+  memory-hive confidence
+      Cluster raw learnings (hive/learnings/raw/<agent>/*.md) by
+      normalized title and suggest upgrades when a cluster crosses an
+      HIVE_ARCHITECTURE threshold (3 aligned low → medium, 3 aligned
+      medium → high, 3+ aligned high → promotion-ready). Suggest-only;
+      curator decides what to actually promote.
 
   memory-hive help
       Show this message.
@@ -1704,6 +2025,7 @@ case "$_verb" in
     watch)    mh_watch ;;
     tail)     mh_tail "$@" ;;
     promote)  mh_promote "$@" ;;
+    confidence) mh_confidence "$@" ;;
     help|-h|--help) mh_help ;;
     *)
         printf 'Unknown command: %s\n\n' "$_verb" >&2
