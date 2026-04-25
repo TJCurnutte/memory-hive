@@ -265,10 +265,322 @@ mh_register() {
     return 0
 }
 
+# mh_citations: walk every silo and build a directed citation graph
+# (citer -> cited). Renders the result into hive/registry/CITATIONS.md
+# inside an auto-generated managed block, and prints a summary to stdout.
+#
+# Citation forms recognized:
+#   1. Backtick-quoted agent name that matches another existing silo,
+#      e.g.  `coder`, `security-auditor`. Matches must be whole-word
+#      and must collide with a real silo to avoid false positives —
+#      stray backticked words like `git` or `awk` are ignored unless
+#      a `git` or `awk` silo actually exists.
+#   2. Relative markdown link crossing a silo boundary, e.g.
+#      [see X](../coder/log.md). Only counted when the path segment
+#      after `../` is another agent's silo name.
+#   3. Frontmatter `cites:` field at the top of a file —
+#      `cites: [coder, reviewer]` or `cites: coder, reviewer`. Forward-
+#      compatible: lets agents declare citations explicitly even when
+#      the prose form misses them.
+#
+# Output:
+#   - stdout: human-readable summary
+#   - hive/registry/CITATIONS.md: rewrites the auto-block (preserves
+#     anything outside the markers).
+#
+# Best-effort: returns 0 on a missing hive so callers can fire-and-forget.
+mh_citations() {
+    [ -d "$HIVE_DIR" ] || return 0
+    [ -d "$AGENTS_DIR" ] || return 0
+
+    _reg_dir="$HIVE_DIR/registry"
+    mkdir -p "$_reg_dir" 2>/dev/null || return 0
+    _reg_cit="$_reg_dir/CITATIONS.md"
+
+    _start_marker="<!-- memory-hive:citations:start -->"
+    _end_marker="<!-- memory-hive:citations:end -->"
+
+    # Build the silo allow-list (one name per line). A citation is only
+    # counted when both citer AND cited resolve to a real silo, which
+    # kills the "stray backticked English word" false-positive.
+    _silos_file="$_reg_dir/.cit-silos.$$"
+    _mh_list_silos | sort -u > "$_silos_file" 2>/dev/null || {
+        rm -f "$_silos_file"
+        return 0
+    }
+    if [ ! -s "$_silos_file" ]; then
+        rm -f "$_silos_file"
+        return 0
+    fi
+
+    # Walk every silo's relevant files and emit "<citer>\t<cited>\t<date>"
+    # records into a pairs file.
+    _pairs_file="$_reg_dir/.cit-pairs.$$"
+    : > "$_pairs_file"
+
+    while IFS= read -r _citer; do
+        [ -n "$_citer" ] || continue
+        _silo_dir="$AGENTS_DIR/$_citer"
+        [ -d "$_silo_dir" ] || continue
+
+        # Standard triplet + any .md under learnings/.
+        find "$_silo_dir" -type f \
+            \( -name 'log.md' -o -name 'context.md' -o -name 'memory.md' \
+               -o -path "$_silo_dir/learnings/*.md" \) \
+            2>/dev/null | while IFS= read -r _f; do
+            [ -f "$_f" ] || continue
+            _mt="$(_mh_mtime_epoch "$_f" 2>/dev/null)"
+            if [ -n "$_mt" ]; then
+                _fdate="$(_mh_fmt_date "$_mt")"
+            else
+                _fdate="????-??-??"
+            fi
+
+            awk -v citer="$_citer" -v silosfile="$_silos_file" -v fdate="$_fdate" '
+                BEGIN {
+                    while ((getline _s < silosfile) > 0) {
+                        if (_s != "") known[_s] = 1
+                    }
+                    close(silosfile)
+                    in_fm = 0
+                }
+                # YAML frontmatter: must start on line 1.
+                NR == 1 && /^---[[:space:]]*$/ { in_fm = 1; next }
+                in_fm == 1 && /^---[[:space:]]*$/ { in_fm = 0; next }
+                in_fm == 1 {
+                    if (match($0, /^[[:space:]]*cites[[:space:]]*:[[:space:]]*/)) {
+                        rest = substr($0, RSTART + RLENGTH)
+                        gsub(/[\[\]"]/, "", rest)
+                        n = split(rest, parts, /,/)
+                        for (i = 1; i <= n; i++) {
+                            cited = parts[i]
+                            gsub(/^[[:space:]]+|[[:space:]]+$/, "", cited)
+                            if (cited != "" && cited != citer && (cited in known)) {
+                                printf "%s\t%s\t%s\n", citer, cited, fdate
+                            }
+                        }
+                    }
+                    next
+                }
+
+                # Backticked agent names: scan each line for `<token>`
+                # whose token matches a real silo. Skip if the chars
+                # immediately outside the backticks are also backticks
+                # (i.e. inside a `` or ``` run).
+                {
+                    line = $0
+                    while (match(line, /`[a-z0-9][a-z0-9-]*`/)) {
+                        tok = substr(line, RSTART + 1, RLENGTH - 2)
+                        before_pos = RSTART - 1
+                        after_pos = RSTART + RLENGTH
+                        before_ch = (before_pos >= 1) ? substr(line, before_pos, 1) : ""
+                        after_ch = (after_pos <= length(line)) ? substr(line, after_pos, 1) : ""
+                        if (before_ch != "`" && after_ch != "`") {
+                            if (tok != citer && (tok in known)) {
+                                printf "%s\t%s\t%s\n", citer, tok, fdate
+                            }
+                        }
+                        line = substr(line, RSTART + RLENGTH)
+                    }
+                }
+
+                # Relative markdown links: ](../<agent>/...).
+                {
+                    line2 = $0
+                    while (match(line2, /\]\([^)]*\)/)) {
+                        # Save outer offsets BEFORE running the inner match.
+                        # awks match() clobbers RSTART/RLENGTH globally.
+                        outer_start = RSTART
+                        outer_len = RLENGTH
+                        link = substr(line2, outer_start + 2, outer_len - 3)
+                        if (match(link, /\.\.\/[a-z0-9][a-z0-9-]*\//)) {
+                            seg = substr(link, RSTART + 3, RLENGTH - 4)
+                            if (seg != citer && (seg in known)) {
+                                printf "%s\t%s\t%s\n", citer, seg, fdate
+                            }
+                        }
+                        line2 = substr(line2, outer_start + outer_len)
+                    }
+                }
+            ' "$_f" >> "$_pairs_file"
+        done
+    done < "$_silos_file"
+
+    # Aggregate pairs: count per (citer, cited) and keep max date.
+    _agg_file="$_reg_dir/.cit-agg.$$"
+    if [ -s "$_pairs_file" ]; then
+        awk -F'\t' '
+            {
+                key = $1 "\t" $2
+                count[key]++
+                if (!(key in maxdate) || $3 > maxdate[key]) maxdate[key] = $3
+            }
+            END {
+                for (k in count) {
+                    printf "%s\t%d\t%s\n", k, count[k], maxdate[k]
+                }
+            }
+        ' "$_pairs_file" | sort -t"$(printf '\t')" -k3,3nr -k1,1 -k2,2 > "$_agg_file"
+    else
+        : > "$_agg_file"
+    fi
+
+    # Per-agent totals.
+    _out_file="$_reg_dir/.cit-out.$$"
+    _in_file="$_reg_dir/.cit-in.$$"
+    if [ -s "$_agg_file" ]; then
+        awk -F'\t' '{ out[$1] += $3 } END { for (a in out) printf "%s\t%d\n", a, out[a] }' \
+            "$_agg_file" | sort -t"$(printf '\t')" -k2,2nr -k1,1 > "$_out_file"
+        awk -F'\t' '{ in_[$2] += $3 } END { for (a in in_) printf "%s\t%d\n", a, in_[a] }' \
+            "$_agg_file" | sort -t"$(printf '\t')" -k2,2nr -k1,1 > "$_in_file"
+    else
+        : > "$_out_file"
+        : > "$_in_file"
+    fi
+
+    _total=0
+    if [ -s "$_agg_file" ]; then
+        _total="$(awk -F'\t' '{ s += $3 } END { print s+0 }' "$_agg_file")"
+    fi
+    _agents_involved=0
+    if [ -s "$_out_file" ] || [ -s "$_in_file" ]; then
+        _agents_involved="$( { cut -f1 "$_out_file"; cut -f1 "$_in_file"; } | sort -u | wc -l | tr -d ' ')"
+    fi
+    _most_cited="-"
+    _most_cited_n=0
+    if [ -s "$_in_file" ]; then
+        _most_cited="$(head -n 1 "$_in_file" | cut -f1)"
+        _most_cited_n="$(head -n 1 "$_in_file" | cut -f2)"
+    fi
+    _most_citing="-"
+    _most_citing_n=0
+    if [ -s "$_out_file" ]; then
+        _most_citing="$(head -n 1 "$_out_file" | cut -f1)"
+        _most_citing_n="$(head -n 1 "$_out_file" | cut -f2)"
+    fi
+
+    # Build the auto-block.
+    _blk="$_reg_dir/.cit-blk.$$"
+    {
+        printf '%s\n' "$_start_marker"
+        printf '<!-- Auto-generated by `memory-hive citations`. Do not edit by hand. -->\n'
+        printf '\n'
+        printf '## Cross-agent citations\n\n'
+        if [ -s "$_agg_file" ]; then
+            printf '| Citer | Cited | Count | Most recent |\n'
+            printf '|---|---|---|---|\n'
+            sort -t"$(printf '\t')" -k3,3nr -k1,1 -k2,2 "$_agg_file" \
+                | while IFS="$(printf '\t')" read -r _ci _cd _ct _dt; do
+                    printf '| %s | %s | %s | %s |\n' "$_ci" "$_cd" "$_ct" "$_dt"
+                done
+        else
+            printf '_No cross-agent citations detected yet._\n'
+        fi
+        printf '\n'
+        printf '## Summary\n\n'
+        printf -- '- %s total citations across %s agents\n' "$_total" "$_agents_involved"
+        if [ "$_most_cited" != "-" ]; then
+            printf -- '- Most-cited: %s (%s incoming)\n' "$_most_cited" "$_most_cited_n"
+        fi
+        if [ "$_most_citing" != "-" ]; then
+            printf -- '- Most-citing: %s (%s outgoing)\n' "$_most_citing" "$_most_citing_n"
+        fi
+        printf '\n'
+        printf '%s\n' "$_end_marker"
+    } > "$_blk" 2>/dev/null || {
+        rm -f "$_blk" "$_silos_file" "$_pairs_file" "$_agg_file" "$_out_file" "$_in_file"
+        return 0
+    }
+
+    # Splice into CITATIONS.md, preserving everything outside the markers.
+    if [ -f "$_reg_cit" ] \
+        && grep -q -F "$_start_marker" "$_reg_cit" 2>/dev/null \
+        && grep -q -F "$_end_marker" "$_reg_cit" 2>/dev/null; then
+        _tmp="$_reg_cit.mhcit.$$"
+        awk -v start="$_start_marker" -v end="$_end_marker" -v blockfile="$_blk" '
+            BEGIN { inblock = 0 }
+            {
+                if (inblock == 0 && index($0, start) > 0) {
+                    while ((getline line < blockfile) > 0) print line
+                    close(blockfile)
+                    inblock = 1
+                    next
+                }
+                if (inblock == 1) {
+                    if (index($0, end) > 0) { inblock = 0 }
+                    next
+                }
+                print
+            }
+        ' "$_reg_cit" > "$_tmp" 2>/dev/null \
+            && mv "$_tmp" "$_reg_cit" 2>/dev/null \
+            || rm -f "$_tmp"
+    else
+        if [ ! -f "$_reg_cit" ]; then
+            {
+                printf '# Citation Graph\n\n'
+                printf 'Cross-agent citations across the hive. The block below is\n'
+                printf 'auto-generated from silo `log.md`, `context.md`, `memory.md`,\n'
+                printf 'and `learnings/*.md` files by `memory-hive citations`. Edit\n'
+                printf 'silo content, not this file.\n\n'
+                printf 'Citation forms recognized:\n'
+                printf -- '- Backtick-quoted agent name (`coder`, `reviewer`)\n'
+                printf -- '- Relative markdown link crossing a silo (`[see X](../coder/log.md)`)\n'
+                printf -- '- Frontmatter `cites:` list (forward-compatible)\n\n'
+                cat "$_blk"
+                printf '\n'
+            } > "$_reg_cit" 2>/dev/null || rm -f "$_reg_cit"
+        else
+            _tmp="$_reg_cit.mhcit.$$"
+            {
+                cat "$_reg_cit"
+                _last="$(tail -c 1 "$_reg_cit" 2>/dev/null || printf '')"
+                if [ "$_last" != "" ] && [ "$_last" != "
+" ]; then
+                    printf '\n'
+                fi
+                printf '\n'
+                cat "$_blk"
+                printf '\n'
+            } > "$_tmp" 2>/dev/null \
+                && mv "$_tmp" "$_reg_cit" 2>/dev/null \
+                || rm -f "$_tmp"
+        fi
+    fi
+
+    # Stdout summary.
+    printf 'Memory Hive — citations\n'
+    printf 'Hive: %s\n\n' "$HIVE_DIR"
+    if [ "$_total" -eq 0 ]; then
+        printf 'No cross-agent citations detected yet.\n'
+        printf '(Looked in: log.md, context.md, memory.md, learnings/*.md across %s silos.)\n' \
+            "$(wc -l < "$_silos_file" | tr -d ' ')"
+    else
+        printf 'Total citations: %s across %s agents\n' "$_total" "$_agents_involved"
+        if [ "$_most_cited" != "-" ]; then
+            printf 'Most-cited:     %s (%s incoming)\n' "$_most_cited" "$_most_cited_n"
+        fi
+        if [ "$_most_citing" != "-" ]; then
+            printf 'Most-citing:    %s (%s outgoing)\n' "$_most_citing" "$_most_citing_n"
+        fi
+        printf '\nTop edges:\n'
+        head -n 10 "$_agg_file" | while IFS="$(printf '\t')" read -r _ci _cd _ct _dt; do
+            printf '  %-20s -> %-20s  %s  (last: %s)\n' "$_ci" "$_cd" "$_ct" "$_dt"
+        done
+    fi
+    printf '\nWrote: %s\n' "$_reg_cit"
+
+    # Cleanup.
+    rm -f "$_silos_file" "$_pairs_file" "$_agg_file" "$_out_file" "$_in_file" "$_blk"
+    return 0
+}
+
 # _mh_register_quiet: swallow all output, never fail the caller. Used by the
-# other verbs as a best-effort hook.
+# other verbs as a best-effort hook. Also rebuilds the citation graph so
+# AGENTS.md and CITATIONS.md stay in sync from the same trigger.
 _mh_register_quiet() {
     mh_register >/dev/null 2>&1 || true
+    mh_citations >/dev/null 2>&1 || true
 }
 
 # mh_doctor: health-check the install. Prints findings and exits 0 if clean,
@@ -510,7 +822,13 @@ Usage:
   memory-hive register
       Regenerate hive/registry/AGENTS.md from the current silo contents.
       Runs automatically after add/archive/rename/role, so most users will
-      never call it directly.
+      never call it directly. Also rebuilds CITATIONS.md.
+
+  memory-hive citations
+      Scan every silo for cross-agent citations (backticked agent names,
+      relative markdown links, and frontmatter \`cites:\` lists) and
+      rewrite hive/registry/CITATIONS.md as a directed graph showing
+      who cites whom. Also fires from \`register\`.
 
   memory-hive doctor
       Health-check the install: verifies hive layout, silo triplets, the
@@ -1115,7 +1433,8 @@ case "$_verb" in
     archive)  mh_archive "$@" ;;
     role)     mh_role "$@" ;;
     rename)   mh_rename "$@" ;;
-    register) _mh_require_install; mh_register ;;
+    register) _mh_require_install; mh_register; mh_citations >/dev/null 2>&1 || true ;;
+    citations|cite) _mh_require_install; mh_citations ;;
     doctor)   mh_doctor "$@" ;;
     setup)    mh_setup ;;
     apply)    _mh_require_install; mh_apply "$@" ;;
