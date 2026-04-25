@@ -139,6 +139,60 @@ jobs:
           sh "$INSTALL_DIR/memory-hive" doctor
           echo "CLI smoke OK"
 
+      - name: CLI smoke — digest extracts content
+        shell: bash
+        run: |
+          set -eu
+          INSTALL_DIR="$(mktemp -d)"
+          export MEMORY_HIVE_DIR="$INSTALL_DIR"
+          export MEMORY_HIVE_SKIP_CLAUDE_MD=1
+          export MEMORY_HIVE_REPO="$(pwd)"
+          sh install.sh < /dev/null
+
+          # Empty hive in the default 24h window: digest must say
+          # "Nothing changed" (and exit 0).
+          sh "$INSTALL_DIR/memory-hive" digest > /tmp/mh-dig-empty.out 2>&1
+          grep -q "Nothing changed in this window" /tmp/mh-dig-empty.out
+
+          # Help mentions the digest verb.
+          sh "$INSTALL_DIR/memory-hive" help | grep -q "memory-hive digest"
+
+          # Sleep so the log mtime is strictly newer than the install
+          # baseline. Filesystems with second-granularity mtimes need this.
+          sleep 2
+
+          # Append a real dated entry to the main silo log. We use printf
+          # instead of a heredoc so the YAML "run: |" indent doesn't
+          # poison the heredoc body.
+          {
+              printf '# main — log\n\n'
+              printf '## 2026-04-24\n\n'
+              printf '- Smoke-test entry: digest should pick this line up.\n'
+          } > "$INSTALL_DIR/hive/agents/main/log.md"
+
+          # Default window (last 24h) must surface the entry.
+          sh "$INSTALL_DIR/memory-hive" digest > /tmp/mh-dig.out 2>&1
+          grep -q "main (1 write)" /tmp/mh-dig.out
+          grep -q "Smoke-test entry" /tmp/mh-dig.out
+          grep -q "Total: 1 write across 1 agent" /tmp/mh-dig.out
+
+          # --week alias works.
+          sh "$INSTALL_DIR/memory-hive" digest --week | grep -q "Smoke-test entry"
+
+          # --since YYYY-MM-DD parses on both GNU date and BSD date.
+          sh "$INSTALL_DIR/memory-hive" digest --since 2026-01-01 \
+            | grep -q "Smoke-test entry"
+
+          # Bad date is rejected with a clear error.
+          if sh "$INSTALL_DIR/memory-hive" digest --since notadate \
+              > /tmp/mh-dig-bad.out 2>&1; then
+              echo "Expected non-zero rc for bad --since" >&2
+              exit 1
+          fi
+          grep -q "Could not parse date" /tmp/mh-dig-bad.out
+
+          echo "Digest smoke OK"
+
       - name: Platform integration smoke — auto-inject
         shell: bash
         run: |
