@@ -213,7 +213,7 @@ conflict-resolution rules, see [HIVE_ARCHITECTURE.md](HIVE_ARCHITECTURE.md).
 ## CLI Verbs
 
 `memory-hive <verb>` is the single entry point. Run `memory-hive help` for
-the full reference. The verbs cluster into four categories:
+the full reference. The verbs cluster into three categories:
 
 **Lifecycle** — `add`, `list`, `archive`, `role`, `rename`, `register`,
 `setup`, `apply`, `doctor`, `seed`. Manage silos and keep the install
@@ -239,6 +239,7 @@ hive without `--force`.
 | `query <term> [--silo] [--kind] [--since]` | Grep every text surface of the hive |
 | `diff [--since <checkpoint\|date>]` | What changed since a reference point |
 | `checkpoint [--name <name>] \| --list` | Save a reference marker for later diffs |
+| `bundle [--for <agent>] [--max-tokens N]` | Concatenate canonical hive surfaces into one prompt-injection-ready blob |
 
 **Curator workflow** — close the loop from raw → distilled:
 
@@ -251,6 +252,9 @@ hive without `--force`.
 | `lint [--fix]` | Validate frontmatter schema |
 | `tag <file> <tag>` / `tags` | Tag learnings, see emerging topics |
 | `citations` | Build cross-agent citation graph |
+| `conflicts [--agent <name>] [--strict] [--write]` | Surface raw learnings that contradict each other |
+| `reflect <agent> [--days N] [--write]` | Agent self-reflection: distill recent log activity into memory.md themes |
+| `curate [--dry-run \| --apply]` | Autonomous one-pass curator: chains dedup → confidence → promote → lint → stale |
 
 Every verb is pure shell, ships a CI smoke test, and reads from the
 existing two-layer architecture without changing it.
@@ -315,7 +319,7 @@ them back out.
 
 ## Installation details
 
-The installer auto-detects 20+ agent platforms (Claude Code, OpenClaw,
+The installer auto-detects 23 agent platforms (Claude Code, OpenClaw,
 Cursor, Continue, Gemini CLI, Goose, Amazon Q, OpenHands, Roo, Kilo,
 Windsurf, Warp, Sourcegraph Amp, OpenAI Codex, OpenCode, and more) and
 wires a managed block into each platform's config file. See

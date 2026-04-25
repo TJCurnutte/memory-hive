@@ -73,11 +73,11 @@ They turn the curator loop from "agents write, human reviews" into
 
 ## [0.2.0] — 2026-04-24 — `multi-platform + curator loop`
 
-### Added — Curator + observability verbs (11 new commands)
+### Added — Curator + observability verbs (13 new commands)
 
-A wave of parallel feature work added ten new CLI verbs that close the loop
-between agent contributions and curator promotion. All are pure shell, all
-ship a CI smoke test, all read from the existing two-layer architecture
+A wave of parallel feature work added thirteen new CLI verbs that close the
+loop between agent contributions and curator promotion. All are pure shell,
+all ship a CI smoke test, all read from the existing two-layer architecture
 without changing it.
 
 - **`memory-hive tail [-n N] [--silo <name>] [--since <YYYY-MM-DD>]`** —
