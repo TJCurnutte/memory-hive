@@ -540,6 +540,14 @@ Usage:
       counter. Ctrl+C to exit. Uses fswatch or inotifywait if
       available; falls back to polling (5s).
 
+  memory-hive tail [-n <N>] [--silo <name>] [--since <YYYY-MM-DD>]
+      Show the N most recent hive writes with the key lines from each
+      (default N=10, cap 100). Like \`tail -f\` but for the hive — and
+      non-streaming: always exits after printing. Use \`watch\` for the
+      streaming view. Per-kind extraction: log/DECISIONS/CONFLICTS show
+      the newest dated heading + first paragraph; memory/context show
+      the tail; learnings show H1 + frontmatter.
+
   memory-hive help
       Show this message.
 
@@ -913,6 +921,273 @@ mh_watch() {
     fi
 }
 
+# --- tail: most-recent writes with content -----------------------------------
+#
+# `memory-hive tail` shows the N newest hive writes and, for each, the key
+# lines from the file. Different file kinds get different extraction:
+#   * log.md, DECISIONS.md, CONFLICTS.md  — newest "## YYYY-MM-DD" heading
+#                                           and the first paragraph under it
+#   * memory.md, context.md               — last ~10 non-blank lines
+#   * learnings (raw or distilled),       — first H1 + YAML frontmatter
+#     knowledge/*.md
+#   * anything else classifiable          — first H1 only
+#
+# Always exits after printing; `memory-hive watch` already covers streaming.
+
+# _mh_extract_dated_section <abspath>
+# Print the newest "## YYYY-MM-DD..." heading line and every following line up
+# to (but not including) the next blank line, the next "## " heading, or EOF.
+# Indented two spaces so the result nests under the file path in the listing.
+# Falls back to the first 5 non-blank, non-heading lines if no dated section.
+_mh_extract_dated_section() {
+    awk '
+        BEGIN { found = 0; phase = 0; n = 0 }
+        # phase 0 = before heading
+        # phase 1 = found heading, skipping leading blanks
+        # phase 2 = inside the first paragraph
+        # Newest dated heading: file convention is newest-first, so the first
+        # one we see wins.
+        found == 0 && /^## [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ {
+            found = 1
+            phase = 1
+            print "  " $0
+            next
+        }
+        phase == 1 {
+            # Bail on a new "## " heading immediately.
+            if ($0 ~ /^## /) { exit }
+            # Skip blank padding between heading and body.
+            if ($0 ~ /^[[:space:]]*$/) next
+            # First content line — start the body.
+            phase = 2
+            print "  " $0
+            n++
+            if (n >= 8) exit
+            next
+        }
+        phase == 2 {
+            # Stop at next "## " heading or a blank line (paragraph break).
+            if ($0 ~ /^## /) exit
+            if ($0 ~ /^[[:space:]]*$/) exit
+            print "  " $0
+            n++
+            if (n >= 8) exit
+        }
+    ' "$1"
+}
+
+# _mh_extract_tail_lines <abspath>
+# Print the last 10 non-blank lines of the file, indented two spaces. Used for
+# memory.md / context.md where the user is appending bullets and there is no
+# dated structure to anchor on.
+_mh_extract_tail_lines() {
+    awk '
+        { lines[NR] = $0 }
+        END {
+            start = NR - 30
+            if (start < 1) start = 1
+            kept = 0
+            # Walk forward from start; collect non-blank lines.
+            for (i = start; i <= NR; i++) {
+                if (lines[i] ~ /^[[:space:]]*$/) continue
+                buf[++kept] = lines[i]
+            }
+            first = kept - 9
+            if (first < 1) first = 1
+            for (i = first; i <= kept; i++) print "  " buf[i]
+        }
+    ' "$1"
+}
+
+# _mh_extract_learning <abspath>
+# Print YAML frontmatter (between leading --- / ---) plus the first H1 line.
+# Frontmatter is what tells the curator what the learning is about; the H1 is
+# the human-readable title. Both indented two spaces.
+_mh_extract_learning() {
+    awk '
+        BEGIN { fm = 0; fm_done = 0; h1_done = 0; line = 0 }
+        {
+            line++
+            if (line == 1 && $0 == "---") { fm = 1; print "  ---"; next }
+            if (fm == 1 && fm_done == 0) {
+                if ($0 == "---") { print "  ---"; fm_done = 1; next }
+                print "  " $0
+                next
+            }
+            if (h1_done == 0 && $0 ~ /^# /) {
+                print "  " $0
+                h1_done = 1
+                exit
+            }
+        }
+    ' "$1"
+}
+
+# _mh_extract_h1 <abspath>
+# Last-resort fallback: just the first H1.
+_mh_extract_h1() {
+    awk '/^# / { print "  " $0; exit }' "$1"
+}
+
+# _mh_extract_for_kind <kind> <abspath>
+# Dispatch to the right extractor based on the classifier kind. Falls back to
+# tail-lines when the dated extractor finds no heading (some log.md files do
+# not yet use the YYYY-MM-DD convention).
+_mh_extract_for_kind() {
+    _kind="$1"
+    _path="$2"
+    case "$_kind" in
+        log|decision|conflict|draft)
+            _out="$(_mh_extract_dated_section "$_path")"
+            if [ -z "$_out" ]; then
+                _mh_extract_tail_lines "$_path"
+            else
+                printf '%s\n' "$_out"
+            fi
+            ;;
+        memory|context)
+            _mh_extract_tail_lines "$_path"
+            ;;
+        raw|distilled|learning|knowledge)
+            _out="$(_mh_extract_learning "$_path")"
+            if [ -z "$_out" ]; then
+                _mh_extract_h1 "$_path"
+            else
+                printf '%s\n' "$_out"
+            fi
+            ;;
+        *)
+            _mh_extract_h1 "$_path"
+            ;;
+    esac
+}
+
+mh_tail() {
+    _mh_require_install
+
+    _count=10
+    _silo=""
+    _since_date=""
+    _since_epoch=0
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -n|--count)
+                shift
+                [ $# -gt 0 ] || _mh_die "-n/--count needs a value"
+                _count="$1"
+                shift
+                ;;
+            -n=*)   _count="${1#-n=}"; shift ;;
+            --count=*) _count="${1#--count=}"; shift ;;
+            --silo)
+                shift
+                [ $# -gt 0 ] || _mh_die "--silo needs a value"
+                _silo="$1"
+                shift
+                ;;
+            --silo=*) _silo="${1#--silo=}"; shift ;;
+            --since)
+                shift
+                [ $# -gt 0 ] || _mh_die "--since needs a value (YYYY-MM-DD)"
+                _since_date="$1"
+                shift
+                ;;
+            --since=*) _since_date="${1#--since=}"; shift ;;
+            -h|--help)
+                printf 'Usage: memory-hive tail [-n <N>] [--silo <name>] [--since <YYYY-MM-DD>]\n'
+                printf '  Show the N most recent hive writes with key content from each.\n'
+                printf '  Default N=10, cap 100. Always exits after printing.\n'
+                return 0
+                ;;
+            *)
+                _mh_die "Unknown argument: $1"
+                ;;
+        esac
+    done
+
+    # Validate count: positive integer, capped at 100.
+    case "$_count" in
+        ''|*[!0-9]*) _mh_die "-n/--count must be a positive integer (got: $_count)" ;;
+    esac
+    [ "$_count" -ge 1 ] || _mh_die "-n/--count must be >= 1"
+    [ "$_count" -le 100 ] || _count=100
+
+    # Validate / convert --since to epoch.
+    if [ -n "$_since_date" ]; then
+        case "$_since_date" in
+            [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
+            *) _mh_die "--since must be YYYY-MM-DD (got: $_since_date)" ;;
+        esac
+        _since_epoch="$(date -d "$_since_date 00:00:00" +%s 2>/dev/null \
+            || date -j -f '%Y-%m-%d %H:%M:%S' "$_since_date 00:00:00" +%s 2>/dev/null \
+            || printf '0')"
+        [ "$_since_epoch" -gt 0 ] || _mh_die "could not parse --since date: $_since_date"
+    fi
+
+    # Baseline (mirror mh_stats): exclude install-time scaffolding.
+    _baseline_file="$HIVE_DIR/.baseline-installed"
+    _baseline_mtime=0
+    if [ -f "$_baseline_file" ]; then
+        _baseline_mtime="$(_mh_mtime_epoch "$_baseline_file")"
+        [ -n "$_baseline_mtime" ] || _baseline_mtime=0
+    fi
+
+    # Build a sorted list of <mtime>\t<class>\t<path> for files that:
+    #   * classify (skips _archived, junk, etc.)
+    #   * are newer than baseline
+    #   * match --silo if given
+    #   * are on/after --since if given
+    _tmp="${TMPDIR:-/tmp}/mh-tail.$$"
+    _mh_hive_file_list | while IFS= read -r _f; do
+        _cls="$(_mh_classify "$_f")"
+        [ -n "$_cls" ] || continue
+        _who="${_cls%%:*}"
+        if [ -n "$_silo" ] && [ "$_who" != "$_silo" ]; then
+            continue
+        fi
+        _mt="$(_mh_mtime_epoch "$_f")"
+        [ -n "$_mt" ] || continue
+        if [ "$_baseline_mtime" -gt 0 ] && [ "$_mt" -le "$_baseline_mtime" ]; then
+            continue
+        fi
+        if [ "$_since_epoch" -gt 0 ] && [ "$_mt" -lt "$_since_epoch" ]; then
+            continue
+        fi
+        printf '%s\t%s\t%s\n' "$_mt" "$_cls" "$_f"
+    done | sort -nr | head -n "$_count" > "$_tmp"
+
+    # Header.
+    printf '\nMemory Hive — last %s writes' "$_count"
+    [ -n "$_silo" ] && printf ' (silo: %s)' "$_silo"
+    [ -n "$_since_date" ] && printf ' (since %s)' "$_since_date"
+    printf '\n'
+    printf '────────────────────────────\n\n'
+
+    if [ ! -s "$_tmp" ]; then
+        printf '  (no writes match)\n\n'
+        rm -f "$_tmp"
+        return 0
+    fi
+
+    # Render each row.
+    while IFS=$(printf '\t') read -r _mt _cls _f; do
+        [ -n "$_mt" ] || continue
+        _who="${_cls%%:*}"
+        _kind="${_cls##*:}"
+        _rel="${_f#"$HIVE_DIR"/}"
+        # Heading line: HH:MM:SS  agent  rel/path
+        printf '%s  %-10s %s\n' "$(_mh_fmt_time "$_mt")" "$_who" "$_rel"
+        # Body — capped at 8 indented lines so 100 entries does not blow the
+        # terminal. Extractors already self-cap; this is a hard ceiling.
+        _mh_extract_for_kind "$_kind" "$_f" | head -n 8
+        printf '\n'
+    done < "$_tmp"
+
+    rm -f "$_tmp"
+    return 0
+}
+
 mh_setup() {
     _mh_require_install
     _installer="$INSTALL_DIR/install.sh"
@@ -1121,6 +1396,7 @@ case "$_verb" in
     apply)    _mh_require_install; mh_apply "$@" ;;
     stats)    mh_stats ;;
     watch)    mh_watch ;;
+    tail)     mh_tail "$@" ;;
     help|-h|--help) mh_help ;;
     *)
         printf 'Unknown command: %s\n\n' "$_verb" >&2
