@@ -1309,6 +1309,18 @@ Usage:
         memory-hive lint --strict
         memory-hive lint hive/learnings/raw/coder/2026-04-23-foo.md
 
+  memory-hive digest [--today | --yesterday | --week | --since YYYY-MM-DD]
+      Human-readable summary of what changed in the hive over a time
+      window. Complements 'stats' (counts only) by extracting the
+      content of writes — newest log entry per silo, new raw learnings,
+      curator promotions, decisions added. Default window: last 24
+      hours. Examples:
+        memory-hive digest                    # last 24 hours
+        memory-hive digest --today
+        memory-hive digest --yesterday
+        memory-hive digest --week
+        memory-hive digest --since 2026-04-20
+
   memory-hive help
       Show this message.
 
@@ -4346,6 +4358,330 @@ LINTHELP
 }
 
 
+# --- digest ----------------------------------------------------------------
+#
+# `mh_digest` answers "what actually changed in the hive over the last
+# <window>?" — content, not counts. Pure shell, no LLM. Surface signals:
+#
+#   - silo log.md       → newest H2 heading + first non-empty content line
+#   - silo memory.md    → "touched, now NK" (size); we don't try to diff
+#                          bullets in POSIX (would need a baseline snapshot).
+#   - silo context.md   → same as memory.md
+#   - learnings/raw/<agent>/<file>.md → first H1 + key frontmatter line
+#   - learnings/distilled/*.md        → file name + section title
+#   - curator/DECISIONS.md            → most recent H3 heading
+#
+# All time math is portable (GNU date / BSD date / epoch arithmetic).
+
+# _mh_parse_since <YYYY-MM-DD> → epoch seconds for start-of-day, or empty + rc=1.
+# Suspend errexit while we probe both date dialects; the first probe always
+# fails on the dialect we're not on, and we do NOT want that failure to
+# escape the surrounding command substitution.
+_mh_parse_since() {
+    _ymd="$1"
+    set +e
+    _e="$(date -d "$_ymd 00:00:00" +%s 2>/dev/null)"
+    if [ -z "$_e" ]; then
+        _e="$(date -j -f '%Y-%m-%d %H:%M:%S' "$_ymd 00:00:00" +%s 2>/dev/null)"
+    fi
+    set -e
+    if [ -n "$_e" ]; then printf '%s' "$_e"; return 0; fi
+    return 1
+}
+
+# _mh_human_size <bytes> → "1.2KB" / "456B".
+_mh_human_size() {
+    _b="$1"
+    [ -n "$_b" ] || { printf '?B'; return 0; }
+    if [ "$_b" -lt 1024 ]; then
+        printf '%sB' "$_b"
+    else
+        awk -v b="$_b" 'BEGIN { printf "%.1fKB", b/1024 }'
+    fi
+}
+
+# _mh_file_size <path> → bytes (portable).
+_mh_file_size() {
+    stat -c %s "$1" 2>/dev/null \
+        || stat -f %z "$1" 2>/dev/null \
+        || wc -c < "$1" 2>/dev/null | tr -d ' '
+}
+
+# _mh_first_h2 <file> → newest "## ..." heading text, no leading "## ".
+_mh_first_h2() {
+    sed -n '/^## /{s/^## //;p;q;}' "$1" 2>/dev/null
+}
+
+# _mh_first_content_after_h2 <file> → first non-empty, non-heading line
+# following the newest H2. Strips bullet markers; truncates to ~80 chars.
+_mh_first_content_after_h2() {
+    awk '
+        /^## / { if (seen) exit; seen = 1; next }
+        seen && /^[[:space:]]*$/ { next }
+        seen && /^## / { exit }
+        seen { print; exit }
+    ' "$1" 2>/dev/null \
+        | sed 's/^[[:space:]]*[-*][[:space:]]*//; s/^[[:space:]]*//' \
+        | cut -c1-80
+}
+
+# _mh_first_h1 <file> → first "# ..." heading text.
+_mh_first_h1() {
+    sed -n '/^# /{s/^# //;p;q;}' "$1" 2>/dev/null
+}
+
+# _mh_frontmatter_field <file> <key> → value (trimmed).
+_mh_frontmatter_field() {
+    awk -v key="$2" '
+        BEGIN { in_fm = 0; first = 1 }
+        first && /^---[[:space:]]*$/ { in_fm = 1; first = 0; next }
+        first { exit }
+        in_fm && /^---[[:space:]]*$/ { exit }
+        in_fm {
+            i = index($0, ":")
+            if (i == 0) next
+            k = substr($0, 1, i-1)
+            v = substr($0, i+1)
+            sub(/^[[:space:]]+/, "", k); sub(/[[:space:]]+$/, "", k)
+            sub(/^[[:space:]]+/, "", v); sub(/[[:space:]]+$/, "", v)
+            if (k == key) { print v; exit }
+        }
+    ' "$1" 2>/dev/null
+}
+
+# _mh_relative_age <epoch_then> <epoch_now> → "2d ago" / "3h ago" / "just now".
+_mh_relative_age() {
+    _then="$1"; _now="$2"
+    _delta=$((_now - _then))
+    [ "$_delta" -lt 0 ] && _delta=0
+    if   [ "$_delta" -lt 60 ];     then printf 'just now'
+    elif [ "$_delta" -lt 3600 ];   then printf '%dm ago' $((_delta / 60))
+    elif [ "$_delta" -lt 86400 ];  then printf '%dh ago' $((_delta / 3600))
+    else                                printf '%dd ago' $((_delta / 86400))
+    fi
+}
+
+mh_digest() {
+    _mh_require_install
+    [ -d "$HIVE_DIR" ] || _mh_die "Hive directory missing: $HIVE_DIR"
+
+    _now="$(date +%s)"
+    _since=""
+    _label=""
+
+    # Helper: start-of-today epoch. Suspends errexit so the GNU/BSD probe
+    # races don't escape (see _mh_parse_since for the same pattern).
+    _today0_epoch() {
+        set +e
+        _t="$(date -d 'today 00:00:00' +%s 2>/dev/null)"
+        if [ -z "$_t" ]; then
+            _t="$(date -v0H -v0M -v0S +%s 2>/dev/null)"
+        fi
+        set -e
+        printf '%s' "$_t"
+    }
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --today)
+                _since="$(_today0_epoch)"
+                _label="today"
+                ;;
+            --yesterday)
+                _today0="$(_today0_epoch)"
+                _since=$((_today0 - 86400))
+                _label="yesterday"
+                ;;
+            --week)
+                _since=$((_now - 7 * 86400))
+                _label="last 7 days"
+                ;;
+            --since)
+                shift
+                [ -n "${1:-}" ] || _mh_die "--since needs a YYYY-MM-DD argument."
+                _since="$(_mh_parse_since "$1")" \
+                    || _mh_die "Could not parse date: $1 (expected YYYY-MM-DD)"
+                _label="since $1"
+                ;;
+            --since=*)
+                _arg="${1#--since=}"
+                _since="$(_mh_parse_since "$_arg")" \
+                    || _mh_die "Could not parse date: $_arg (expected YYYY-MM-DD)"
+                _label="since $_arg"
+                ;;
+            -h|--help)
+                printf 'Usage: memory-hive digest [--today|--yesterday|--week|--since YYYY-MM-DD]\n'
+                return 0
+                ;;
+            *)
+                _mh_die "Unknown digest flag: $1 (try --today, --yesterday, --week, --since)"
+                ;;
+        esac
+        shift
+    done
+
+    if [ -z "$_since" ]; then
+        _since=$((_now - 86400))
+        _label="last 24h"
+    fi
+
+    # Always honor the install baseline so installer scaffolding never appears.
+    _baseline_file="$HIVE_DIR/.baseline-installed"
+    _baseline_mtime=0
+    if [ -f "$_baseline_file" ]; then
+        _baseline_mtime="$(_mh_mtime_epoch "$_baseline_file")"
+        [ -n "$_baseline_mtime" ] || _baseline_mtime=0
+    fi
+
+    # Each line: <mtime>\t<agent>:<kind>\t<abspath>
+    _records="$(mktemp -t mh-digest.XXXXXX)"
+    _mh_hive_file_list | while IFS= read -r _f; do
+        _cls="$(_mh_classify "$_f")"
+        [ -n "$_cls" ] || continue
+        _mt="$(_mh_mtime_epoch "$_f")"
+        [ -n "$_mt" ] || continue
+        if [ "$_baseline_mtime" -gt 0 ] && [ "$_mt" -le "$_baseline_mtime" ]; then
+            continue
+        fi
+        [ "$_mt" -ge "$_since" ] || continue
+        printf '%s\t%s\t%s\n' "$_mt" "$_cls" "$_f"
+    done | sort -nr > "$_records"
+
+    _since_label="$(_mh_fmt_date "$_since") $(_mh_fmt_time "$_since")"
+    _ago="$(_mh_relative_age "$_since" "$_now")"
+    printf '\nMemory Hive — digest  (%s, since %s, %s)\n' \
+        "$_label" "$_since_label" "$_ago"
+    printf '──────────────────────────────────────────────────────\n'
+
+    if [ ! -s "$_records" ]; then
+        printf '\n  Nothing changed in this window.\n\n'
+        rm -f "$_records"
+        return 0
+    fi
+
+    # Ordered, unique list of agents (newest writer first).
+    _agents="$(awk -F'\t' '{
+        cls = $2
+        split(cls, parts, ":")
+        agent = parts[1]
+        if (!seen[agent]++) print agent
+    }' "$_records")"
+
+    _total_writes=0
+    _agent_count=0
+
+    for _agent in $_agents; do
+        _agent_count=$((_agent_count + 1))
+        _agent_lines="$(awk -F'\t' -v a="$_agent" '
+            { cls = $2; split(cls, p, ":"); if (p[1] == a) print }
+        ' "$_records")"
+        _writes="$(printf '%s\n' "$_agent_lines" | grep -c .)"
+        _total_writes=$((_total_writes + _writes))
+
+        if [ "$_writes" -eq 1 ]; then
+            printf '\n%s (1 write)\n' "$_agent"
+        else
+            printf '\n%s (%s writes)\n' "$_agent" "$_writes"
+        fi
+
+        printf '%s\n' "$_agent_lines" | while IFS=$(printf '\t') read -r _mt _cls _f; do
+            [ -n "$_mt" ] || continue
+            _kind="${_cls##*:}"
+            _rel="${_f#"$HIVE_DIR"/}"
+
+            case "$_kind" in
+                log)
+                    _h2="$(_mh_first_h2 "$_f")"
+                    _line="$(_mh_first_content_after_h2 "$_f")"
+                    if [ -n "$_line" ]; then
+                        printf '  log.md       · "%s"\n' "$_line"
+                    elif [ -n "$_h2" ]; then
+                        printf '  log.md       · newest entry: %s\n' "$_h2"
+                    else
+                        printf '  log.md       · touched (no dated entry yet)\n'
+                    fi
+                    ;;
+                memory)
+                    _sz="$(_mh_human_size "$(_mh_file_size "$_f")")"
+                    printf '  memory.md    · touched, now %s\n' "$_sz"
+                    ;;
+                context)
+                    _sz="$(_mh_human_size "$(_mh_file_size "$_f")")"
+                    printf '  context.md   · touched, now %s\n' "$_sz"
+                    ;;
+                learning)
+                    _h1="$(_mh_first_h1 "$_f")"
+                    if [ -n "$_h1" ]; then
+                        printf '  %s — %s\n' "$_rel" "$_h1"
+                    else
+                        printf '  %s — touched\n' "$_rel"
+                    fi
+                    ;;
+                raw)
+                    _h1="$(_mh_first_h1 "$_f")"
+                    _conf="$(_mh_frontmatter_field "$_f" confidence)"
+                    _ctx="$(_mh_frontmatter_field "$_f" context)"
+                    if [ -n "$_conf" ]; then
+                        printf '  %s — new  (confidence: %s)\n' "$_rel" "$_conf"
+                    else
+                        printf '  %s — new\n' "$_rel"
+                    fi
+                    [ -n "$_ctx" ] && printf '                 context: %s\n' "$_ctx"
+                    [ -z "$_h1" ] || printf '                 title:   %s\n' "$_h1"
+                    ;;
+                distilled)
+                    _name="$(basename "$_f" .md)"
+                    _h1="$(_mh_first_h1 "$_f")"
+                    if [ -n "$_h1" ]; then
+                        printf '  %s.md   · last promoted: %s\n' "$_name" "$_h1"
+                    else
+                        printf '  %s.md   · last promoted (this window)\n' "$_name"
+                    fi
+                    ;;
+                decision)
+                    _h="$(sed -n '/^### /{s/^### //;p;q;}' "$_f" 2>/dev/null)"
+                    if [ -n "$_h" ]; then
+                        printf '  DECISIONS.md · added "%s"\n' "$_h"
+                    else
+                        printf '  DECISIONS.md · touched\n'
+                    fi
+                    ;;
+                conflict)
+                    printf '  CONFLICTS.md · touched\n'
+                    ;;
+                draft)
+                    printf '  DRAFT.md     · touched\n'
+                    ;;
+                knowledge)
+                    _name="$(basename "$_f")"
+                    printf '  knowledge/%s · updated\n' "$_name"
+                    ;;
+                *)
+                    printf '  %s · %s\n' "$_rel" "$_kind"
+                    ;;
+            esac
+        done
+    done
+
+    # Tolerate SIGPIPE: users pipe `digest | grep -q ...` and the consumer
+    # closes early; with `set -e` we'd otherwise abort here on EPIPE.
+    {
+        if [ "$_total_writes" -eq 1 ] && [ "$_agent_count" -eq 1 ]; then
+            printf '\nTotal: 1 write across 1 agent.\n\n'
+        elif [ "$_total_writes" -eq 1 ]; then
+            printf '\nTotal: 1 write across %s agents.\n\n' "$_agent_count"
+        elif [ "$_agent_count" -eq 1 ]; then
+            printf '\nTotal: %s writes across 1 agent.\n\n' "$_total_writes"
+        else
+            printf '\nTotal: %s writes across %s agents.\n\n' \
+                "$_total_writes" "$_agent_count"
+        fi
+    } 2>/dev/null || :
+
+    rm -f "$_records"
+}
+
+
 # --- dispatch ----------------------------------------------------------------
 
 if [ $# -eq 0 ]; then
@@ -4379,6 +4715,7 @@ case "$_verb" in
     dedup)    mh_dedup "$@" ;;
     query|search) mh_query "$@" ;;
     lint)     mh_lint "$@" ;;
+    digest)   mh_digest "$@" ;;
     help|-h|--help) mh_help ;;
     *)
         printf 'Unknown command: %s\n\n' "$_verb" >&2
