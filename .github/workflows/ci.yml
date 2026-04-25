@@ -1037,6 +1037,160 @@ jobs:
 
           echo "Digest smoke OK"
 
+      - name: CLI smoke — curate autonomous loop
+        shell: bash
+        run: |
+          set -eu
+          INSTALL_DIR="$(mktemp -d)"
+          export MEMORY_HIVE_DIR="$INSTALL_DIR"
+          export MEMORY_HIVE_SKIP_CLAUDE_MD=1
+          export MEMORY_HIVE_REPO="$(pwd)"
+          sh install.sh < /dev/null > /dev/null
+
+          # Help text references the verb.
+          sh "$INSTALL_DIR/memory-hive" help | grep -q "memory-hive curate" || \
+              { echo "help missing curate entry"; exit 1; }
+
+          # Sleep so seeded files have mtimes strictly after the install
+          # baseline marker (some CI runners finish install in <1s).
+          sleep 2
+
+          # Seed three aligned high-confidence raw learnings under three
+          # different agents with the same normalized H1. dedup must
+          # cluster them; confidence must mark them PROMOTE TO distilled/;
+          # curate (apply mode) must promote one of them.
+          RAW="$INSTALL_DIR/hive/learnings/raw"
+          mkdir -p "$RAW/coder" "$RAW/reviewer" "$RAW/researcher"
+
+          cat > "$RAW/coder/2026-04-23-test-isolation.md" <<'CR'
+          ---
+          date: 2026-04-23
+          agent: coder
+          context: parallel test workers leak DB state
+          confidence: high
+          ---
+
+          # Test isolation parallel
+
+          Function-scoped fixtures fix it. Confirmed across many repos.
+          CR
+
+          cat > "$RAW/reviewer/2026-04-24-flaky-tests.md" <<'RV'
+          ---
+          date: 2026-04-24
+          agent: reviewer
+          context: flaky tests under -n auto
+          confidence: high
+          ---
+
+          # Test Isolation, Parallel!
+
+          Same flake, same fix. Multiple confirmations.
+          RV
+
+          cat > "$RAW/researcher/2026-04-24-parallel-fix.md" <<'RS'
+          ---
+          date: 2026-04-24
+          agent: researcher
+          context: parallel fix
+          confidence: high
+          ---
+
+          # test-isolation parallel
+
+          Confirmed across repos. High confidence.
+          RS
+
+          # --- dry-run mode --------------------------------------------------
+          sh "$INSTALL_DIR/memory-hive" curate > /tmp/mh-curate.out 2>&1
+          cat /tmp/mh-curate.out
+
+          # Header lines for every step must appear.
+          grep -q "memory-hive curate (dry-run)" /tmp/mh-curate.out || \
+              { echo "missing dry-run header"; exit 1; }
+          grep -q "1. dedup" /tmp/mh-curate.out  || { echo "missing dedup step"; exit 1; }
+          grep -q "2. confidence" /tmp/mh-curate.out || { echo "missing confidence step"; exit 1; }
+          grep -q "3. promotions" /tmp/mh-curate.out || { echo "missing promotions step"; exit 1; }
+          grep -q "4. lint --strict" /tmp/mh-curate.out || { echo "missing lint step"; exit 1; }
+          grep -q "5. stale" /tmp/mh-curate.out  || { echo "missing stale step"; exit 1; }
+          grep -q "summary" /tmp/mh-curate.out   || { echo "missing summary"; exit 1; }
+
+          # Step 2 must classify the cluster as promotion-ready.
+          grep -q "PROMOTE TO distilled" /tmp/mh-curate.out || \
+              { echo "promotion-ready cluster not detected by confidence"; exit 1; }
+
+          # Step 3 must offer at least one suggested promotion.
+          grep -q "suggest: memory-hive promote" /tmp/mh-curate.out || \
+              { echo "step 3 did not suggest a promotion"; exit 1; }
+
+          # Summary line must include all four metrics.
+          grep -qE "[0-9]+ clusters need attention, [0-9]+ promotions ready, [0-9]+ lint violations, [0-9]+ stale items" \
+              /tmp/mh-curate.out || \
+              { echo "summary line malformed"; cat /tmp/mh-curate.out; exit 1; }
+
+          # promotions ready must be >= 1 in dry-run.
+          ready_n="$(awk '/promotions ready/ { for (i=1;i<=NF;i++) if ($i=="promotions") { print $(i-1); exit } }' /tmp/mh-curate.out)"
+          [ "$ready_n" -ge 1 ] || { echo "expected ready >=1, got $ready_n"; exit 1; }
+
+          # Dry-run must NOT have written distilled or DECISIONS entries.
+          # The installer scaffolds distilled/patterns.md and DECISIONS.md
+          # already, so we snapshot byte-size and content rather than
+          # checking for file absence.
+          DISTILLED_DIR="$INSTALL_DIR/hive/learnings/distilled"
+          DECISIONS="$INSTALL_DIR/hive/curator/DECISIONS.md"
+          PATTERNS_BYTES_BEFORE="$(wc -c < "$DISTILLED_DIR/patterns.md" 2>/dev/null || echo 0)"
+          if grep -q "Promoted .learnings/raw" "$DECISIONS" 2>/dev/null; then
+              echo "FAIL: dry-run appended a Promoted entry to DECISIONS.md"
+              exit 1
+          fi
+          # Stash for post-apply byte-comparison.
+          echo "$PATTERNS_BYTES_BEFORE" > /tmp/mh-curate-bytes-before
+          echo "Curate dry-run OK"
+
+          # --- apply mode ----------------------------------------------------
+          sh "$INSTALL_DIR/memory-hive" curate --apply > /tmp/mh-curate-apply.out 2>&1
+          cat /tmp/mh-curate-apply.out
+
+          grep -q "memory-hive curate (apply)" /tmp/mh-curate-apply.out || \
+              { echo "missing apply header"; exit 1; }
+          grep -q "applying: memory-hive promote" /tmp/mh-curate-apply.out || \
+              { echo "apply mode did not run promote"; exit 1; }
+          grep -q "promoted." /tmp/mh-curate-apply.out || \
+              { echo "apply mode did not log success"; exit 1; }
+
+          # Distilled file must now exist AND have grown in bytes.
+          test -f "$DISTILLED_DIR/patterns.md" || \
+              { echo "FAIL: apply did not write distilled/patterns.md"; \
+                ls -la "$DISTILLED_DIR" 2>/dev/null || true; exit 1; }
+          PATTERNS_BYTES_AFTER="$(wc -c < "$DISTILLED_DIR/patterns.md")"
+          PATTERNS_BYTES_BEFORE="$(cat /tmp/mh-curate-bytes-before)"
+          [ "$PATTERNS_BYTES_AFTER" -gt "$PATTERNS_BYTES_BEFORE" ] || \
+              { echo "FAIL: distilled/patterns.md unchanged after apply (was $PATTERNS_BYTES_BEFORE, now $PATTERNS_BYTES_AFTER)"; exit 1; }
+          # And it must reference the title.
+          grep -qi "Test isolation" "$DISTILLED_DIR/patterns.md" || \
+              { echo "FAIL: distilled/patterns.md missing expected title"; \
+                cat "$DISTILLED_DIR/patterns.md"; exit 1; }
+
+          # DECISIONS.md must have a Promoted entry from this run.
+          test -f "$DECISIONS" || \
+              { echo "FAIL: DECISIONS.md not created by apply"; exit 1; }
+          grep -q "Promoted .learnings/raw" "$DECISIONS" || \
+              { echo "FAIL: DECISIONS.md missing Promoted entry"; \
+                cat "$DECISIONS"; exit 1; }
+
+          # Summary in apply mode must include "applied" count.
+          grep -qE "promotions ready \([0-9]+ applied\)" /tmp/mh-curate-apply.out || \
+              { echo "apply summary missing applied count"; exit 1; }
+
+          # Bad flag rejected.
+          set +e
+          sh "$INSTALL_DIR/memory-hive" curate --bogus > /tmp/mh-curate-bad.out 2>&1
+          rc=$?
+          set -e
+          [ "$rc" -ne 0 ] || { echo "expected nonzero on --bogus, got 0"; exit 1; }
+
+          echo "Curate apply OK"
+
       - name: Doctor smoke — multi-platform health check
         shell: bash
         run: |
