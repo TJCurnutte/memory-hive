@@ -1321,6 +1321,21 @@ Usage:
         memory-hive digest --week
         memory-hive digest --since 2026-04-20
 
+  memory-hive reflect <agent> [--days N] [--write] [--raw] [--dry-run]
+      Self-reflection. Read <agent>'s log.md, distill the entries from
+      the last N days (default 7) into a memory.md addendum that
+      surfaces recurring themes (words appearing in 3+ entries score
+      as patterns). Default mode is dry-run: prints the proposed
+      addendum and writes nothing. --write appends to the agent's
+      memory.md; --raw also drops a raw learning under
+      learnings/raw/<agent>/ for the curator to promote. Lets agents
+      close their own loop without waiting on the curator.
+      Examples:
+        memory-hive reflect coder
+        memory-hive reflect coder --days 14
+        memory-hive reflect coder --write
+        memory-hive reflect coder --write --raw
+
   memory-hive help
       Show this message.
 
@@ -4461,6 +4476,326 @@ _mh_relative_age() {
     fi
 }
 
+# mh_reflect <agent> [--days N] [--write] [--raw] [--dry-run]
+#
+# Self-reflection verb: read the agent's log.md, slice it down to the entries
+# inside a time window (default last 7 days), find recurring themes via a
+# pure-awk word-frequency pass over the entry bodies, and print a proposed
+# memory.md addendum.
+#
+# Theme detection (no TF-IDF lib, no Python):
+#   * Each "## YYYY-MM-DD" heading anchors one ENTRY. Body = every non-blank
+#     line under it until the next H2 / EOF.
+#   * Tokenize body words: lowercase, strip non-[a-z0-9-], drop stopwords +
+#     anything shorter than 4 chars.
+#   * For each token, count the number of DISTINCT entries it appears in
+#     (capped at one hit per entry — a single noisy entry that uses the
+#     same word 12 times is not a "pattern", three different entries each
+#     using it once IS a pattern).
+#   * Words that appear in >=3 distinct entries score as recurring themes.
+#   * Top 5 themes (by entry-count desc, then alphabetically) become bullets.
+#   * Each bullet cites the dated H2 headings from the entries that
+#     surfaced the theme — closes the loop back to the log.
+#
+# Default mode: dry-run (print proposed addendum only, never write).
+#   --write : append the addendum to the agent's memory.md
+#   --raw   : also write a raw learning under learnings/raw/<agent>/<date>-reflect-<slug>.md
+#             so the curator can promote it (or not) on its own schedule.
+mh_reflect() {
+    _mh_require_install
+
+    _agent=""
+    _days=7
+    _write=0
+    _raw=0
+    _dry_run=0
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --days)
+                shift
+                [ $# -gt 0 ] || _mh_die "--days needs a value"
+                _days="$1"
+                shift
+                ;;
+            --days=*) _days="${1#--days=}"; shift ;;
+            --write)   _write=1;   shift ;;
+            --raw)     _raw=1;     shift ;;
+            --dry-run) _dry_run=1; shift ;;
+            -h|--help)
+                printf 'Usage: memory-hive reflect <agent> [--days N] [--write] [--raw] [--dry-run]\n'
+                printf '  Distill the agent'\''s recent log entries into a memory.md\n'
+                printf '  addendum + (optionally) a raw learning. Default mode is\n'
+                printf '  dry-run; pass --write to actually append, --raw to also\n'
+                printf '  drop a learning under learnings/raw/<agent>/.\n'
+                printf '  Default window: 7 days. Use --days N to override.\n'
+                return 0
+                ;;
+            --) shift; break ;;
+            -*)
+                _mh_die "Unknown flag: $1 (try --days N, --write, --raw, --dry-run)"
+                ;;
+            *)
+                if [ -z "$_agent" ]; then
+                    _agent="$1"
+                else
+                    _mh_die "Unexpected argument: $1"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    [ -n "$_agent" ] || _mh_die "reflect: missing <agent> argument (try memory-hive reflect --help)"
+
+    case "$_days" in
+        ''|*[!0-9]*) _mh_die "--days must be a positive integer (got: $_days)" ;;
+    esac
+    [ "$_days" -ge 1 ] || _mh_die "--days must be >= 1"
+
+    _silo="$HIVE_DIR/agents/$_agent"
+    [ -d "$_silo" ] || _mh_die "no silo at $_silo (try: memory-hive list)"
+    _log="$_silo/log.md"
+    [ -f "$_log" ] || _mh_die "no log.md for agent: $_agent"
+
+    # Compute the window's lower bound as YYYY-MM-DD. We compare H2 dates
+    # lexically (ISO-8601 sorts correctly as text), no need for epoch math
+    # in the hot loop. set +e to keep the date-dialect probe from escaping
+    # the shell under set -e.
+    set +e
+    _since_ymd="$(date -d "$_days days ago" '+%Y-%m-%d' 2>/dev/null)"
+    if [ -z "$_since_ymd" ]; then
+        _since_ymd="$(date -v-"${_days}"d '+%Y-%m-%d' 2>/dev/null)"
+    fi
+    _today_ymd="$(date '+%Y-%m-%d' 2>/dev/null)"
+    set -e
+    [ -n "$_since_ymd" ] || _mh_die "could not compute --days window"
+    [ -n "$_today_ymd" ] || _mh_die "could not compute today's date"
+
+    # _mh_extract_for_kind dispatches on the classifier kind — we only need
+    # the dated extractor's underlying parser anyway, but the surface this
+    # verb shows the user is bigger than tail's "newest entry only" view, so
+    # roll our own awk pass below. Mirrors _mh_extract_dated_section's
+    # H2-detection regex exactly.
+
+    _entries_tsv="$(mktemp -t mh-reflect-entries.XXXXXX)"
+    _bodies_tsv="$(mktemp -t mh-reflect-bodies.XXXXXX)"
+    # Cleanup hook — even on early die.
+    # shellcheck disable=SC2064
+    trap "rm -f '$_entries_tsv' '$_bodies_tsv'" EXIT
+
+    # Pass 1: emit "<date>\t<heading>" per H2 in window, AND
+    # for body lines emit "<date>\t<line>" into the bodies file.
+    # Scoped by since_ymd <= date <= today_ymd.
+    awk -v since="$_since_ymd" -v today="$_today_ymd" \
+        -v entries="$_entries_tsv" -v bodies="$_bodies_tsv" '
+        BEGIN { cur = ""; in_body = 0 }
+        # H2 with explicit YYYY-MM-DD prefix.
+        /^## [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ {
+            line = $0
+            sub(/^## /, "", line)
+            # Take the first 10 chars as the date.
+            date = substr(line, 1, 10)
+            if (date >= since && date <= today) {
+                cur = date
+                printf "%s\t%s\n", date, line >> entries
+                in_body = 1
+            } else {
+                cur = ""
+                in_body = 0
+            }
+            next
+        }
+        # New section starts — reset.
+        /^## / { cur = ""; in_body = 0; next }
+        # Body line for the current in-window entry.
+        in_body == 1 {
+            if ($0 ~ /^[[:space:]]*$/) next
+            printf "%s\t%s\n", cur, $0 >> bodies
+        }
+    ' "$_log"
+
+    if [ ! -s "$_entries_tsv" ]; then
+        printf '\nMemory Hive — reflect (%s)\n' "$_agent"
+        printf 'Window: %s through %s (%s days)\n' "$_since_ymd" "$_today_ymd" "$_days"
+        printf '\n  No log entries in window. Nothing to reflect on.\n\n'
+        rm -f "$_entries_tsv" "$_bodies_tsv"
+        trap - EXIT
+        return 0
+    fi
+
+    _entry_count="$(awk -F'\t' '{ if (!seen[$1]++) c++ } END { print c+0 }' "$_entries_tsv")"
+
+    # Pass 2: word-frequency. For each (date, body line), tokenize words.
+    # Track DISTINCT-entry hits per word (one credit per entry, no matter
+    # how many times the word appears in that entry). Stopwords + 4-char
+    # minimum keep noise out. Output: "<entry_hits>\t<word>\t<csv-of-dates>"
+    # for words with entry_hits >= 3, sorted by hits desc, then by word.
+    _themes_tsv="$(mktemp -t mh-reflect-themes.XXXXXX)"
+    awk -F'\t' -v stop=" the and for with that this from have was were will been being into onto upon over under above below very just much more most some such what when where which while these those they them their then than also like only after before about because would could should might must between among around through across without within still even both each your yours mine ours theirs whose whom does done doing here there shall same self made make made take takes took give gives gave used uses using does goes went come came back work works year days year week have had has didnt isnt arent wont cant dont " '
+        # tokenize <text> into the GLOBAL `seenword[]` for the current entry.
+        # We use a global because awk function locals are param-list-only and
+        # cross-block sharing is the easier pattern in pure POSIX awk.
+        function tokenize(text,    a, n, i, w) {
+            n = split(tolower(text), a, /[^a-z0-9-]+/)
+            for (i = 1; i <= n; i++) {
+                w = a[i]
+                # Strip stray dashes at edges.
+                sub(/^-+/, "", w); sub(/-+$/, "", w)
+                if (length(w) < 4) continue
+                # Number-only tokens are not themes.
+                if (w ~ /^[0-9-]+$/) continue
+                if (index(stop, " " w " ") > 0) continue
+                seenword[w] = 1
+            }
+        }
+        {
+            date = $1
+            line = $2
+            tokenize(line)
+            for (w in seenword) {
+                key = date SUBSEP w
+                if (!entryseen[key]++) {
+                    hits[w]++
+                    dates[w] = (dates[w] == "" ? date : dates[w] "," date)
+                }
+            }
+            # Reset per-line accumulator (we credit per-entry below the line
+            # via entryseen[date,word], so per-line reset is fine).
+            for (w in seenword) delete seenword[w]
+        }
+        END {
+            for (w in hits) {
+                if (hits[w] >= 3) {
+                    printf "%d\t%s\t%s\n", hits[w], w, dates[w]
+                }
+            }
+        }
+    ' "$_bodies_tsv" \
+        | sort -k1,1nr -k2,2 \
+        > "$_themes_tsv"
+
+    # Render proposed addendum (always, regardless of dry-run / write).
+    _addendum_file="$(mktemp -t mh-reflect-addendum.XXXXXX)"
+    {
+        printf '## Patterns from %s through %s\n' "$_since_ymd" "$_today_ymd"
+        printf '\n'
+        printf '_Reflection generated %s from %s log entries (window: %s days)._\n' \
+            "$_today_ymd" "$_entry_count" "$_days"
+        printf '\n'
+
+        if [ -s "$_themes_tsv" ]; then
+            # Top 5 themes only.
+            _theme_n=0
+            while IFS=$(printf '\t') read -r _hits _word _csv; do
+                [ -n "$_word" ] || continue
+                _theme_n=$((_theme_n + 1))
+                [ "$_theme_n" -le 5 ] || continue
+                # Unique-ify dates (a word can hit the same entry once per the
+                # awk dedupe, but if the same date appears via separate H2
+                # headings on the same day we'd have dupes).
+                _udates="$(printf '%s\n' "$_csv" | tr ',' '\n' | awk '!s[$0]++' | paste -sd',' -)"
+                printf -- '- **%s** — surfaced in %s entries (%s)\n' \
+                    "$_word" "$_hits" "$_udates"
+            done < "$_themes_tsv"
+        else
+            printf -- '- No recurring themes (no word appeared in 3+ distinct entries).\n'
+            printf -- '  This window may be too small, too varied, or too short to pattern-match.\n'
+        fi
+
+        printf '\n'
+        printf 'Citations (entries scanned):\n'
+        # Newest first — entries_tsv is in file order; log convention is
+        # newest-first, so an explicit sort -r on date is the safe play.
+        sort -t"$(printf '\t')" -k1,1r "$_entries_tsv" | while IFS=$(printf '\t') read -r _date _heading; do
+            [ -n "$_date" ] || continue
+            printf -- '- %s\n' "$_heading"
+        done
+    } > "$_addendum_file"
+
+    # Always show what we're proposing, then act on flags.
+    printf '\nMemory Hive — reflect (%s)\n' "$_agent"
+    printf 'Window: %s through %s (%s days, %s entries)\n' \
+        "$_since_ymd" "$_today_ymd" "$_days" "$_entry_count"
+    printf '──────────────────────────────────────────────────────\n\n'
+    cat "$_addendum_file"
+
+    # --write: append the addendum to memory.md.
+    if [ "$_write" -eq 1 ]; then
+        _mem="$_silo/memory.md"
+        # Make sure memory.md ends with a blank line before we append.
+        if [ -f "$_mem" ]; then
+            # POSIX: tail -c 1 last byte; if not newline, append one.
+            _last="$(tail -c 1 "$_mem" 2>/dev/null || printf '')"
+            case "$_last" in
+                '') : ;;          # empty file, fine
+                "$(printf '\n')") : ;;  # ends in newline
+                *) printf '\n' >> "$_mem" ;;
+            esac
+            printf '\n' >> "$_mem"
+            cat "$_addendum_file" >> "$_mem"
+            printf '\n[wrote] appended addendum to %s\n' "$_mem"
+        else
+            # No memory.md? Create it with the standard header. The installer
+            # template has a long preamble; we don't want to regenerate that
+            # here — just seed the minimum so the file is valid.
+            {
+                printf '# %s — durable memory\n\n' "$_agent"
+                cat "$_addendum_file"
+            } > "$_mem"
+            printf '\n[wrote] created %s with addendum\n' "$_mem"
+        fi
+    elif [ "$_dry_run" -eq 1 ]; then
+        printf '\n[dry-run] no files written. Re-run with --write to append.\n'
+    else
+        printf '\n[dry-run] no files written. Re-run with --write to append.\n'
+    fi
+
+    # --raw: drop a raw learning the curator can promote.
+    if [ "$_raw" -eq 1 ]; then
+        _raw_dir="$HIVE_DIR/learnings/raw/$_agent"
+        mkdir -p "$_raw_dir"
+        _slug="reflect-${_today_ymd}"
+        _raw_file="$_raw_dir/${_today_ymd}-reflect.md"
+        # If today already has a reflect file, append a counter so we don't
+        # clobber. Cap at -reflect-9; past that bail with a clear error.
+        if [ -e "$_raw_file" ]; then
+            _i=2
+            while [ "$_i" -le 9 ]; do
+                _candidate="$_raw_dir/${_today_ymd}-reflect-${_i}.md"
+                if [ ! -e "$_candidate" ]; then
+                    _raw_file="$_candidate"
+                    _slug="reflect-${_today_ymd}-${_i}"
+                    break
+                fi
+                _i=$((_i + 1))
+            done
+            if [ -e "$_raw_file" ]; then
+                _mh_die "raw learning slot full for today: $_raw_dir/${_today_ymd}-reflect-*.md"
+            fi
+        fi
+
+        {
+            printf -- '---\n'
+            printf 'date: %s\n' "$_today_ymd"
+            printf 'agent: %s\n' "$_agent"
+            printf 'context: self-reflection over %s-day window\n' "$_days"
+            printf 'confidence: low\n'
+            printf 'kind: reflection\n'
+            printf -- '---\n\n'
+            printf '# Self-reflection — %s (%s through %s)\n\n' \
+                "$_agent" "$_since_ymd" "$_today_ymd"
+            cat "$_addendum_file"
+        } > "$_raw_file"
+
+        printf '[wrote] raw learning at %s\n' "$_raw_file"
+    fi
+
+    rm -f "$_entries_tsv" "$_bodies_tsv" "$_themes_tsv" "$_addendum_file"
+    trap - EXIT
+    return 0
+}
+
 mh_digest() {
     _mh_require_install
     [ -d "$HIVE_DIR" ] || _mh_die "Hive directory missing: $HIVE_DIR"
@@ -4716,6 +5051,7 @@ case "$_verb" in
     query|search) mh_query "$@" ;;
     lint)     mh_lint "$@" ;;
     digest)   mh_digest "$@" ;;
+    reflect)  mh_reflect "$@" ;;
     help|-h|--help) mh_help ;;
     *)
         printf 'Unknown command: %s\n\n' "$_verb" >&2
