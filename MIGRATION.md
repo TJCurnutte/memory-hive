@@ -57,7 +57,8 @@ sub-agent definitions, but no hive yet.
 
 1. Run the installer. It detects `~/.claude/` and will inject the
    managed block into `~/.claude/CLAUDE.md` (opt out with
-   `MEMORY_HIVE_SKIP_CLAUDE_MD=1`).
+   `MEMORY_HIVE_SKIP_CLAUDE_CODE=1`; the legacy
+   `MEMORY_HIVE_SKIP_CLAUDE_MD=1` is still honored as an alias).
 2. If `~/.claude/agents/` has sub-agents, the wizard offers the same
    import flow as the OpenClaw case — `[i] Import all` scaffolds a
    silo per sub-agent.

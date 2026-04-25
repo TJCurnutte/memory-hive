@@ -14,22 +14,28 @@ test, PR.
 ├── HIVE_ARCHITECTURE.md         conceptual model (two layers, curation)
 ├── CHANGELOG.md                 release history
 ├── install.sh                   one-shot installer (curl | sh target)
-├── memory-hive                  CLI wrapper (add/list/archive/role/rename)
+├── memory-hive                  CLI wrapper (every verb)
 ├── create-agent.sh              low-level silo scaffold (called by CLI + wizard)
 ├── update.sh                    refresh shared content from GitHub
 ├── check-compliance.sh          drift detector for an installed hive
+├── assets/                      logo SVGs + OG card image
+├── scripts/                     release helpers (cut-release.sh)
+├── examples/                    optional ingesters + reference silo (not installed)
 ├── templates/
-│   ├── claude-boot-block.md     managed block for ~/.claude/CLAUDE.md
-│   └── roles/                   starter role descriptions
-│       ├── coder.md
-│       ├── reviewer.md
-│       ├── researcher.md
-│       ├── writer.md
-│       ├── planner.md
-│       └── curator.md
+│   ├── claude-boot-block.md     managed block for agent platform configs
+│   ├── memory-entry.md          Tier 1 raw-capture format spec
+│   ├── platforms/               per-platform wiring docs (one per supported tool)
+│   ├── roles/                   starter role descriptions
+│   │   ├── coder.md
+│   │   ├── reviewer.md
+│   │   ├── researcher.md
+│   │   ├── writer.md
+│   │   ├── planner.md
+│   │   └── curator.md
+│   └── scenarios/               seed datasets (default, solo, large-team)
 └── hive/                        seed content copied into ~/.memory-hive/
     ├── index.md
-    ├── registry/                AGENTS.md, SKILLS_CATALOG.md
+    ├── registry/                AGENTS.md, SKILLS_CATALOG.md, CITATIONS.md
     ├── knowledge/               curated truth (curator writes)
     ├── learnings/               raw → distilled
     ├── tasks/                   shared work queue
@@ -46,12 +52,15 @@ will rewrite shared hive files and the managed `CLAUDE.md` block
 against the version in your working copy, which might not be what you
 want to ship.
 
-Use throwaway paths and the skip-CLAUDE env var every time:
+Use throwaway paths and skip every platform on your machine:
 
 ```bash
 MEMORY_HIVE_REPO="$(pwd)" \
 MEMORY_HIVE_DIR="$(mktemp -d)" \
-MEMORY_HIVE_SKIP_CLAUDE_MD=1 \
+MEMORY_HIVE_SKIP_CLAUDE_CODE=1 \
+MEMORY_HIVE_SKIP_OPENCLAW=1 \
+MEMORY_HIVE_SKIP_CURSOR=1 \
+MEMORY_HIVE_SKIP_GEMINI_CLI=1 \
   sh install.sh
 ```
 
@@ -62,9 +71,14 @@ What each variable does:
   published commit.
 - `MEMORY_HIVE_DIR="$(mktemp -d)"` — put the install somewhere
   disposable. `rm -rf` after to clean up.
-- `MEMORY_HIVE_SKIP_CLAUDE_MD=1` — don't touch `~/.claude/CLAUDE.md`.
-  Forgetting this once will silently rewrite the file to point at your
-  temp dir.
+- `MEMORY_HIVE_SKIP_<PLATFORM>=1` — opt out of every detected platform
+  on your machine before running the test. Forgetting this once will
+  silently rewrite real config files to point at your temp dir. See
+  [INTEGRATION.md](INTEGRATION.md) for the full list of opt-out vars
+  (`MEMORY_HIVE_SKIP_CLAUDE_CODE`, `MEMORY_HIVE_SKIP_CURSOR`,
+  `MEMORY_HIVE_SKIP_GOOSE`, etc.). The legacy
+  `MEMORY_HIVE_SKIP_CLAUDE_MD=1` is still honored as an alias for
+  `MEMORY_HIVE_SKIP_CLAUDE_CODE=1`.
 
 ## Ways to contribute
 
