@@ -12,6 +12,7 @@
 <p align="center">
   <a href="LICENSE"><img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-F59E0B.svg"></a>
   <a href="https://github.com/TJCurnutte/memory-hive/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/TJCurnutte/memory-hive/ci.yml?branch=main&label=CI&color=F59E0B"></a>
+  <a href="https://github.com/TJCurnutte/memory-hive/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/TJCurnutte/memory-hive?color=14B8A6&label=release"></a>
   <a href="INTEGRATION.md"><img alt="Platforms: 23" src="https://img.shields.io/badge/platforms-23-F59E0B"></a>
   <img alt="Shell: POSIX" src="https://img.shields.io/badge/shell-POSIX-lightgrey">
   <a href="https://memoryhive.neural-forge.io"><img alt="Site: memoryhive.neural-forge.io" src="https://img.shields.io/badge/site-memoryhive.neural--forge.io-14B8A6"></a>
@@ -360,6 +361,8 @@ their specialties.
 
 - **Live site:** <https://memoryhive.neural-forge.io>
 - **Repo:** <https://github.com/TJCurnutte/memory-hive>
+- **Releases:** <https://github.com/TJCurnutte/memory-hive/releases> — version history with everything that shipped per release.
+- **Changelog:** [CHANGELOG.md](CHANGELOG.md) — Keep-a-Changelog format, mirrored on the Releases page.
 - **License:** [MIT](LICENSE) — use it, build on it, make it better.
 
 ---

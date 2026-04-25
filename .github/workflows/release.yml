@@ -1,0 +1,77 @@
+# Release workflow.
+#
+# Triggers on tag push (v*.*.*).
+#
+# Behavior: extract the matching `## [<version>]` block from CHANGELOG.md and
+# create a GitHub Release with that body. Also includes auto-generated commit
+# log since the previous tag. No external actions beyond actions/checkout +
+# the gh CLI shipped on the runner.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    name: Cut GitHub Release from tag
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Extract changelog body
+        id: notes
+        shell: bash
+        run: |
+          set -eu
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          NOTES_FILE="$(mktemp)"
+
+          # Pull the [<version>] block out of CHANGELOG.md (everything between
+          # `## [<version>]` and the next `## [` heading, exclusive).
+          if grep -q "^## \[${VERSION}\]" CHANGELOG.md; then
+              awk -v v="${VERSION}" '
+                  $0 ~ "^## \\["v"\\]" { found=1; next }
+                  found && /^## \[/ { exit }
+                  found { print }
+              ' CHANGELOG.md > "$NOTES_FILE"
+          else
+              echo "No CHANGELOG.md entry for [${VERSION}]; using auto notes only." > "$NOTES_FILE"
+          fi
+
+          # Append auto-generated commit log since the previous tag.
+          PREV_TAG="$(git tag --sort=-v:refname | grep '^v' | grep -v "^${TAG}$" | head -n 1 || true)"
+          if [ -n "$PREV_TAG" ]; then
+              {
+                  printf '\n\n---\n\n### Commits since %s\n\n' "$PREV_TAG"
+                  git log --pretty=format:"- %s (%h)" "$PREV_TAG..$TAG"
+              } >> "$NOTES_FILE"
+          fi
+
+          echo "notes-file=$NOTES_FILE" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          set -eu
+          TAG="${GITHUB_REF_NAME}"
+          # If the release already exists (e.g. created manually), update its
+          # body in place. Otherwise create it fresh.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+              gh release edit "$TAG" \
+                  --notes-file "${{ steps.notes.outputs.notes-file }}"
+          else
+              gh release create "$TAG" \
+                  --title "$TAG" \
+                  --notes-file "${{ steps.notes.outputs.notes-file }}"
+          fi
