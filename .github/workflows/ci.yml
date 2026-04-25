@@ -161,13 +161,16 @@ jobs:
           # baseline. Filesystems with second-granularity mtimes need this.
           sleep 2
 
-          # Append a real dated entry to the main silo log. We use printf
-          # instead of a heredoc so the YAML "run: |" indent doesn't
-          # poison the heredoc body.
+          # Append a real dated entry to the main silo log. Avoid heredoc
+          # so the YAML "run: |" indent doesn't poison the body, and use
+          # `printf -- '%s\n'` so leading-dash bullets aren't parsed as
+          # printf flags.
           {
-              printf '# main — log\n\n'
-              printf '## 2026-04-24\n\n'
-              printf '- Smoke-test entry: digest should pick this line up.\n'
+              printf -- '%s\n' '# main -- log'
+              printf -- '%s\n' ''
+              printf -- '%s\n' '## 2026-04-24'
+              printf -- '%s\n' ''
+              printf -- '%s\n' '- Smoke-test entry: digest should pick this line up.'
           } > "$INSTALL_DIR/hive/agents/main/log.md"
 
           # Default window (last 24h) must surface the entry.
