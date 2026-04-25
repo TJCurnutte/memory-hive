@@ -456,7 +456,48 @@ PLATS
         fi
     fi
 
-    # --- 6. archived silo count (informational only) -----------------------
+    # --- 6. stale raw learnings -------------------------------------------
+    # Per HIVE_ARCHITECTURE.md: "Raw learnings >7 days unreviewed →
+    # auto-escalate". This block enforces it. Stale files are visible in
+    # doctor output (top 5 inline) so the curator can act. Default
+    # threshold for elevating to a doctor warning is 20 stale files,
+    # overridable via MEMORY_HIVE_STALE_THRESHOLD. Window in days
+    # overridable via MEMORY_HIVE_STALE_DAYS.
+    _stale_days="${MEMORY_HIVE_STALE_DAYS:-7}"
+    _stale_threshold="${MEMORY_HIVE_STALE_THRESHOLD:-20}"
+    _stale_out="$INSTALL_DIR/.doctor-stale.$$"
+    _mh_stale_raw_files "$_stale_days" > "$_stale_out" 2>/dev/null || : > "$_stale_out"
+    _stale_count="$(awk 'END { print NR }' "$_stale_out" 2>/dev/null)"
+    [ -n "$_stale_count" ] || _stale_count=0
+    if [ "$_stale_count" -eq 0 ]; then
+        printf '  %s no raw learnings >%s days old without a curator decision\n' \
+            "$_D_OK" "$_stale_days"
+    else
+        if [ "$_stale_count" -gt "$_stale_threshold" ]; then
+            printf '  %s %s raw learnings >%s days old, unreviewed (threshold: %s)\n' \
+                "$_D_WARN" "$_stale_count" "$_stale_days" "$_stale_threshold"
+            _warnings=$((_warnings + 1))
+        else
+            printf '  %s %s raw learnings >%s days old, unreviewed (informational; threshold: %s)\n' \
+                "${_D_CYAN}i${_D_RESET}" "$_stale_count" "$_stale_days" "$_stale_threshold"
+        fi
+        # Top 5 oldest. Full list lives in `memory-hive stale`.
+        _shown=0
+        while IFS='	' read -r _age _ag _path; do
+            [ -n "$_age" ] || continue
+            _shown=$((_shown + 1))
+            [ "$_shown" -gt 5 ] && break
+            _rel="${_path#"$HIVE_DIR"/}"
+            printf '       %3sd  %-18s %s\n' "$_age" "$_ag" "$_rel"
+        done < "$_stale_out"
+        if [ "$_stale_count" -gt 5 ]; then
+            printf '       ... %s more (run `memory-hive stale` for the full list)\n' \
+                $((_stale_count - 5))
+        fi
+    fi
+    rm -f "$_stale_out"
+
+    # --- 7. archived silo count (informational only) -----------------------
     _arch_count=0
     _arch_root="$AGENTS_DIR/_archived"
     if [ -d "$_arch_root" ]; then
@@ -539,6 +580,17 @@ Usage:
       timestamp + agent + file for each event and keeps a running
       counter. Ctrl+C to exit. Uses fswatch or inotifywait if
       available; falls back to polling (5s).
+
+  memory-hive stale [--days N] [--agent <name>] [--count]
+      List raw learnings older than N days (default 7) that have no
+      backlink in curator/DECISIONS.md. The doctor's "stale raw
+      learnings" check uses the same data; a count above
+      MEMORY_HIVE_STALE_THRESHOLD (default 20) escalates doctor to
+      a warning. --count prints just the integer (scriptable).
+      Examples:
+        memory-hive stale
+        memory-hive stale --days 14 --agent coder
+        memory-hive stale --count
 
   memory-hive help
       Show this message.
@@ -742,6 +794,77 @@ _mh_hive_file_list() {
 _mh_mtime_epoch() {
     # GNU stat first (Linux), then BSD stat (macOS).
     stat -c %Y "$1" 2>/dev/null || stat -f %m "$1" 2>/dev/null
+}
+
+# _mh_stale_raw_files [days] [agent]
+# Print stale raw learnings as TAB-separated rows: <age_days>\t<agent>\t<path>
+# (sorted by age descending — oldest first).
+#
+# A file is "stale" if:
+#   - its mtime is older than <days> days ago (default 7)
+#   - AND its basename does NOT appear anywhere in curator/DECISIONS.md
+#     (heuristic for "unreviewed": the curator is expected to backlink the
+#     filename when promoting/retiring; absent backlink ≈ untouched).
+#
+# Optional second arg filters to one agent's raw subdir.
+#
+# Heuristic note: this is mtime + DECISIONS.md grep. It can falsely flag a
+# promoted-but-not-referenced file, and miss a referenced-but-still-untouched
+# file. It's deliberately conservative — better than mtime-only, simpler
+# than a frontmatter schema change.
+_mh_stale_raw_files() {
+    _days="${1:-7}"
+    _filter_agent="${2:-}"
+    _raw_root="$HIVE_DIR/learnings/raw"
+    [ -d "$_raw_root" ] || return 0
+
+    _now_s="$(date +%s)"
+    _cutoff=$((_now_s - _days * 86400))
+    _decisions="$HIVE_DIR/curator/DECISIONS.md"
+
+    # Layout is learnings/raw/<agent>/<file>.md. Some installs may also have
+    # learnings/raw/<file>.md (no agent dir); attribute those to "unknown".
+    _tmp="${TMPDIR:-/tmp}/mh-stale.$$"
+    : > "$_tmp"
+    for _adir in "$_raw_root"/*; do
+        [ -e "$_adir" ] || continue
+        if [ -d "$_adir" ]; then
+            _agent="$(basename "$_adir")"
+            if [ -n "$_filter_agent" ] && [ "$_agent" != "$_filter_agent" ]; then
+                continue
+            fi
+            for _f in "$_adir"/*.md; do
+                [ -f "$_f" ] || continue
+                _mt="$(_mh_mtime_epoch "$_f")"
+                [ -n "$_mt" ] || continue
+                [ "$_mt" -le "$_cutoff" ] || continue
+                _base="$(basename "$_f")"
+                if [ -f "$_decisions" ] && grep -q -F "$_base" "$_decisions" 2>/dev/null; then
+                    continue
+                fi
+                _age=$(( (_now_s - _mt) / 86400 ))
+                printf '%s\t%s\t%s\n' "$_age" "$_agent" "$_f" >> "$_tmp"
+            done
+        elif [ -f "$_adir" ]; then
+            if [ -n "$_filter_agent" ] && [ "$_filter_agent" != "unknown" ]; then
+                continue
+            fi
+            case "$_adir" in *.md) ;; *) continue ;; esac
+            _mt="$(_mh_mtime_epoch "$_adir")"
+            [ -n "$_mt" ] || continue
+            [ "$_mt" -le "$_cutoff" ] || continue
+            _base="$(basename "$_adir")"
+            if [ -f "$_decisions" ] && grep -q -F "$_base" "$_decisions" 2>/dev/null; then
+                continue
+            fi
+            _age=$(( (_now_s - _mt) / 86400 ))
+            printf '%s\t%s\t%s\n' "$_age" "unknown" "$_adir" >> "$_tmp"
+        fi
+    done
+
+    # POSIX-portable numeric sort, descending (oldest first).
+    sort -k1,1nr "$_tmp" 2>/dev/null
+    rm -f "$_tmp"
 }
 
 # _mh_fmt_time <epoch> → "HH:MM:SS" in local time.
@@ -1100,6 +1223,97 @@ mh_rename() {
     _mh_register_quiet
 }
 
+# mh_stale — list raw learnings older than N days with no curator decision.
+# Flags:
+#   --days N          window in days (default 7, env MEMORY_HIVE_STALE_DAYS)
+#   --agent <name>    only that agent's raw subdir
+#   --count           print just the integer count (scriptable)
+#   -h | --help       usage
+mh_stale() {
+    _mh_require_install
+    _days="${MEMORY_HIVE_STALE_DAYS:-7}"
+    _agent=""
+    _count_only=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --days)
+                shift
+                [ $# -gt 0 ] || _mh_die "--days requires a number"
+                case "$1" in
+                    *[!0-9]*|"") _mh_die "--days must be a positive integer (got: $1)" ;;
+                esac
+                _days="$1"
+                ;;
+            --days=*)
+                _days="${1#--days=}"
+                case "$_days" in
+                    *[!0-9]*|"") _mh_die "--days must be a positive integer (got: $_days)" ;;
+                esac
+                ;;
+            --agent)
+                shift
+                [ $# -gt 0 ] || _mh_die "--agent requires a name"
+                _agent="$1"
+                ;;
+            --agent=*) _agent="${1#--agent=}" ;;
+            --count|-c) _count_only=1 ;;
+            -h|--help)
+                cat <<EOF
+Usage: memory-hive stale [--days N] [--agent <name>] [--count]
+
+  List raw learnings older than N days (default 7) that have not been
+  referenced in curator/DECISIONS.md. Sorted by age, oldest first.
+  Same data the doctor's stale section uses.
+
+  --days N          window in days (env: MEMORY_HIVE_STALE_DAYS)
+  --agent <name>    filter to one agent's raw subdir
+  --count           print just the count (for scripts / hooks)
+EOF
+                return 0
+                ;;
+            *) _mh_die "Unknown flag: $1 (try \`memory-hive stale --help\`)" ;;
+        esac
+        shift
+    done
+
+    _stale_tmp="${TMPDIR:-/tmp}/mh-stale-cli.$$"
+    _mh_stale_raw_files "$_days" "$_agent" > "$_stale_tmp" 2>/dev/null || : > "$_stale_tmp"
+    _n="$(awk 'END { print NR }' "$_stale_tmp" 2>/dev/null)"
+    [ -n "$_n" ] || _n=0
+
+    if [ "$_count_only" -eq 1 ]; then
+        printf '%s\n' "$_n"
+        rm -f "$_stale_tmp"
+        return 0
+    fi
+
+    if [ "$_n" -eq 0 ]; then
+        if [ -n "$_agent" ]; then
+            printf 'No stale raw learnings for agent %s (>%s days, no decision).\n' \
+                "$_agent" "$_days"
+        else
+            printf 'No stale raw learnings (>%s days, no decision).\n' "$_days"
+        fi
+        rm -f "$_stale_tmp"
+        return 0
+    fi
+
+    if [ -n "$_agent" ]; then
+        printf 'Stale raw learnings for %s (>%s days, no DECISIONS.md backlink): %s\n\n' \
+            "$_agent" "$_days" "$_n"
+    else
+        printf 'Stale raw learnings (>%s days, no DECISIONS.md backlink): %s\n\n' \
+            "$_days" "$_n"
+    fi
+    printf '  %4s  %-18s  %s\n' "AGE" "AGENT" "PATH"
+    while IFS='	' read -r _age _ag _path; do
+        [ -n "$_age" ] || continue
+        _rel="${_path#"$HIVE_DIR"/}"
+        printf '  %3sd  %-18s  %s\n' "$_age" "$_ag" "$_rel"
+    done < "$_stale_tmp"
+    rm -f "$_stale_tmp"
+}
+
 # --- dispatch ----------------------------------------------------------------
 
 if [ $# -eq 0 ]; then
@@ -1121,6 +1335,7 @@ case "$_verb" in
     apply)    _mh_require_install; mh_apply "$@" ;;
     stats)    mh_stats ;;
     watch)    mh_watch ;;
+    stale)    mh_stale "$@" ;;
     help|-h|--help) mh_help ;;
     *)
         printf 'Unknown command: %s\n\n' "$_verb" >&2
