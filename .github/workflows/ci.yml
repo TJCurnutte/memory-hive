@@ -904,3 +904,67 @@ jobs:
           grep -q "Cursor block does not reference" /tmp/mh-doc2.log || \
               { echo "Doctor did not flag Cursor drift"; exit 1; }
           echo "Doctor multi-platform smoke OK"
+
+      - name: Citations smoke — directed graph
+        shell: bash
+        run: |
+          set -eu
+          INSTALL_DIR="$(mktemp -d)"
+          export MEMORY_HIVE_DIR="$INSTALL_DIR"
+          export MEMORY_HIVE_SKIP_CLAUDE_MD=1
+          export MEMORY_HIVE_REPO="$(pwd)"
+          sh install.sh < /dev/null > /dev/null 2>&1
+
+          sh "$INSTALL_DIR/memory-hive" add coder --role coder > /dev/null
+          sh "$INSTALL_DIR/memory-hive" add reviewer --role reviewer > /dev/null
+          sh "$INSTALL_DIR/memory-hive" add researcher --role researcher > /dev/null
+
+          # Seed: backtick citation, markdown-link citation, and a non-existent
+          # backticked word that MUST be ignored (false-positive guard).
+          # Using printf rather than heredoc to avoid YAML-block indentation
+          # pitfalls (heredoc EOF must be flush-left in bash).
+          {
+            printf '\n## 2026-04-24\n'
+            printf -- '- Paired with `reviewer` on the migration plan.\n'
+            printf -- '- Read `git` history (no `git` silo — must NOT be a citation).\n'
+            printf -- '- See [research notes](../researcher/log.md) for prior art.\n'
+          } >> "$INSTALL_DIR/hive/agents/coder/log.md"
+
+          # Frontmatter cites form (forward-compatible).
+          {
+            printf -- '---\n'
+            printf 'date: 2026-04-24\n'
+            printf 'cites: [coder]\n'
+            printf -- '---\n\n'
+            printf '# reviewer memory\n'
+          } > "$INSTALL_DIR/hive/agents/reviewer/memory.md"
+
+          # Run the new verb.
+          sh "$INSTALL_DIR/memory-hive" citations | tee /tmp/mh-cit.out
+
+          CIT="$INSTALL_DIR/hive/registry/CITATIONS.md"
+          test -f "$CIT" || { echo "CITATIONS.md was not written"; exit 1; }
+
+          # Backtick citation present.
+          grep -q "| coder | reviewer | 1 |" "$CIT" || { echo "missing coder->reviewer edge"; cat "$CIT"; exit 1; }
+          # Markdown-link citation present.
+          grep -q "| coder | researcher | 1 |" "$CIT" || { echo "missing coder->researcher edge"; cat "$CIT"; exit 1; }
+          # Frontmatter cites citation present.
+          grep -q "| reviewer | coder | 1 |" "$CIT" || { echo "missing reviewer->coder edge"; cat "$CIT"; exit 1; }
+          # False-positive guard: 'git' must NOT show up as a cited agent.
+          ! grep -E '\| git \|' "$CIT" || { echo "false positive: git appeared as citation"; exit 1; }
+
+          # `register` must also rebuild CITATIONS.md.
+          rm -f "$CIT"
+          sh "$INSTALL_DIR/memory-hive" register > /dev/null
+          test -f "$CIT" || { echo "register did not rebuild CITATIONS.md"; exit 1; }
+          grep -q "coder | reviewer" "$CIT" || { echo "register-rebuilt CITATIONS.md missing edge"; exit 1; }
+
+          # Idempotent: a second run should produce identical bytes.
+          sh "$INSTALL_DIR/memory-hive" citations > /dev/null
+          sum1=$(cksum "$CIT" | awk '{print $1}')
+          sh "$INSTALL_DIR/memory-hive" citations > /dev/null
+          sum2=$(cksum "$CIT" | awk '{print $1}')
+          [ "$sum1" = "$sum2" ] || { echo "citations not idempotent: $sum1 vs $sum2"; exit 1; }
+
+          echo "Citations smoke OK"
