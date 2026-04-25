@@ -263,6 +263,11 @@ jobs:
           # Need a non-main agent so log.md writes classify cleanly.
           sh "$INSTALL_DIR/memory-hive" add coder --role coder > /dev/null
 
+          # Sleep before the first seeded write so both files are strictly
+          # newer than the install baseline marker (otherwise mh_tail filters
+          # them out as install-time scaffolding).
+          sleep 2
+
           # Seed two writes with distinct mtimes. The newer one (DECISIONS.md)
           # must appear FIRST in tail output, with its content extracted.
           # Use printf instead of a heredoc so YAML's literal-block indentation
