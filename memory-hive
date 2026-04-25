@@ -888,6 +888,18 @@ Usage:
       HIVE_ARCHITECTURE threshold (3 aligned low → medium, 3 aligned
       medium → high, 3+ aligned high → promotion-ready). Suggest-only;
       curator decides what to actually promote.
+  memory-hive tag <file> <tag1> [tag2 ...]
+      Add tags to a learning file's YAML frontmatter. Tags must be
+      lowercase letters/digits/dashes, 2-24 chars. Existing tags are
+      merged, deduplicated, and re-sorted alphabetically. Prints the
+      before/after tags line.
+
+  memory-hive tags [--agent <name>] [--tag <name>]
+      Scan every .md file under the hive for \`tags:\` frontmatter.
+      Without args, print each unique tag and its count, sorted by
+      count desc. --tag lists every file using that tag. --agent
+      limits the scan to one agent's silo (agents/<name>/ and
+      learnings/raw/<name>-*.md).
 
   memory-hive help
       Show this message.
@@ -2002,6 +2014,267 @@ mh_promote() {
     printf '\n%s\n' "$_summary"
 }
 
+# --- tagging -----------------------------------------------------------------
+#
+# Lightweight topical tagging for learning files. Tags live in YAML-style
+# frontmatter under the existing `date:`/`agent:` keys, comma-separated and
+# sorted alphabetically for determinism. The point: let topical clusters
+# (e.g. "testing", "parallel") emerge from the data so the curator can
+# spin up new distilled/<topic>.md files without manual hunting.
+
+# _mh_validate_tag <tag> → 0 if valid, 1 with stderr message if not.
+# Rules: lowercase, [a-z0-9-], 2-24 chars, no leading/trailing dash, no run.
+# Uses LC_ALL=C + grep so the character classes behave identically across
+# platforms (macOS bash 3.2's `case` glob has surprised us at least once).
+_mh_validate_tag() {
+    _t="$1"
+    if [ -z "$_t" ]; then
+        printf 'ERROR: empty tag\n' >&2
+        return 1
+    fi
+    _len=$(printf '%s' "$_t" | LC_ALL=C wc -c | tr -d ' ')
+    if [ "$_len" -lt 2 ] || [ "$_len" -gt 24 ]; then
+        printf 'ERROR: tag "%s" must be 2-24 chars (got %s)\n' "$_t" "$_len" >&2
+        return 1
+    fi
+    # Whole-string match against the strict character set. grep -E with an
+    # anchored alternation gives us platform-independent semantics; case-glob
+    # `[!a-z0-9-]` was observed to silently accept "Bad" on the macOS CI
+    # runner even though it rejects locally on the same OS.
+    if ! printf '%s' "$_t" | LC_ALL=C grep -Eq '^[a-z0-9-]+$'; then
+        printf 'ERROR: tag "%s" must be lowercase a-z, 0-9, or dash\n' "$_t" >&2
+        return 1
+    fi
+    case "$_t" in
+        -*|*-) printf 'ERROR: tag "%s" cannot start or end with a dash\n' "$_t" >&2; return 1 ;;
+        *--*) printf 'ERROR: tag "%s" cannot contain consecutive dashes\n' "$_t" >&2; return 1 ;;
+    esac
+    return 0
+}
+
+# _mh_extract_tags <file> → prints comma-separated tag list from frontmatter,
+# or empty if no tags: line. Only reads inside the first `---`/`---` fence.
+_mh_extract_tags() {
+    awk '
+        BEGIN { fence = 0 }
+        NR == 1 && /^---[[:space:]]*$/ { fence = 1; next }
+        fence == 1 && /^---[[:space:]]*$/ { exit }
+        fence == 1 && /^tags:[[:space:]]*/ {
+            line = $0
+            sub(/^tags:[[:space:]]*/, "", line)
+            print line
+            exit
+        }
+    ' "$1"
+}
+
+# _mh_has_frontmatter <file> → 0 if file starts with `---` fence, 1 otherwise.
+_mh_has_frontmatter() {
+    [ -f "$1" ] || return 1
+    awk 'NR == 1 { if ($0 ~ /^---[[:space:]]*$/) exit 0; else exit 1 }' "$1"
+}
+
+# _mh_normalize_tags <comma-list> → newline-separated, trimmed, deduped, sorted.
+# Empty entries dropped. Used to merge new + existing tag sets.
+_mh_normalize_tags() {
+    printf '%s' "$1" \
+        | tr ',' '\n' \
+        | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+        | awk 'NF > 0' \
+        | sort -u
+}
+
+mh_tag() {
+    _mh_require_install
+    _file="$1"
+    shift || true
+    if [ -z "$_file" ] || [ $# -eq 0 ]; then
+        _mh_die "Usage: memory-hive tag <file> <tag1> [tag2 ...]"
+    fi
+    if [ ! -f "$_file" ]; then
+        _mh_die "File not found: $_file"
+    fi
+    case "$_file" in
+        *.md|*.markdown) ;;
+        *) _mh_die "Not a markdown file: $_file" ;;
+    esac
+    if ! _mh_has_frontmatter "$_file"; then
+        printf 'ERROR: %s has no YAML frontmatter (must start with `---`).\n' "$_file" >&2
+        printf 'Tip: add a frontmatter block manually, or run `memory-hive lint` once it exists.\n' >&2
+        exit 1
+    fi
+
+    # Validate every input tag before touching the file.
+    for _t in "$@"; do
+        _mh_validate_tag "$_t" || exit 1
+    done
+
+    _existing="$(_mh_extract_tags "$_file")"
+    _before="$_existing"
+    [ -n "$_before" ] || _before='(none)'
+
+    # Merge: existing + new args, normalized.
+    _merged_input="$_existing"
+    for _t in "$@"; do
+        if [ -n "$_merged_input" ]; then
+            _merged_input="$_merged_input,$_t"
+        else
+            _merged_input="$_t"
+        fi
+    done
+    _merged="$(_mh_normalize_tags "$_merged_input")"
+    # Re-join with ", " in sorted order.
+    _new_line="$(printf '%s' "$_merged" | tr '\n' ',' | sed -e 's/,$//' -e 's/,/, /g')"
+
+    # Rewrite the frontmatter:
+    #   - if a `tags:` line exists, replace it
+    #   - else insert before `agent:` (preferred), else after `date:`,
+    #     else append before the closing `---`.
+    _tmp="$_file.mhtag.$$"
+    awk -v newtags="$_new_line" '
+        BEGIN { fence = 0; in_fm = 0; replaced = 0; inserted = 0; saw_date = 0 }
+        {
+            if (NR == 1 && $0 ~ /^---[[:space:]]*$/) {
+                print
+                in_fm = 1
+                next
+            }
+            if (in_fm == 1 && $0 ~ /^---[[:space:]]*$/) {
+                # Closing fence — insert here if we never managed to.
+                if (replaced == 0 && inserted == 0) {
+                    print "tags: " newtags
+                    inserted = 1
+                }
+                print
+                in_fm = 2
+                next
+            }
+            if (in_fm == 1) {
+                if ($0 ~ /^tags:[[:space:]]*/) {
+                    print "tags: " newtags
+                    replaced = 1
+                    next
+                }
+                if ($0 ~ /^agent:[[:space:]]*/ && replaced == 0 && inserted == 0) {
+                    # Insert tags between date: and agent: for canonical order.
+                    print "tags: " newtags
+                    inserted = 1
+                    print
+                    next
+                }
+                print
+                next
+            }
+            print
+        }
+    ' "$_file" > "$_tmp" || { rm -f "$_tmp"; _mh_die "Failed to rewrite $_file"; }
+    mv "$_tmp" "$_file" || { rm -f "$_tmp"; _mh_die "Failed to write $_file"; }
+
+    printf 'tags before: %s\n' "$_before"
+    printf 'tags after:  %s\n' "$_new_line"
+}
+
+# _mh_tag_files: scan all .md files under the hive that have a `tags:` line in
+# their frontmatter. Emit `tag<TAB>file` records, one per (tag, file) pair.
+# Honors $MH_FILTER_AGENT if set (limits to that agent's silo + raw learnings).
+_mh_tag_files() {
+    [ -d "$HIVE_DIR" ] || return 0
+    find "$HIVE_DIR" -type f -name '*.md' \
+        ! -path "*/.git/*" \
+        ! -path "*/_archived/*" \
+        ! -name "*.upstream" \
+        2>/dev/null | while IFS= read -r _f; do
+        if [ -n "${MH_FILTER_AGENT:-}" ]; then
+            _rel="${_f#"$HIVE_DIR"/}"
+            case "$_rel" in
+                agents/"$MH_FILTER_AGENT"/*) ;;
+                learnings/raw/"$MH_FILTER_AGENT"-*.md) ;;
+                learnings/raw/"$MH_FILTER_AGENT"/*) ;;
+                *) continue ;;
+            esac
+        fi
+        _line="$(_mh_extract_tags "$_f")"
+        [ -n "$_line" ] || continue
+        printf '%s' "$_line" | tr ',' '\n' \
+            | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
+            | awk -v f="$_f" 'NF > 0 { print $0 "\t" f }'
+    done
+}
+
+mh_tags() {
+    _mh_require_install
+    _filter_agent=""
+    _filter_tag=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --agent)
+                shift
+                [ $# -gt 0 ] || _mh_die "--agent needs a value"
+                _filter_agent="$1"; shift ;;
+            --agent=*) _filter_agent="${1#--agent=}"; shift ;;
+            --tag)
+                shift
+                [ $# -gt 0 ] || _mh_die "--tag needs a value"
+                _filter_tag="$1"; shift ;;
+            --tag=*) _filter_tag="${1#--tag=}"; shift ;;
+            -h|--help)
+                printf 'Usage: memory-hive tags [--agent <name>] [--tag <name>]\n'
+                return 0 ;;
+            *) _mh_die "Unknown argument: $1" ;;
+        esac
+    done
+
+    MH_FILTER_AGENT="$_filter_agent"
+    export MH_FILTER_AGENT
+
+    _records="$(_mh_tag_files)"
+
+    if [ -z "$_records" ]; then
+        if [ -n "$_filter_agent" ]; then
+            printf '(no tagged learning files for agent "%s")\n' "$_filter_agent"
+        else
+            printf '(no tagged learning files yet — try `memory-hive tag <file> <tag>`)\n'
+        fi
+        return 0
+    fi
+
+    if [ -n "$_filter_tag" ]; then
+        # List files using this tag.
+        _matches="$(printf '%s\n' "$_records" \
+            | awk -F'	' -v want="$_filter_tag" '$1 == want { print $2 }' \
+            | sort -u)"
+        if [ -z "$_matches" ]; then
+            printf '(no files use tag "%s")\n' "$_filter_tag"
+            return 0
+        fi
+        # Build the output as one string so a downstream `| grep -q` exiting
+        # early can't EPIPE us mid-loop. macOS bash-as-sh under `set -e`
+        # was tripping on broken-pipe in a piped while-loop.
+        _out="$(printf 'Files tagged "%s":\n' "$_filter_tag"
+            printf '%s\n' "$_matches" | while IFS= read -r _f; do
+                _rel="${_f#"$HIVE_DIR"/}"
+                printf '  %s\n' "$_rel"
+            done)"
+        printf '%s\n' "$_out"
+        return 0
+    fi
+
+    # Default: tag → count, sorted desc. Same EPIPE-safe pattern as above —
+    # accumulate then print once.
+    _header="Tags in hive"
+    [ -n "$_filter_agent" ] && _header="$_header (agent=$_filter_agent)"
+    _body="$(printf '%s\n' "$_records" \
+        | awk -F'	' '{ print $1 }' \
+        | sort | uniq -c | sort -rn \
+        | awk '{
+            count = $1
+            $1 = ""
+            sub(/^ /, "")
+            printf "  %4d  %s\n", count, $0
+        }')"
+    printf '%s:\n%s\n' "$_header" "$_body"
+}
+
 # --- dispatch ----------------------------------------------------------------
 
 if [ $# -eq 0 ]; then
@@ -2026,6 +2299,8 @@ case "$_verb" in
     tail)     mh_tail "$@" ;;
     promote)  mh_promote "$@" ;;
     confidence) mh_confidence "$@" ;;
+    tag)      mh_tag "$@" ;;
+    tags)     mh_tags "$@" ;;
     help|-h|--help) mh_help ;;
     *)
         printf 'Unknown command: %s\n\n' "$_verb" >&2
