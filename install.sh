@@ -24,6 +24,11 @@
 #   MEMORY_HIVE_SKIP_CLAUDE_MD=1   don't modify ~/.claude/CLAUDE.md even if it
 #                                  exists (useful for tests that shouldn't
 #                                  touch the developer's real config)
+#   MEMORY_HIVE_ONLY=hermes,cursor comma- or space-separated platform IDs;
+#                                  wire ONLY these and filter every other
+#                                  detected platform out (useful when you
+#                                  have many agent platforms installed but
+#                                  only want memory-hive wired into a subset)
 
 set -e
 
@@ -594,7 +599,26 @@ merge_hive_block() {
 PLATFORM_WIRED=""
 PLATFORM_MANUAL=""
 PLATFORM_SKIPPED=""
+PLATFORM_GONE=""
 WIRED_TARGETS=""  # legacy — kept for banner compatibility below
+
+# Previous-run state. If $HIVE_DIR/.wired-platforms exists, every ID in it
+# was wired on the last install. After this run we'll diff against the
+# current wired set to spot platforms that were uninstalled between runs
+# (banner prints them under "[gone ]" so users see the system noticed).
+_prev_wired_file="$HIVE_DIR/.wired-platforms"
+_prev_wired=""
+if [ -f "$_prev_wired_file" ]; then
+    _prev_wired=" $(tr '\n' ' ' < "$_prev_wired_file" 2>/dev/null) "
+fi
+
+# MEMORY_HIVE_ONLY: comma- or space-separated list of platform IDs. When
+# set, any platform outside the list is filtered — even if detected and
+# not skipped by its own skip env var. Empty/unset means "all detected".
+_only_list=""
+if [ -n "${MEMORY_HIVE_ONLY:-}" ]; then
+    _only_list=" $(printf '%s' "$MEMORY_HIVE_ONLY" | tr ',' ' ') "
+fi
 
 _mh_record() {
     # _mh_record <list-var> <id> <message>
@@ -617,6 +641,21 @@ fi
 
 for _pid in $_mh_platform_ids; do
     _pname="$(_mh_platform_field "$_pid" name)"
+    # MEMORY_HIVE_ONLY filter: if the user set an explicit allow-list,
+    # silently skip everything outside it. No SKIPPED record — the
+    # user asked for only these, they don't want noise about the rest.
+    if [ -n "$_only_list" ]; then
+        case "$_only_list" in
+            *" $_pid "*) : ;;  # in the allow-list, proceed
+            *)
+                # Only surface a skip-note if it would have been wired.
+                if _mh_platform_field "$_pid" marker 2>/dev/null; then
+                    _mh_record PLATFORM_SKIPPED "$_pid" "$_pname filtered by MEMORY_HIVE_ONLY"
+                fi
+                continue
+                ;;
+        esac
+    fi
     # Detect (honoring per-platform skip env var).
     if _mh_platform_is_skipped "$_pid"; then
         # Only note skip if the platform would otherwise have been detected.
@@ -1470,9 +1509,36 @@ _emit_platform_lines() {
 # scaffolding and the counter would lie.
 touch "$HIVE_DIR/.baseline-installed" 2>/dev/null || true
 
-_emit_platform_lines PLATFORM_WIRED  "wired"
+# Diff previous-run wired state against this run's → anything missing
+# was uninstalled between runs. Record under PLATFORM_GONE so the
+# banner can surface it honestly.
+_current_wired_ids=""
+if [ -n "$PLATFORM_WIRED" ]; then
+    _current_wired_ids=" $(printf '%s\n' "$PLATFORM_WIRED" | awk -F'	' '{print $1}' | tr '\n' ' ') "
+fi
+for _ppid in $_prev_wired; do
+    [ -n "$_ppid" ] || continue
+    case "$_current_wired_ids" in
+        *" $_ppid "*) continue ;;   # still wired, no delta
+        *)
+            _pgone_name="$(_mh_platform_field "$_ppid" name 2>/dev/null)"
+            [ -n "$_pgone_name" ] || _pgone_name="$_ppid"
+            _mh_record PLATFORM_GONE "$_ppid" "$_pgone_name: no longer detected (cleaned up with the uninstall)"
+            ;;
+    esac
+done
+
+# Persist current state for the next run's diff.
+if [ -n "$PLATFORM_WIRED" ]; then
+    printf '%s\n' "$PLATFORM_WIRED" | awk -F'	' '{print $1}' > "$_prev_wired_file" 2>/dev/null || true
+else
+    : > "$_prev_wired_file" 2>/dev/null || true
+fi
+
+_emit_platform_lines PLATFORM_WIRED  "wired "
+_emit_platform_lines PLATFORM_GONE   "gone  "
 _emit_platform_lines PLATFORM_MANUAL "manual"
-_emit_platform_lines PLATFORM_SKIPPED "skip "
+_emit_platform_lines PLATFORM_SKIPPED "skip  "
 
 if [ -n "$CREATED_SILOS" ] && [ -n "$EXISTING_SILOS" ]; then
     printf '  Silos created: %s\n' "$CREATED_SILOS"
