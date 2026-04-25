@@ -1319,6 +1319,16 @@ Usage:
         memory-hive lint --strict
         memory-hive lint hive/learnings/raw/coder/2026-04-23-foo.md
 
+  memory-hive seed [--scenario <name>] [--dry-run] [--force]
+      Populate a fresh hive with synthetic but realistic data so that
+      \`tail\`, \`digest\`, \`confidence\`, etc. produce non-trivial output
+      on first use. Bundled scenarios: default (3 agents, 2 weeks of
+      activity), solo (1 agent), large-team (5 agents). Refuses to run
+      against a non-empty hive unless --force is set.
+        --scenario <name>   default | solo | large-team
+        --dry-run           list what would be written; touch nothing
+        --force             overwrite a non-empty hive
+
   memory-hive digest [--today | --yesterday | --week | --since YYYY-MM-DD]
       Human-readable summary of what changed in the hive over a time
       window. Complements 'stats' (counts only) by extracting the
@@ -5984,6 +5994,272 @@ mh_bundle() {
 }
 
 
+# --- seed --------------------------------------------------------------------
+#
+# `memory-hive seed [--scenario <name>] [--dry-run] [--force]` populates a
+# fresh hive with synthetic but realistic content so a new user can run
+# `tail`, `digest`, `confidence`, etc. and see the value immediately. The
+# default scenario is a 3-agent team (coder/reviewer/researcher) with two
+# weeks of activity. Templates live under templates/scenarios/<name>/.
+#
+# Each template file may contain `__DAYS_AGO_N__` markers; they are replaced
+# with the YYYY-MM-DD date that is N days before today. This keeps the
+# scenario "fresh" no matter when it's seeded.
+
+# _mh_seed_scenarios_dir → prints absolute path to templates/scenarios/.
+# Looks first under $INSTALL_DIR (post-install), then under the script
+# directory (running from a repo checkout).
+_mh_seed_scenarios_dir() {
+    if [ -d "$INSTALL_DIR/templates/scenarios" ]; then
+        printf '%s' "$INSTALL_DIR/templates/scenarios"
+        return 0
+    fi
+    if [ -n "$SCRIPT_DIR" ] && [ -d "$SCRIPT_DIR/templates/scenarios" ]; then
+        printf '%s' "$SCRIPT_DIR/templates/scenarios"
+        return 0
+    fi
+    return 1
+}
+
+# _mh_seed_relative_date <days_ago> → "YYYY-MM-DD" for today minus N days.
+# GNU `date -d` first, BSD `date -v-Nd` second. Both are POSIX-extension; one
+# of them exists on every platform we ship to.
+_mh_seed_relative_date() {
+    _n="$1"
+    set +e
+    _out="$(date -d "$_n days ago" '+%Y-%m-%d' 2>/dev/null)"
+    if [ -z "$_out" ]; then
+        _out="$(date -v "-${_n}d" '+%Y-%m-%d' 2>/dev/null)"
+    fi
+    set -e
+    if [ -z "$_out" ]; then
+        # Final fallback: today (so seed never fails outright on an exotic
+        # platform; the dates will all collapse to today, which still lets
+        # `tail`/`digest` produce non-trivial output).
+        _out="$(date '+%Y-%m-%d')"
+    fi
+    printf '%s' "$_out"
+}
+
+# _mh_seed_hive_nonempty → 0 if the hive looks like it already has user
+# content (any silo besides `main`, or any file under learnings/raw/), 1
+# otherwise. The fresh install ships an empty `learnings/raw/` (no
+# per-agent subdirs) plus `agents/main/` only.
+_mh_seed_hive_nonempty() {
+    if [ -d "$AGENTS_DIR" ]; then
+        for _d in "$AGENTS_DIR"/*; do
+            [ -d "$_d" ] || continue
+            _bn="$(basename "$_d")"
+            case "$_bn" in
+                main|_archived|.*) continue ;;
+                *) return 0 ;;
+            esac
+        done
+    fi
+    if [ -d "$HIVE_DIR/learnings/raw" ]; then
+        # Any file under raw (even nested) means user data is present.
+        for _f in "$HIVE_DIR/learnings/raw"/*; do
+            [ -e "$_f" ] || continue
+            return 0
+        done
+        # Also check one level deeper (per-agent subdirs).
+        for _d in "$HIVE_DIR/learnings/raw"/*/; do
+            [ -d "$_d" ] || continue
+            for _f in "$_d"*; do
+                [ -e "$_f" ] || continue
+                return 0
+            done
+        done
+    fi
+    return 1
+}
+
+# _mh_seed_substitute <src> <dst>
+# Copy <src> to <dst>, replacing every __DAYS_AGO_N__ marker with the
+# corresponding date. Uses awk for portability (BSD sed's lack of in-place
+# behavioral parity with GNU has bitten us before).
+_mh_seed_substitute() {
+    _src="$1"; _dst="$2"
+    mkdir -p "$(dirname "$_dst")" || return 1
+    # Build a sed program from every distinct marker we find, evaluated in
+    # awk so we can use an associative array. Shell-out to date once per
+    # distinct N — at most a handful per file, fast enough.
+    _markers="$(grep -oE '__DAYS_AGO_[0-9]+__' "$_src" 2>/dev/null | sort -u)"
+    if [ -z "$_markers" ]; then
+        cp "$_src" "$_dst"
+        return 0
+    fi
+    _sed_prog=""
+    _IFS_save="$IFS"
+    IFS='
+'
+    for _m in $_markers; do
+        # Extract N from __DAYS_AGO_N__.
+        _n="${_m#__DAYS_AGO_}"
+        _n="${_n%__}"
+        case "$_n" in
+            ''|*[!0-9]*) continue ;;
+        esac
+        _date="$(_mh_seed_relative_date "$_n")"
+        _sed_prog="${_sed_prog}s/${_m}/${_date}/g;"
+    done
+    IFS="$_IFS_save"
+    if [ -z "$_sed_prog" ]; then
+        cp "$_src" "$_dst"
+        return 0
+    fi
+    sed "$_sed_prog" "$_src" > "$_dst"
+}
+
+# _mh_seed_create_silo <agent> <role>
+# Create a silo using create-agent.sh so registration + AGENTS.md stay in
+# sync, then overwrite log/context/memory from the scenario templates.
+_mh_seed_create_silo() {
+    _agent="$1"; _role="$2"
+    if [ ! -d "$AGENTS_DIR/$_agent" ]; then
+        if [ ! -f "$CREATE_AGENT" ]; then
+            _mh_die "create-agent.sh missing at $CREATE_AGENT"
+        fi
+        _role_text=""
+        if [ -n "$_role" ]; then
+            _role_text="$(_mh_resolve_role "$_role" 2>/dev/null || true)"
+        fi
+        if [ -n "$_role_text" ]; then
+            MH_AGENT_ROLE="$_role_text" \
+                MEMORY_HIVE_DIR="$INSTALL_DIR" \
+                sh "$CREATE_AGENT" "$_agent" >/dev/null
+        else
+            MEMORY_HIVE_DIR="$INSTALL_DIR" \
+                sh "$CREATE_AGENT" "$_agent" >/dev/null
+        fi
+    fi
+}
+
+mh_seed() {
+    _mh_require_install
+
+    _scenario="default"
+    _dry=0
+    _force=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --scenario)
+                shift
+                [ $# -gt 0 ] || _mh_die "--scenario requires a name"
+                _scenario="$1" ;;
+            --scenario=*) _scenario="${1#--scenario=}" ;;
+            --dry-run|-n) _dry=1 ;;
+            --force|-f) _force=1 ;;
+            -h|--help)
+                cat <<EOF
+Usage: memory-hive seed [--scenario <name>] [--dry-run] [--force]
+
+  Populate a fresh hive with synthetic but realistic data so that
+  \`tail\`, \`digest\`, \`confidence\`, etc. produce non-trivial output
+  on first use.
+
+  --scenario <name>   default | solo | large-team (default: default)
+  --dry-run           list what would be written; touch nothing
+  --force             overwrite even when the hive already has user data
+
+Bundled scenarios live under templates/scenarios/<name>/.
+EOF
+                return 0 ;;
+            *) _mh_die "Unknown flag: $1 (try \`memory-hive seed --help\`)" ;;
+        esac
+        shift
+    done
+
+    _scn_root="$(_mh_seed_scenarios_dir)" \
+        || _mh_die "Could not find templates/scenarios/ under $INSTALL_DIR or $SCRIPT_DIR"
+    _scn_dir="$_scn_root/$_scenario"
+    if [ ! -d "$_scn_dir" ]; then
+        printf 'ERROR: Unknown scenario "%s". Bundled scenarios:\n' "$_scenario" >&2
+        for _d in "$_scn_root"/*/; do
+            [ -d "$_d" ] || continue
+            printf '  %s\n' "$(basename "$_d")" >&2
+        done
+        exit 1
+    fi
+    _files_dir="$_scn_dir/files"
+    _agents_manifest="$_scn_dir/agents.txt"
+    if [ ! -d "$_files_dir" ]; then
+        _mh_die "Scenario $_scenario is malformed: missing $_files_dir"
+    fi
+
+    if [ "$_force" -eq 0 ] && _mh_seed_hive_nonempty; then
+        printf 'ERROR: Hive at %s already has user content (silos beyond `main` or files under learnings/raw/).\n' "$HIVE_DIR" >&2
+        printf '       Run with --force to overwrite, or seed a fresh hive at a different MEMORY_HIVE_DIR.\n' >&2
+        exit 1
+    fi
+
+    # Snapshot the file list (relative paths under $_files_dir) for the
+    # dry-run preview and the post-write summary.
+    _flist="$(mktemp -t mh-seed-list.XXXXXX)"
+    ( cd "$_files_dir" && find . -type f ) | sed 's#^\./##' | sort > "$_flist"
+
+    if [ "$_dry" -eq 1 ]; then
+        printf '[dry-run] Scenario: %s\n' "$_scenario"
+        printf '[dry-run] Source:   %s\n' "$_files_dir"
+        printf '[dry-run] Target:   %s\n' "$HIVE_DIR"
+        printf '[dry-run] Agents:\n'
+        if [ -f "$_agents_manifest" ]; then
+            while IFS=' ' read -r _a _r; do
+                [ -n "$_a" ] || continue
+                printf '  - %s (role: %s)\n' "$_a" "${_r:-coder}"
+            done < "$_agents_manifest"
+        fi
+        printf '[dry-run] Files (%s):\n' "$(wc -l < "$_flist" | tr -d ' ')"
+        while IFS= read -r _rel; do
+            [ -n "$_rel" ] || continue
+            printf '  + %s/%s\n' "$HIVE_DIR" "$_rel"
+        done < "$_flist"
+        printf '[dry-run] Nothing was written.\n'
+        rm -f "$_flist"
+        return 0
+    fi
+
+    # Create silos via create-agent.sh so the registry stays in sync.
+    if [ -f "$_agents_manifest" ]; then
+        while IFS=' ' read -r _a _r; do
+            [ -n "$_a" ] || continue
+            case "$_a" in '#'*) continue ;; esac
+            _mh_seed_create_silo "$_a" "${_r:-coder}"
+        done < "$_agents_manifest"
+    fi
+
+    # Walk the file tree and write every file with date markers substituted.
+    _written=0
+    while IFS= read -r _rel; do
+        [ -n "$_rel" ] || continue
+        _src="$_files_dir/$_rel"
+        _dst="$HIVE_DIR/$_rel"
+        _mh_seed_substitute "$_src" "$_dst" \
+            || _mh_die "Failed to write $_dst"
+        _written=$((_written + 1))
+    done < "$_flist"
+    rm -f "$_flist"
+
+    # Refresh registry + citations so the new silos appear in AGENTS.md.
+    _mh_register_quiet 2>/dev/null || :
+    mh_citations >/dev/null 2>&1 || :
+
+    {
+        printf '\n'
+        printf 'Seeded scenario "%s" into %s (%s files written).\n' \
+            "$_scenario" "$HIVE_DIR" "$_written"
+        printf '\n'
+        printf 'Now try:\n'
+        printf '  memory-hive tail              # most recent activity\n'
+        printf '  memory-hive digest --week     # human-readable summary, last 7 days\n'
+        printf '  memory-hive confidence        # cluster raw learnings, suggest upgrades\n'
+        printf '  memory-hive stats             # honest write counts per agent\n'
+        printf '  memory-hive query "retry"     # full-text search across the hive\n'
+        printf '\n'
+    } 2>/dev/null || :
+}
+
+
 # --- dispatch ----------------------------------------------------------------
 
 if [ $# -eq 0 ]; then
@@ -6022,6 +6298,7 @@ case "$_verb" in
     curate)   mh_curate "$@" ;;
     bundle)   mh_bundle "$@" ;;
     reflect)  mh_reflect "$@" ;;
+    seed)     mh_seed "$@" ;;
     help|-h|--help) mh_help ;;
     *)
         printf 'Unknown command: %s\n\n' "$_verb" >&2

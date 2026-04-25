@@ -1610,3 +1610,122 @@ jobs:
           [ "$sum1" = "$sum2" ] || { echo "citations not idempotent: $sum1 vs $sum2"; exit 1; }
 
           echo "Citations smoke OK"
+
+      - name: CLI smoke — seed
+        shell: bash
+        run: |
+          set -eu
+          INSTALL_DIR="$(mktemp -d)"
+          export MEMORY_HIVE_DIR="$INSTALL_DIR"
+          export MEMORY_HIVE_SKIP_CLAUDE_MD=1
+          export MEMORY_HIVE_REPO="$(pwd)"
+          sh install.sh < /dev/null > /dev/null
+
+          # Sleep so files seeded post-install are strictly newer than the
+          # baseline marker (mh_tail / mh_stats filter by baseline mtime).
+          sleep 2
+
+          # 1. Default scenario: must succeed and write the expected files.
+          sh "$INSTALL_DIR/memory-hive" seed | tee /tmp/mh-seed.out
+          grep -q 'Now try:' /tmp/mh-seed.out || { echo "FAIL: seed missing next-steps"; exit 1; }
+
+          for rel in \
+              hive/agents/coder/log.md \
+              hive/agents/coder/context.md \
+              hive/agents/coder/memory.md \
+              hive/agents/reviewer/log.md \
+              hive/agents/researcher/log.md \
+              hive/learnings/raw/coder/parallel-test-isolation.md \
+              hive/learnings/raw/researcher/warmup-outside-window.md \
+              hive/learnings/distilled/patterns.md \
+              hive/learnings/distilled/wins.md \
+              hive/learnings/distilled/mistakes.md \
+              hive/curator/DECISIONS.md \
+              hive/knowledge/PROJECTS.md; do
+              if [ ! -s "$INSTALL_DIR/$rel" ]; then
+                  echo "FAIL: $rel missing or empty after seed"
+                  exit 1
+              fi
+          done
+
+          # No date-marker should leak through unsubstituted.
+          if grep -r '__DAYS_AGO_' "$INSTALL_DIR/hive" > /tmp/mh-seed-leak.out 2>/dev/null; then
+              echo "FAIL: unsubstituted __DAYS_AGO_N__ markers in seeded content"
+              cat /tmp/mh-seed-leak.out
+              exit 1
+          fi
+
+          # 2. tail / digest / confidence must produce non-trivial output.
+          sh "$INSTALL_DIR/memory-hive" tail -n 5 > /tmp/mh-seed-tail.out
+          # At least one raw learning surfaced.
+          grep -q 'learnings/raw/' /tmp/mh-seed-tail.out || \
+              { echo "FAIL: tail did not surface raw learnings"; cat /tmp/mh-seed-tail.out; exit 1; }
+
+          sh "$INSTALL_DIR/memory-hive" digest --week > /tmp/mh-seed-digest.out
+          # Digest names at least one of the seeded agents.
+          grep -Eq '^(coder|reviewer|researcher) ' /tmp/mh-seed-digest.out || \
+              { echo "FAIL: digest did not name any seeded agent"; cat /tmp/mh-seed-digest.out; exit 1; }
+
+          sh "$INSTALL_DIR/memory-hive" confidence > /tmp/mh-seed-conf.out
+          # Confidence shows clusters by title.
+          grep -q 'confidence upgrades' /tmp/mh-seed-conf.out || \
+              { echo "FAIL: confidence header missing"; cat /tmp/mh-seed-conf.out; exit 1; }
+          # And surfaces at least one of the seeded titles.
+          grep -q 'Test isolation across parallel workers' /tmp/mh-seed-conf.out || \
+              grep -q 'Authz checks belong in middleware' /tmp/mh-seed-conf.out || \
+              { echo "FAIL: confidence missing seeded titles"; cat /tmp/mh-seed-conf.out; exit 1; }
+
+          # 3. Re-run without --force: must refuse with non-zero exit.
+          set +e
+          sh "$INSTALL_DIR/memory-hive" seed > /tmp/mh-seed-refuse.out 2>&1
+          RC=$?
+          set -e
+          [ "$RC" -ne 0 ] || { echo "FAIL: second seed did not refuse"; cat /tmp/mh-seed-refuse.out; exit 1; }
+          grep -q 'already has user content' /tmp/mh-seed-refuse.out || \
+              { echo "FAIL: refuse message wrong"; cat /tmp/mh-seed-refuse.out; exit 1; }
+
+          # 4. --force must succeed even on a populated hive.
+          sh "$INSTALL_DIR/memory-hive" seed --force > /tmp/mh-seed-force.out
+          grep -q 'Seeded scenario' /tmp/mh-seed-force.out || \
+              { echo "FAIL: --force did not seed"; cat /tmp/mh-seed-force.out; exit 1; }
+
+          # 5. --dry-run must not write to a fresh hive.
+          INSTALL2="$(mktemp -d)"
+          export MEMORY_HIVE_DIR="$INSTALL2"
+          sh install.sh < /dev/null > /dev/null
+          test ! -d "$INSTALL2/hive/agents/coder"
+          sh "$INSTALL2/memory-hive" seed --dry-run > /tmp/mh-seed-dry.out
+          grep -q 'dry-run' /tmp/mh-seed-dry.out || \
+              { echo "FAIL: --dry-run header missing"; cat /tmp/mh-seed-dry.out; exit 1; }
+          test ! -d "$INSTALL2/hive/agents/coder" || \
+              { echo "FAIL: --dry-run wrote a silo"; exit 1; }
+
+          # 6. Bundled scenario flag accepts solo + large-team.
+          for SCN in solo large-team; do
+              D="$(mktemp -d)"
+              export MEMORY_HIVE_DIR="$D"
+              sh install.sh < /dev/null > /dev/null
+              sh "$D/memory-hive" seed --scenario "$SCN" > /tmp/mh-seed-$SCN.out
+              grep -q "Seeded scenario \"$SCN\"" /tmp/mh-seed-$SCN.out || \
+                  { echo "FAIL: $SCN scenario did not seed"; cat /tmp/mh-seed-$SCN.out; exit 1; }
+              # Each scenario writes at least one raw learning so confidence has data.
+              find "$D/hive/learnings/raw" -type f -name '*.md' | head -1 | grep -q . || \
+                  { echo "FAIL: $SCN scenario produced no raw learnings"; exit 1; }
+          done
+
+          # 7. Unknown scenario must fail with non-zero exit.
+          D="$(mktemp -d)"
+          export MEMORY_HIVE_DIR="$D"
+          sh install.sh < /dev/null > /dev/null
+          set +e
+          sh "$D/memory-hive" seed --scenario does-not-exist > /tmp/mh-seed-bad.out 2>&1
+          RC=$?
+          set -e
+          [ "$RC" -ne 0 ] || { echo "FAIL: unknown scenario did not exit non-zero"; exit 1; }
+
+          # 8. Help text must mention seed.
+          sh install.sh < /dev/null > /dev/null
+          sh "$D/memory-hive" help | grep -q 'memory-hive seed' || \
+              { echo "FAIL: help missing 'seed'"; exit 1; }
+
+          echo "Seed smoke OK"
