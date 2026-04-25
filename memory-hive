@@ -4934,26 +4934,16 @@ mh_bundle() {
 
         # If we're still over budget after dropping all distilled (e.g. a
         # single huge knowledge file is bigger than the whole budget),
-        # truncate the tail of the bundle as a last resort. Use awk to
-        # trim by character count; tail-by-char is rare in POSIX so awk
-        # is the portable answer.
+        # truncate the tail of the bundle as a last resort. Use dd for
+        # byte-precise truncation — awk's length() counts characters
+        # under multi-byte locales, which overshoots when the content
+        # has em-dashes/UTF-8 (Ubuntu CI vs. macOS LC_ALL differ here).
+        # dd bs=1 count=N is universal POSIX and byte-exact.
         _cur_chars="$(wc -c < "$_bundle_tmp" | tr -d ' ')"
         if [ "$_cur_chars" -gt "$_budget_chars" ]; then
             _trunc_tmp="$(mktemp -t mh-bundle-t.XXXXXX)"
-            awk -v lim="$_budget_chars" '
-                BEGIN { acc = 0 }
-                {
-                    line = $0 "\n"
-                    n = length(line)
-                    if (acc + n > lim) {
-                        rem = lim - acc
-                        if (rem > 0) printf "%s", substr(line, 1, rem)
-                        exit
-                    }
-                    printf "%s", line
-                    acc += n
-                }
-            ' "$_bundle_tmp" > "$_trunc_tmp"
+            dd if="$_bundle_tmp" of="$_trunc_tmp" bs=1 count="$_budget_chars" \
+                2>/dev/null
             mv "$_trunc_tmp" "$_bundle_tmp"
         fi
     fi
