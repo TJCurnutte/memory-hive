@@ -9,6 +9,7 @@
 #   memory-hive rename <old> <new>
 #   memory-hive register
 #   memory-hive doctor
+#   memory-hive promote <raw-file> [--into <name>] [--title <text>] [--dry-run]
 #   memory-hive help
 #
 # <template> is one of: coder, reviewer, researcher, writer, planner
@@ -539,6 +540,26 @@ Usage:
       timestamp + agent + file for each event and keeps a running
       counter. Ctrl+C to exit. Uses fswatch or inotifywait if
       available; falls back to polling (5s).
+
+  memory-hive promote <raw-file> [--into <name>] [--title <text>] [--dry-run]
+      One-command curator workflow. Read a raw learning under
+      hive/learnings/raw/, append a summary with a backlink to a
+      distilled file, and log the decision in curator/DECISIONS.md.
+      The raw file is left untouched (source of truth).
+        <raw-file>      Path to raw markdown (relative or absolute).
+                        Must live under hive/learnings/raw/.
+        --into <name>   Target distilled filename (e.g. patterns.md,
+                        wins.md, mistakes.md, cross-agent-insights.md,
+                        or any topical file). Defaults to inferring
+                        from the raw frontmatter 'kind:' field, or
+                        patterns.md if no signal.
+        --title <text>  Override the section title (default: first H1
+                        of the raw file).
+        --dry-run       Print what would be written; touch nothing.
+      Examples:
+        memory-hive promote hive/learnings/raw/coder/2026-04-23-x.md
+        memory-hive promote raw/coder/x.md --into wins.md
+        memory-hive promote raw/coder/x.md --title "Test isolation"
 
   memory-hive help
       Show this message.
@@ -1100,6 +1121,292 @@ mh_rename() {
     _mh_register_quiet
 }
 
+# --- promote -----------------------------------------------------------------
+#
+# Move (cite, really) a raw learning into a distilled file with one command.
+#
+# Why: the curator loop says "review raw, promote valuable, log decision".
+# Doing that by hand is mv + diff + edit + open DECISIONS.md + type. Friction
+# kills the loop. This verb collapses it to one command:
+#
+#   memory-hive promote learnings/raw/coder/2026-04-23-test-isolation.md
+#
+# Mechanics: append a summary with a backlink to the distilled file, append a
+# dated entry to curator/DECISIONS.md, regenerate the registry. The raw file
+# stays put -- it's the source of truth. Distilled cites raw, never copies it
+# verbatim.
+
+# _mh_promote_extract_frontmatter <file> <key> -> prints value to stdout, or
+# empty if key not found. Reads only the first frontmatter block.
+_mh_promote_extract_frontmatter() {
+    _file="$1"
+    _key="$2"
+    awk -v k="$_key" '
+        BEGIN { inf = 0 }
+        NR == 1 && /^---[[:space:]]*$/ { inf = 1; next }
+        inf == 1 && /^---[[:space:]]*$/ { inf = 0; exit }
+        inf == 1 {
+            idx = index($0, ":")
+            if (idx == 0) next
+            key = substr($0, 1, idx - 1)
+            val = substr($0, idx + 1)
+            sub(/^[[:space:]]+/, "", key); sub(/[[:space:]]+$/, "", key)
+            sub(/^[[:space:]]+/, "", val); sub(/[[:space:]]+$/, "", val)
+            if (key == k) { print val; exit }
+        }
+    ' "$_file"
+}
+
+# _mh_promote_first_h1 <file> -> first "# Heading" text (sans leading "# ").
+# Skips frontmatter. Empty if no H1 found.
+_mh_promote_first_h1() {
+    _file="$1"
+    awk '
+        BEGIN { inf = 0 }
+        NR == 1 && /^---[[:space:]]*$/ { inf = 1; next }
+        inf == 1 && /^---[[:space:]]*$/ { inf = 0; next }
+        inf == 1 { next }
+        /^#[[:space:]]+/ {
+            sub(/^#[[:space:]]+/, "", $0)
+            sub(/[[:space:]]+$/, "", $0)
+            print
+            exit
+        }
+    ' "$_file"
+}
+
+# _mh_promote_summary <file> -> summary body for distilled. Prefers the
+# "## Generalizable rule" section (highest signal), else first paragraph
+# after the first H1. Capped at ~1200 chars.
+_mh_promote_summary() {
+    _file="$1"
+    _gr="$(awk '
+        BEGIN { take = 0 }
+        /^##[[:space:]]+[Gg]eneralizable [Rr]ule[[:space:]]*$/ { take = 1; next }
+        take == 1 && /^##[[:space:]]/ { exit }
+        take == 1 { print }
+    ' "$_file")"
+    if [ -n "$(printf '%s' "$_gr" | tr -d '[:space:]')" ]; then
+        printf '%s' "$_gr" | head -c 1200
+        return 0
+    fi
+    awk '
+        BEGIN { inf = 0; past_h1 = 0; in_para = 0 }
+        NR == 1 && /^---[[:space:]]*$/ { inf = 1; next }
+        inf == 1 && /^---[[:space:]]*$/ { inf = 0; next }
+        inf == 1 { next }
+        past_h1 == 0 && /^#[[:space:]]+/ { past_h1 = 1; next }
+        past_h1 == 1 {
+            if (/^##[[:space:]]/) next
+            if (/^[[:space:]]*$/) {
+                if (in_para == 1) exit
+                next
+            }
+            in_para = 1
+            print
+        }
+    ' "$_file" | head -c 1200
+}
+
+# _mh_promote_infer_target <file> -> distilled basename. Uses frontmatter
+# 'kind:' field, else patterns.md.
+_mh_promote_infer_target() {
+    _file="$1"
+    _kind="$(_mh_promote_extract_frontmatter "$_file" kind)"
+    case "$_kind" in
+        win|wins)               printf 'wins.md' ;;
+        mistake|mistakes)       printf 'mistakes.md' ;;
+        cross-agent|insight|cross-agent-insight|cross-agent-insights)
+                                printf 'cross-agent-insights.md' ;;
+        pattern|patterns|"")    printf 'patterns.md' ;;
+        *)                      printf '%s.md' "$_kind" ;;
+    esac
+}
+
+mh_promote() {
+    _mh_require_install
+
+    _raw_arg=""
+    _into=""
+    _title_override=""
+    _dry=0
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --into)
+                shift
+                [ $# -gt 0 ] || _mh_die "--into needs a value"
+                _into="$1"; shift ;;
+            --into=*)
+                _into="${1#--into=}"; shift ;;
+            --title)
+                shift
+                [ $# -gt 0 ] || _mh_die "--title needs a value"
+                _title_override="$1"; shift ;;
+            --title=*)
+                _title_override="${1#--title=}"; shift ;;
+            --dry-run|-n)
+                _dry=1; shift ;;
+            -h|--help)
+                printf 'Usage: memory-hive promote <raw-file> [--into <name>] [--title <text>] [--dry-run]\n'
+                return 0 ;;
+            -*)
+                _mh_die "Unknown flag: $1" ;;
+            *)
+                if [ -z "$_raw_arg" ]; then
+                    _raw_arg="$1"
+                else
+                    _mh_die "Unexpected argument: $1"
+                fi
+                shift ;;
+        esac
+    done
+
+    [ -n "$_raw_arg" ] || _mh_die "Usage: memory-hive promote <raw-file> [--into <name>] [--title <text>] [--dry-run]"
+
+    # Resolve to an absolute path. Try as-given, then a few sensible roots.
+    _raw_abs=""
+    for _candidate in \
+        "$_raw_arg" \
+        "$INSTALL_DIR/$_raw_arg" \
+        "$HIVE_DIR/$_raw_arg" \
+        "$HIVE_DIR/learnings/raw/$_raw_arg"; do
+        if [ -f "$_candidate" ]; then
+            _raw_abs="$_candidate"
+            break
+        fi
+    done
+    [ -n "$_raw_abs" ] || _mh_die "Raw file not found: $_raw_arg"
+
+    # Canonicalize via cd/pwd (portable; macOS has no `readlink -f`).
+    _raw_dir="$(cd "$(dirname "$_raw_abs")" 2>/dev/null && pwd)"
+    [ -n "$_raw_dir" ] || _mh_die "Could not resolve directory of $_raw_abs"
+    _raw_abs="$_raw_dir/$(basename "$_raw_abs")"
+
+    _raw_root="$HIVE_DIR/learnings/raw"
+    case "$_raw_abs" in
+        "$_raw_root"/*) ;;
+        *) _mh_die "Refuses to promote from outside $_raw_root (got $_raw_abs)" ;;
+    esac
+
+    _fm_date="$(_mh_promote_extract_frontmatter "$_raw_abs" date)"
+    _fm_agent="$(_mh_promote_extract_frontmatter "$_raw_abs" agent)"
+    if [ -z "$_fm_date" ] || [ -z "$_fm_agent" ]; then
+        printf 'ERROR: %s is missing required frontmatter (need date: and agent:).\n' "$_raw_abs" >&2
+        printf '       See templates/memory-entry.md for the canonical format.\n' >&2
+        exit 1
+    fi
+    _fm_context="$(_mh_promote_extract_frontmatter "$_raw_abs" context)"
+
+    if [ -n "$_title_override" ]; then
+        _title="$_title_override"
+    else
+        _title="$(_mh_promote_first_h1 "$_raw_abs")"
+        if [ -z "$_title" ]; then
+            _bn="$(basename "$_raw_abs" .md)"
+            _title="$(printf '%s' "$_bn" | sed 's/^[0-9-]*//' | tr '-' ' ')"
+            [ -n "$_title" ] || _title="$_bn"
+        fi
+    fi
+
+    if [ -z "$_into" ]; then
+        _into="$(_mh_promote_infer_target "$_raw_abs")"
+    fi
+    _into="$(basename "$_into")"
+    case "$_into" in
+        *.md) ;;
+        *) _into="$_into.md" ;;
+    esac
+    _distilled_dir="$HIVE_DIR/learnings/distilled"
+    _distilled_abs="$_distilled_dir/$_into"
+
+    _raw_rel_to_hive="${_raw_abs#"$HIVE_DIR/"}"
+    _backlink="../${_raw_rel_to_hive#learnings/}"
+
+    _summary="$(_mh_promote_summary "$_raw_abs")"
+    [ -n "$_summary" ] || _summary="_(no summary extracted; see source for full content)_"
+
+    _today="$(date -u +%Y-%m-%d 2>/dev/null || printf 'unknown-date')"
+
+    _section_tmp="$(mktemp -t mh-promote-section.XXXXXX)"
+    {
+        printf '\n## %s\n\n' "$_title"
+        printf -- '- **Date promoted:** %s\n' "$_today"
+        printf -- '- **Source:** [%s](%s)\n' "$_raw_rel_to_hive" "$_backlink"
+        printf -- '- **Contributing agent:** %s\n' "$_fm_agent"
+        printf -- '- **Original date:** %s\n' "$_fm_date"
+        if [ -n "$_fm_context" ]; then
+            printf -- '- **Context:** %s\n' "$_fm_context"
+        fi
+        printf '\n%s\n' "$_summary"
+    } > "$_section_tmp"
+
+    _decision_tmp="$(mktemp -t mh-promote-decision.XXXXXX)"
+    {
+        printf '\n### %s -- Promoted `%s` -> `learnings/distilled/%s`\n' \
+            "$_today" "$_raw_rel_to_hive" "$_into"
+        printf -- '- **Decision:** Append summary + backlink to %s.\n' "$_into"
+        printf -- '- **Reasoning:** Promoted via `memory-hive promote`; raw entry retained as source of truth.\n'
+        printf -- '- **Agents involved:** %s\n' "$_fm_agent"
+        printf -- '- **Outcome:** Distilled section "%s" written; raw file left in place.\n' "$_title"
+    } > "$_decision_tmp"
+
+    if [ "$_dry" -eq 1 ]; then
+        printf '[dry-run] Would append to %s:\n' "$_distilled_abs"
+        cat "$_section_tmp"
+        printf '\n[dry-run] Would append to %s/curator/DECISIONS.md:\n' "$HIVE_DIR"
+        cat "$_decision_tmp"
+        printf '\n[dry-run] No files written.\n'
+        rm -f "$_section_tmp" "$_decision_tmp"
+        return 0
+    fi
+
+    mkdir -p "$_distilled_dir" || _mh_die "Could not create $_distilled_dir"
+    if [ ! -f "$_distilled_abs" ]; then
+        _stem="$(basename "$_into" .md)"
+        _h1="$(printf '%s' "$_stem" | tr '-' ' ' | awk '{ for (i=1;i<=NF;i++) $i = toupper(substr($i,1,1)) tolower(substr($i,2)); print }')"
+        {
+            printf '# %s\n\n' "$_h1"
+            printf 'Curated learnings promoted from `learnings/raw/`. Each section cites\n'
+            printf 'its source raw file; raw is the source of truth, distilled is the\n'
+            printf 'reference index. Append-only -- entries are never edited in place.\n'
+        } > "$_distilled_abs" || _mh_die "Could not create $_distilled_abs"
+    fi
+    cat "$_section_tmp" >> "$_distilled_abs" || _mh_die "Could not append to $_distilled_abs"
+
+    _curator_dir="$HIVE_DIR/curator"
+    _decisions_file="$_curator_dir/DECISIONS.md"
+    mkdir -p "$_curator_dir" || _mh_die "Could not create $_curator_dir"
+    if [ ! -f "$_decisions_file" ]; then
+        {
+            printf '# Decisions\n\n'
+            printf 'Audit trail of every curation decision made by the curator.\n\n'
+            printf -- '---\n'
+        } > "$_decisions_file" || _mh_die "Could not create $_decisions_file"
+    fi
+    cat "$_decision_tmp" >> "$_decisions_file" || _mh_die "Could not append to $_decisions_file"
+
+    rm -f "$_section_tmp" "$_decision_tmp"
+
+    _mh_register_quiet
+
+    printf 'Promoted:\n'
+    printf '  source:   %s\n' "$_raw_rel_to_hive"
+    printf '  target:   learnings/distilled/%s\n' "$_into"
+    printf '  title:    %s\n' "$_title"
+    printf '  decision: curator/DECISIONS.md\n'
+    printf '\n--- appended to %s ---\n' "$_into"
+    printf '\n## %s\n\n' "$_title"
+    printf -- '- **Date promoted:** %s\n' "$_today"
+    printf -- '- **Source:** [%s](%s)\n' "$_raw_rel_to_hive" "$_backlink"
+    printf -- '- **Contributing agent:** %s\n' "$_fm_agent"
+    printf -- '- **Original date:** %s\n' "$_fm_date"
+    if [ -n "$_fm_context" ]; then
+        printf -- '- **Context:** %s\n' "$_fm_context"
+    fi
+    printf '\n%s\n' "$_summary"
+}
+
 # --- dispatch ----------------------------------------------------------------
 
 if [ $# -eq 0 ]; then
@@ -1121,6 +1428,7 @@ case "$_verb" in
     apply)    _mh_require_install; mh_apply "$@" ;;
     stats)    mh_stats ;;
     watch)    mh_watch ;;
+    promote)  mh_promote "$@" ;;
     help|-h|--help) mh_help ;;
     *)
         printf 'Unknown command: %s\n\n' "$_verb" >&2
