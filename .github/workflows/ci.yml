@@ -657,6 +657,69 @@ jobs:
 
           echo "Stale-raw smoke OK"
 
+      - name: Checkpoint + diff smoke
+        shell: bash
+        run: |
+          set -eu
+          INSTALL_DIR="$(mktemp -d)"
+          export MEMORY_HIVE_DIR="$INSTALL_DIR"
+          export MEMORY_HIVE_SKIP_CLAUDE_MD=1
+          export MEMORY_HIVE_REPO="$(pwd)"
+          sh install.sh < /dev/null > /dev/null 2>&1
+
+          # 1. Create a named checkpoint and verify the marker exists.
+          sh "$INSTALL_DIR/memory-hive" checkpoint --name ci-test | tee /tmp/mh-cp.out
+          test -f "$INSTALL_DIR/hive/.checkpoints/ci-test.marker"
+          grep -q "Checkpoint saved: ci-test" /tmp/mh-cp.out
+
+          # 2. --list should print the new checkpoint.
+          sh "$INSTALL_DIR/memory-hive" checkpoint --list | tee /tmp/mh-cp-list.out
+          grep -q "ci-test" /tmp/mh-cp-list.out
+
+          # 3. diff with no changes since checkpoint should report none.
+          sh "$INSTALL_DIR/memory-hive" diff --since ci-test | tee /tmp/mh-diff-empty.out
+          grep -q "No writes since reference" /tmp/mh-diff-empty.out
+
+          # 4. Append a line to a silo log (the canonical "agent did work"
+          # event), then diff again. The file MUST appear under Modified
+          # (it existed before the checkpoint, just got appended to).
+          # Wait at least 1s so the mtime is unambiguously newer than the
+          # marker on filesystems with 1s mtime granularity.
+          sleep 2
+          echo "ci entry" >> "$INSTALL_DIR/hive/agents/main/log.md"
+          sh "$INSTALL_DIR/memory-hive" diff --since ci-test | tee /tmp/mh-diff.out
+
+          # The entry must appear in the Modified section, NOT the New
+          # section. We extract the chunk between "Modified" and the next
+          # blank line and assert log.md is in it.
+          awk '/^Modified/ {flag=1; next} /^$/ {flag=0} flag' /tmp/mh-diff.out > /tmp/mh-diff-mod.out
+          grep -q "agents/main/log.md" /tmp/mh-diff-mod.out \
+            || { echo "log.md not under Modified"; cat /tmp/mh-diff.out; exit 1; }
+
+          # 5. Add a brand new file under learnings/raw/. It MUST appear
+          # under New files (didn't exist at checkpoint time).
+          sleep 1
+          mkdir -p "$INSTALL_DIR/hive/learnings/raw/main"
+          echo "raw" > "$INSTALL_DIR/hive/learnings/raw/main/ci-note.md"
+          sh "$INSTALL_DIR/memory-hive" diff --since ci-test | tee /tmp/mh-diff2.out
+          awk '/^New files/ {flag=1; next} /^$/ {flag=0} flag' /tmp/mh-diff2.out > /tmp/mh-diff-new.out
+          grep -q "learnings/raw/main/ci-note.md" /tmp/mh-diff-new.out \
+            || { echo "ci-note.md not under New files"; cat /tmp/mh-diff2.out; exit 1; }
+
+          # 6. Unknown --since should error nonzero.
+          set +e
+          sh "$INSTALL_DIR/memory-hive" diff --since does-not-exist > /tmp/mh-diff-bad.out 2>&1
+          rc=$?
+          set -e
+          [ "$rc" -ne 0 ] || { echo "Expected error for unknown checkpoint"; exit 1; }
+          grep -q "No checkpoint or date matches" /tmp/mh-diff-bad.out
+
+          # 7. Default --since (no flag) should fall back to newest checkpoint.
+          sh "$INSTALL_DIR/memory-hive" diff > /tmp/mh-diff-default.out
+          grep -q "ci-test" /tmp/mh-diff-default.out
+
+          echo "Checkpoint + diff smoke OK"
+
       - name: Doctor smoke — multi-platform health check
         shell: bash
         run: |

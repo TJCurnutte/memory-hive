@@ -952,6 +952,17 @@ Usage:
         memory-hive stale --days 14 --agent coder
         memory-hive stale --count
 
+  memory-hive checkpoint [--name <name>] | --list
+      Save a named reference marker under \$HIVE_DIR/.checkpoints/.
+      Used as the "since" point for \`memory-hive diff\`. Default name
+      is checkpoint-<YYYY-MM-DD-HHMMSS>. \`--list\` prints all
+      checkpoints (newest first).
+
+  memory-hive diff [--since <checkpoint|YYYY-MM-DD>] [--verbose]
+      Show every hive write since a reference point. Default --since
+      is the most recent checkpoint, or the install baseline if none
+      exists. Lists New vs Modified files, classified by agent.
+
   memory-hive help
       Show this message.
 
@@ -2488,6 +2499,425 @@ EOF
     rm -f "$_stale_tmp"
 }
 
+# --- checkpoints + diff ------------------------------------------------------
+#
+# Checkpoints are named, empty marker files under $HIVE_DIR/.checkpoints/.
+# Their mtime is the reference timestamp. We deliberately re-use the same
+# pattern install.sh uses for $HIVE_DIR/.baseline-installed so the diff
+# code can treat the install baseline as just another checkpoint.
+
+CHECKPOINTS_DIR_REL=".checkpoints"
+
+# _mh_checkpoints_dir → prints absolute path to the checkpoint store.
+_mh_checkpoints_dir() {
+    printf '%s/%s' "$HIVE_DIR" "$CHECKPOINTS_DIR_REL"
+}
+
+# _mh_default_checkpoint_name → "checkpoint-YYYY-MM-DD-HHMMSS" in local time.
+_mh_default_checkpoint_name() {
+    date '+checkpoint-%Y-%m-%d-%H%M%S' 2>/dev/null \
+        || printf 'checkpoint-%s' "$(date +%s)"
+}
+
+# _mh_validate_checkpoint_name <name> → 0 if safe (no /, no leading dot, non-empty).
+_mh_validate_checkpoint_name() {
+    _cn="$1"
+    [ -n "$_cn" ] || return 1
+    case "$_cn" in
+        */*|.*) return 1 ;;
+    esac
+    return 0
+}
+
+# _mh_iso_time <epoch> → "YYYY-MM-DD HH:MM:SS" in local time.
+_mh_iso_time() {
+    _e="$1"
+    date -d "@$_e" '+%Y-%m-%d %H:%M:%S' 2>/dev/null \
+        || date -r "$_e" '+%Y-%m-%d %H:%M:%S' 2>/dev/null \
+        || printf '????-??-?? ??:??:??'
+}
+
+# _mh_list_checkpoint_files → prints absolute paths of all *.marker files,
+# newest mtime first. Empty if the dir is missing.
+_mh_list_checkpoint_files() {
+    _cd="$(_mh_checkpoints_dir)"
+    [ -d "$_cd" ] || return 0
+    # Build "epoch<TAB>path" rows so we can sort by epoch portably.
+    for _m in "$_cd"/*.marker; do
+        [ -f "$_m" ] || continue
+        _e="$(_mh_mtime_epoch "$_m")"
+        [ -n "$_e" ] || continue
+        printf '%s\t%s\n' "$_e" "$_m"
+    done | sort -nr | awk -F'\t' '{print $2}'
+}
+
+# _mh_resolve_checkpoint <name> → prints absolute path of the matching marker
+# file, or empty + nonzero if no/ambiguous match. Matches first by exact
+# basename, then by basename minus the .marker suffix.
+_mh_resolve_checkpoint() {
+    _q="$1"
+    _cd="$(_mh_checkpoints_dir)"
+    [ -d "$_cd" ] || return 1
+    _exact="$_cd/$_q.marker"
+    if [ -f "$_exact" ]; then
+        printf '%s' "$_exact"
+        return 0
+    fi
+    _exact2="$_cd/$_q"
+    if [ -f "$_exact2" ]; then
+        printf '%s' "$_exact2"
+        return 0
+    fi
+    # Substring fallback (only useful for the diff verb's --since).
+    _hits=""
+    _count=0
+    for _m in "$_cd"/*.marker; do
+        [ -f "$_m" ] || continue
+        _bn="$(basename "$_m" .marker)"
+        case "$_bn" in
+            *"$_q"*)
+                _hits="$_hits $_m"
+                _count=$((_count + 1))
+                ;;
+        esac
+    done
+    if [ "$_count" -eq 1 ]; then
+        # Strip leading space.
+        printf '%s' "${_hits# }"
+        return 0
+    fi
+    if [ "$_count" -gt 1 ]; then
+        # Ambiguous — caller decides how to surface this. Emit names on
+        # stderr and return nonzero so callers know to abort.
+        printf 'Ambiguous checkpoint name "%s". Matches:\n' "$_q" >&2
+        for _m in $_hits; do
+            printf '  %s\n' "$(basename "$_m" .marker)" >&2
+        done
+        return 2
+    fi
+    return 1
+}
+
+# _mh_parse_ymd_to_epoch <YYYY-MM-DD> → epoch of midnight (local time), or
+# empty + nonzero if the input doesn't parse.
+_mh_parse_ymd_to_epoch() {
+    _d="$1"
+    case "$_d" in
+        [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
+        *) return 1 ;;
+    esac
+    # GNU date first, then BSD date.
+    _e="$(date -d "$_d 00:00:00" +%s 2>/dev/null)"
+    if [ -z "$_e" ]; then
+        _e="$(date -j -f '%Y-%m-%d %H:%M:%S' "$_d 00:00:00" +%s 2>/dev/null)"
+    fi
+    [ -n "$_e" ] || return 1
+    printf '%s' "$_e"
+}
+
+mh_checkpoint() {
+    _mh_require_install
+    _name=""
+    _list=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --name)
+                shift
+                [ $# -gt 0 ] || _mh_die "--name needs a value"
+                _name="$1"
+                shift
+                ;;
+            --name=*)
+                _name="${1#--name=}"
+                shift
+                ;;
+            --list|-l)
+                _list=1
+                shift
+                ;;
+            -h|--help)
+                printf 'Usage: memory-hive checkpoint [--name <name>] | --list\n'
+                return 0
+                ;;
+            *)
+                _mh_die "Unknown argument: $1"
+                ;;
+        esac
+    done
+
+    _cd="$(_mh_checkpoints_dir)"
+
+    if [ "$_list" -eq 1 ]; then
+        if [ ! -d "$_cd" ]; then
+            printf '(no checkpoints yet — create one with `memory-hive checkpoint`)\n'
+            return 0
+        fi
+        _any=0
+        _mh_list_checkpoint_files | while IFS= read -r _m; do
+            [ -n "$_m" ] || continue
+            _bn="$(basename "$_m" .marker)"
+            _e="$(_mh_mtime_epoch "$_m")"
+            printf '  %-40s %s\n' "$_bn" "$(_mh_iso_time "$_e")"
+            _any=1
+        done
+        # The subshell-in-pipe means $_any doesn't escape; check on disk instead.
+        if [ -z "$(_mh_list_checkpoint_files)" ]; then
+            printf '(no checkpoints yet — create one with `memory-hive checkpoint`)\n'
+        fi
+        return 0
+    fi
+
+    [ -n "$_name" ] || _name="$(_mh_default_checkpoint_name)"
+    _mh_validate_checkpoint_name "$_name" \
+        || _mh_die "Invalid checkpoint name: '$_name' (no slashes, no leading dot)."
+
+    mkdir -p "$_cd" || _mh_die "Could not create $_cd"
+    _marker="$_cd/$_name.marker"
+    if [ -f "$_marker" ]; then
+        _mh_die "Checkpoint already exists: $_name (delete it first or pick a new name)"
+    fi
+    : > "$_marker" || _mh_die "Could not write $_marker"
+    # touch sets mtime = now even if the file already existed; keep it
+    # explicit so the mtime is unambiguous.
+    touch "$_marker" 2>/dev/null || true
+    _e="$(_mh_mtime_epoch "$_marker")"
+    [ -n "$_e" ] || _e="$(date +%s)"
+    printf 'Checkpoint saved: %s at %s\n' "$_name" "$(_mh_iso_time "$_e")"
+}
+
+mh_diff() {
+    _mh_require_install
+    _since=""
+    _verbose=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --since)
+                shift
+                [ $# -gt 0 ] || _mh_die "--since needs a value"
+                _since="$1"
+                shift
+                ;;
+            --since=*)
+                _since="${1#--since=}"
+                shift
+                ;;
+            --verbose|-v)
+                _verbose=1
+                shift
+                ;;
+            -h|--help)
+                printf 'Usage: memory-hive diff [--since <checkpoint|YYYY-MM-DD>] [--verbose]\n'
+                return 0
+                ;;
+            *)
+                _mh_die "Unknown argument: $1"
+                ;;
+        esac
+    done
+
+    # --- resolve the reference point --------------------------------------
+    _ref_label=""        # human-readable "<name> (timestamp)" string
+    _ref_mtime=""        # epoch — files with mtime > this are "changed"
+    _ref_marker=""       # absolute path used with `find -newer` (preferred)
+
+    _baseline_file="$HIVE_DIR/.baseline-installed"
+
+    if [ -n "$_since" ]; then
+        # YYYY-MM-DD wins over a coincidentally same-named checkpoint —
+        # the date format is unambiguous and a checkpoint-name-of-a-date
+        # would be unusual.
+        # `|| true` so set -e doesn't abort when the input isn't a date.
+        _maybe_epoch="$(_mh_parse_ymd_to_epoch "$_since" 2>/dev/null || true)"
+        if [ -n "$_maybe_epoch" ]; then
+            _ref_mtime="$_maybe_epoch"
+            _ref_label="$_since (00:00:00)"
+            # We don't have a real file at that mtime, so we synthesize one
+            # in /tmp for the find -newer call.
+            _ref_marker="$(mktemp -t mh-diff.XXXXXX)"
+            # Portable touch -t: GNU accepts -d "@epoch", BSD accepts -t [[CC]YY]MMDDhhmm[.ss].
+            if ! touch -d "@$_ref_mtime" "$_ref_marker" 2>/dev/null; then
+                _stamp="$(date -r "$_ref_mtime" '+%Y%m%d%H%M.%S' 2>/dev/null \
+                    || date -d "@$_ref_mtime" '+%Y%m%d%H%M.%S' 2>/dev/null)"
+                [ -n "$_stamp" ] && touch -t "$_stamp" "$_ref_marker" 2>/dev/null || true
+            fi
+        else
+            # Try to resolve as a checkpoint name. We deliberately swallow
+            # the exit code into _rc so set -e doesn't abort on the
+            # not-found / ambiguous paths.
+            set +e
+            _resolved="$(_mh_resolve_checkpoint "$_since" 2>/tmp/mh-diff-resolve.$$.err)"
+            _rc=$?
+            set -e
+            # Surface ambiguity output if any.
+            if [ -s /tmp/mh-diff-resolve.$$.err ]; then
+                cat /tmp/mh-diff-resolve.$$.err >&2
+            fi
+            rm -f /tmp/mh-diff-resolve.$$.err
+            if [ "$_rc" -eq 2 ]; then
+                # Ambiguous — _mh_resolve_checkpoint already printed candidates.
+                exit 1
+            fi
+            if [ "$_rc" -ne 0 ] || [ -z "$_resolved" ]; then
+                _mh_die "No checkpoint or date matches '$_since'. Run \`memory-hive checkpoint --list\` to see available names."
+            fi
+            _ref_marker="$_resolved"
+            _ref_mtime="$(_mh_mtime_epoch "$_ref_marker")"
+            _ref_label="$(basename "$_ref_marker" .marker) ($(_mh_iso_time "$_ref_mtime"))"
+        fi
+    else
+        # Default: newest checkpoint, falling back to baseline.
+        _newest="$(_mh_list_checkpoint_files | head -n 1)"
+        if [ -n "$_newest" ]; then
+            _ref_marker="$_newest"
+            _ref_mtime="$(_mh_mtime_epoch "$_ref_marker")"
+            _ref_label="$(basename "$_ref_marker" .marker) ($(_mh_iso_time "$_ref_mtime"))"
+        elif [ -f "$_baseline_file" ]; then
+            _ref_marker="$_baseline_file"
+            _ref_mtime="$(_mh_mtime_epoch "$_ref_marker")"
+            _ref_label="install baseline ($(_mh_iso_time "$_ref_mtime"))"
+        else
+            _mh_die "No checkpoints and no install baseline found. Create a checkpoint with \`memory-hive checkpoint\`."
+        fi
+    fi
+
+    [ -n "$_ref_mtime" ] || _mh_die "Could not determine reference mtime."
+
+    # --- collect changed files --------------------------------------------
+    # Primary diff is `find -newer <marker>` (POSIX). We then classify
+    # each path so we can group by kind/agent.
+    _new_list="$(mktemp -t mh-diff-new.XXXXXX)"
+    _mod_list="$(mktemp -t mh-diff-mod.XXXXXX)"
+    _all_count=0
+    _agent_tally=""
+
+    # find ! -path tricks to skip the same noise mh_stats skips, plus the
+    # checkpoints dir itself (otherwise creating a checkpoint shows up as
+    # a "write").
+    find "$HIVE_DIR" -type f -newer "$_ref_marker" \
+        ! -name '*.upstream' \
+        ! -name '*.local' \
+        ! -name '.DS_Store' \
+        ! -path '*/.git/*' \
+        ! -path "$HIVE_DIR/$CHECKPOINTS_DIR_REL/*" \
+        ! -path "$_baseline_file" \
+        2>/dev/null \
+    | while IFS= read -r _f; do
+        [ -f "$_f" ] || continue
+        _cls="$(_mh_classify "$_f")"
+        # Unclassified files are noise (e.g. .git internals); skip.
+        [ -n "$_cls" ] || continue
+        _rel="${_f#"$HIVE_DIR"/}"
+        # New-vs-modified heuristic. POSIX only guarantees mtime/atime/ctime
+        # (no birth time), so this is best-effort:
+        #   1. If the filesystem exposes birth time (macOS `stat -f %B`,
+        #      Linux ext4 `stat -c %W`), and birth > ref_mtime → "new".
+        #   2. Otherwise fall back to ctime: if ctime > ref_mtime AND
+        #      ctime is within a small window of mtime, treat as "new"
+        #      (a freshly created file has ctime ≈ mtime). If ctime is
+        #      well after the file's earliest known timestamp, prefer
+        #      "modified".
+        #   3. Last resort: if we can't decide, mark "modified" — that
+        #      message ("file changed after ref") is always true for
+        #      anything `find -newer` returned.
+        # Try birth time first (macOS APFS, Linux ext4 with statx).
+        # Order matters: GNU stat (-c) on macOS would produce a usage
+        # error to stderr but no output; BSD stat (-f %B) on Linux
+        # interprets -f as filesystem-stat and emits a multi-line
+        # human-readable format. Try GNU first, then BSD, and validate
+        # the result is a positive integer before trusting it.
+        _btime="$(stat -c %W "$_f" 2>/dev/null || stat -f %B "$_f" 2>/dev/null || printf '')"
+        case "$_btime" in
+            ''|0|-)                 _btime="" ;;
+            *[!0-9]*)               _btime="" ;;  # non-numeric → garbage
+        esac
+        _is_new=0
+        if [ -n "$_btime" ]; then
+            # Real birth time is authoritative.
+            [ "$_btime" -gt "$_ref_mtime" ] && _is_new=1
+        else
+            # Fallback: if ctime ≈ mtime AND ctime > ref, the file's
+            # inode metadata was set ≈ when the content was last written
+            # — characteristic of a fresh creation. An in-place append
+            # bumps both, but on filesystems where ctime tracks "any
+            # metadata change" the gap to mtime tends to be larger over
+            # time. Imperfect; documented in the PR description.
+            _mtime="$(_mh_mtime_epoch "$_f")"
+            _ctime="$(stat -c %Z "$_f" 2>/dev/null || stat -f %c "$_f" 2>/dev/null || printf '')"
+            case "$_ctime" in *[!0-9]*) _ctime="" ;; esac
+            case "$_mtime" in *[!0-9]*) _mtime="" ;; esac
+            if [ -n "$_ctime" ] && [ -n "$_mtime" ] \
+                && [ "$_ctime" -gt "$_ref_mtime" ]; then
+                _delta=$((_ctime - _mtime))
+                [ "$_delta" -lt 0 ] && _delta=$(( -_delta ))
+                [ "$_delta" -le 2 ] && _is_new=1
+            fi
+        fi
+        if [ "$_is_new" -eq 1 ]; then
+            printf '%s\t%s\n' "$_cls" "$_rel" >> "$_new_list"
+        else
+            printf '%s\t%s\n' "$_cls" "$_rel" >> "$_mod_list"
+        fi
+    done
+
+    _new_n=0
+    [ -s "$_new_list" ] && _new_n="$(wc -l < "$_new_list" | tr -d ' ')"
+    _mod_n=0
+    [ -s "$_mod_list" ] && _mod_n="$(wc -l < "$_mod_list" | tr -d ' ')"
+    _all_count=$((_new_n + _mod_n))
+
+    # --- render -----------------------------------------------------------
+    printf '\nMemory Hive — diff since `%s`\n' "$_ref_label"
+    printf '────────────────────────────────────────────────────────────────\n'
+
+    if [ "$_all_count" -eq 0 ]; then
+        printf '\nNo writes since reference.\n\n'
+        rm -f "$_new_list" "$_mod_list"
+        return 0
+    fi
+
+    if [ "$_new_n" -gt 0 ]; then
+        printf '\nNew files (%s):\n' "$_new_n"
+        sort "$_new_list" | while IFS=$(printf '\t') read -r _cls _rel; do
+            if [ "$_verbose" -eq 1 ]; then
+                printf '  %-30s %s\n' "$_cls" "$_rel"
+            else
+                printf '  %s\n' "$_rel"
+            fi
+        done
+    fi
+
+    if [ "$_mod_n" -gt 0 ]; then
+        printf '\nModified (%s):\n' "$_mod_n"
+        sort "$_mod_list" | while IFS=$(printf '\t') read -r _cls _rel; do
+            if [ "$_verbose" -eq 1 ]; then
+                printf '  %-30s %s\n' "$_cls" "$_rel"
+            else
+                printf '  %s\n' "$_rel"
+            fi
+        done
+    fi
+
+    # Agent summary — count distinct agents touched.
+    _agents="$( { [ -s "$_new_list" ] && cat "$_new_list"; [ -s "$_mod_list" ] && cat "$_mod_list"; } \
+        | awk -F'\t' '{ split($1, a, ":"); print a[1] }' \
+        | sort -u )"
+    _agent_n=0
+    if [ -n "$_agents" ]; then
+        _agent_n="$(printf '%s\n' "$_agents" | wc -l | tr -d ' ')"
+    fi
+
+    printf '\nSummary: %s write(s) across %s agent(s).\n' "$_all_count" "$_agent_n"
+    printf 'Verify: find %s -type f -newer %s\n\n' "$HIVE_DIR" "$_ref_marker"
+
+    rm -f "$_new_list" "$_mod_list"
+    # If we synthesized a temp marker for a date-based --since, clean up.
+    case "$_ref_marker" in
+        /tmp/mh-diff.*|/var/folders/*/mh-diff.*) rm -f "$_ref_marker" ;;
+    esac
+    return 0
+}
+
+
 # --- dispatch ----------------------------------------------------------------
 
 if [ $# -eq 0 ]; then
@@ -2515,6 +2945,8 @@ case "$_verb" in
     tag)      mh_tag "$@" ;;
     tags)     mh_tags "$@" ;;
     stale)    mh_stale "$@" ;;
+    checkpoint) mh_checkpoint "$@" ;;
+    diff)     mh_diff "$@" ;;
     help|-h|--help) mh_help ;;
     *)
         printf 'Unknown command: %s\n\n' "$_verb" >&2
