@@ -600,6 +600,63 @@ jobs:
 
           echo "Tagging smoke OK"
 
+      - name: Stale-raw smoke — doctor surfaces backdated learnings
+        shell: bash
+        run: |
+          set -eu
+          INSTALL_DIR="$(mktemp -d)"
+          export MEMORY_HIVE_DIR="$INSTALL_DIR"
+          export MEMORY_HIVE_SKIP_CLAUDE_MD=1
+          export MEMORY_HIVE_REPO="$(pwd)"
+          sh install.sh < /dev/null > /dev/null 2>&1
+
+          mkdir -p "$INSTALL_DIR/hive/learnings/raw/coder"
+          # 1) fresh: should NOT be stale
+          echo "fresh" > "$INSTALL_DIR/hive/learnings/raw/coder/fresh-thing.md"
+          # 2) stale + unreviewed: should appear in doctor + stale verb
+          echo "stale" > "$INSTALL_DIR/hive/learnings/raw/coder/stale-thing.md"
+          # 3) stale but referenced in DECISIONS.md: should be excluded
+          echo "promoted" > "$INSTALL_DIR/hive/learnings/raw/coder/promoted-thing.md"
+          # Backdate the two old ones (10 days). GNU/BSD touch differ; try both.
+          touch -d '10 days ago' \
+              "$INSTALL_DIR/hive/learnings/raw/coder/stale-thing.md" \
+              "$INSTALL_DIR/hive/learnings/raw/coder/promoted-thing.md" 2>/dev/null || \
+          touch -t "$(date -v-10d +%Y%m%d%H%M.%S)" \
+              "$INSTALL_DIR/hive/learnings/raw/coder/stale-thing.md" \
+              "$INSTALL_DIR/hive/learnings/raw/coder/promoted-thing.md"
+          echo "promoted: see promoted-thing.md" >> "$INSTALL_DIR/hive/curator/DECISIONS.md"
+
+          # `stale --count` should be exactly 1 (stale-thing.md only).
+          n=$(sh "$INSTALL_DIR/memory-hive" stale --count)
+          [ "$n" = "1" ] || { echo "stale --count expected 1, got $n"; exit 1; }
+
+          # Doctor stale section should appear and reference the file.
+          sh "$INSTALL_DIR/memory-hive" doctor > /tmp/mh-stale.log 2>&1 || true
+          grep -q "raw learnings >7 days old" /tmp/mh-stale.log || \
+              { echo "doctor missing stale section"; cat /tmp/mh-stale.log; exit 1; }
+          grep -q "stale-thing.md" /tmp/mh-stale.log || \
+              { echo "doctor did not list stale-thing.md"; cat /tmp/mh-stale.log; exit 1; }
+          if grep -q "promoted-thing.md" /tmp/mh-stale.log; then
+              echo "doctor incorrectly listed promoted-thing.md (DECISIONS.md backlink ignored)"
+              exit 1
+          fi
+
+          # Threshold escalation: drop threshold to 0 -> doctor must warn.
+          set +e
+          MEMORY_HIVE_STALE_THRESHOLD=0 sh "$INSTALL_DIR/memory-hive" doctor > /tmp/mh-stale2.log 2>&1
+          rc=$?
+          set -e
+          [ "$rc" -eq 1 ] || { echo "doctor should exit 1 with threshold=0; got $rc"; exit 1; }
+          grep -q "!! 1 raw learnings" /tmp/mh-stale2.log || \
+              { echo "doctor did not escalate to warning"; cat /tmp/mh-stale2.log; exit 1; }
+
+          # --agent filter: empty for an agent with no stale files.
+          mkdir -p "$INSTALL_DIR/hive/learnings/raw/main"
+          n_main=$(sh "$INSTALL_DIR/memory-hive" stale --agent main --count)
+          [ "$n_main" = "0" ] || { echo "agent=main expected 0, got $n_main"; exit 1; }
+
+          echo "Stale-raw smoke OK"
+
       - name: Doctor smoke — multi-platform health check
         shell: bash
         run: |

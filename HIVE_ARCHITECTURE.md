@@ -324,7 +324,7 @@ curator still decides what to actually promote.
 
 | Rule | Policy |
 |---|---|
-| Raw learnings | >7 days unreviewed → auto-escalate |
+| Raw learnings | >7 days unreviewed → surfaced by `memory-hive doctor` and `memory-hive stale`; escalates to a doctor warning when count exceeds `MEMORY_HIVE_STALE_THRESHOLD` (default 20). "Unreviewed" = basename absent from `curator/DECISIONS.md`. |
 | Active tasks | >14 days → auto-escalate |
 | Individual file size | Cap at 50KB |
 | Daily raw writes | Cap at 20KB per file |
