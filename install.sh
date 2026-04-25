@@ -218,6 +218,26 @@ if [ -d "$TMP_DIR/memory-hive/templates/roles" ]; then
     done
 fi
 
+# Install seed scenarios so `memory-hive seed` can populate a fresh hive.
+# Each scenario is a directory tree under templates/scenarios/<name>/files/
+# plus an agents.txt manifest. We copy the whole tree (POSIX `cp -R`) since
+# nested dirs and date-marker files need to land verbatim.
+if [ -d "$TMP_DIR/memory-hive/templates/scenarios" ]; then
+    mkdir -p "$INSTALL_DIR/templates/scenarios"
+    for _scn_src in "$TMP_DIR/memory-hive/templates/scenarios/"*; do
+        [ -d "$_scn_src" ] || continue
+        _scn_name="$(basename "$_scn_src")"
+        _scn_dst="$INSTALL_DIR/templates/scenarios/$_scn_name"
+        # Refresh: remove the existing copy first so renamed/deleted files
+        # in upstream don't linger after an update.
+        rm -rf "$_scn_dst"
+        # `cp -R` is POSIX. The trailing /. on the source copies contents,
+        # not the dir itself, so the destination structure stays correct.
+        mkdir -p "$_scn_dst"
+        cp -R "$_scn_src/." "$_scn_dst/"
+    done
+fi
+
 if [ "$SYNC_MODE" = "1" ]; then
     ok "Memory Hive updated"
 else

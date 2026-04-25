@@ -216,7 +216,17 @@ conflict-resolution rules, see [HIVE_ARCHITECTURE.md](HIVE_ARCHITECTURE.md).
 the full reference. The verbs cluster into four categories:
 
 **Lifecycle** — `add`, `list`, `archive`, `role`, `rename`, `register`,
-`setup`, `apply`, `doctor`. Manage silos and keep the install healthy.
+`setup`, `apply`, `doctor`, `seed`. Manage silos and keep the install
+healthy.
+
+`seed [--scenario <name>] [--dry-run] [--force]` answers the most
+common first-day question: "I installed it, now what?" One command
+populates a fresh hive with synthetic-but-realistic content (silo
+logs, raw + distilled learnings, a curator decision log, a projects
+file) so the observability verbs below produce non-trivial output
+on first use. Bundled scenarios: `default` (3-agent team, two weeks
+of activity), `solo`, `large-team`. Refuses to overwrite a non-empty
+hive without `--force`.
 
 **Observability** — see what's happening in the hive without manual grep:
 
