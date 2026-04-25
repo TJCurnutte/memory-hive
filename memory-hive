@@ -1239,6 +1239,7 @@ Usage:
       streaming view. Per-kind extraction: log/DECISIONS/CONFLICTS show
       the newest dated heading + first paragraph; memory/context show
       the tail; learnings show H1 + frontmatter.
+
   memory-hive promote <raw-file> [--into <name>] [--title <text>] [--dry-run]
       One-command curator workflow. Read a raw learning under
       hive/learnings/raw/, append a summary with a backlink to a
@@ -1258,12 +1259,14 @@ Usage:
         memory-hive promote hive/learnings/raw/coder/2026-04-23-x.md
         memory-hive promote raw/coder/x.md --into wins.md
         memory-hive promote raw/coder/x.md --title "Test isolation"
+
   memory-hive confidence
       Cluster raw learnings (hive/learnings/raw/<agent>/*.md) by
       normalized title and suggest upgrades when a cluster crosses an
       HIVE_ARCHITECTURE threshold (3 aligned low → medium, 3 aligned
       medium → high, 3+ aligned high → promotion-ready). Suggest-only;
       curator decides what to actually promote.
+
   memory-hive tag <file> <tag1> [tag2 ...]
       Add tags to a learning file's YAML frontmatter. Tags must be
       lowercase letters/digits/dashes, 2-24 chars. Existing tags are
@@ -1276,6 +1279,7 @@ Usage:
       count desc. --tag lists every file using that tag. --agent
       limits the scan to one agent's silo (agents/<name>/ and
       learnings/raw/<name>-*.md).
+
   memory-hive stale [--days N] [--agent <name>] [--count]
       List raw learnings older than N days (default 7) that have no
       backlink in curator/DECISIONS.md. The doctor's "stale raw
@@ -1801,8 +1805,13 @@ mh_watch() {
     }
 
     if command -v fswatch >/dev/null 2>&1; then
-        # macOS / portable — fswatch emits one path per line.
-        fswatch -0 "$HIVE_DIR" 2>/dev/null | while IFS= read -r -d '' _path; do
+        # macOS / portable — fswatch emits one path per line by default.
+        # Avoid `-0` + `read -r -d ''` because POSIX sh (dash on Linux) does
+        # not support `read -d`; newline-delimited keeps us portable, at the
+        # cost of mishandling paths containing literal newlines (very unlikely
+        # for a markdown hive on disk).
+        fswatch "$HIVE_DIR" 2>/dev/null | while IFS= read -r _path; do
+            [ -n "$_path" ] || continue
             _handle_event "$_path"
         done
     elif command -v inotifywait >/dev/null 2>&1; then
@@ -6212,7 +6221,19 @@ EOF
         printf '[dry-run] Files (%s):\n' "$(wc -l < "$_flist" | tr -d ' ')"
         while IFS= read -r _rel; do
             [ -n "$_rel" ] || continue
-            printf '  + %s/%s\n' "$HIVE_DIR" "$_rel"
+            _preview="$_rel"
+            case "$_preview" in
+                *__DAYS_AGO_*)
+                    _path_markers="$(printf '%s' "$_preview" | grep -oE '__DAYS_AGO_[0-9]+__' | sort -u)"
+                    for _pm in $_path_markers; do
+                        _pn="${_pm#__DAYS_AGO_}"; _pn="${_pn%__}"
+                        case "$_pn" in ''|*[!0-9]*) continue ;; esac
+                        _pd="$(_mh_seed_relative_date "$_pn")"
+                        _preview="$(printf '%s' "$_preview" | sed "s/${_pm}/${_pd}/g")"
+                    done
+                    ;;
+            esac
+            printf '  + %s/%s\n' "$HIVE_DIR" "$_preview"
         done < "$_flist"
         printf '[dry-run] Nothing was written.\n'
         rm -f "$_flist"
@@ -6229,11 +6250,29 @@ EOF
     fi
 
     # Walk the file tree and write every file with date markers substituted.
+    # Also substitute __DAYS_AGO_N__ markers in destination paths so seeded
+    # learning files satisfy the `<YYYY-MM-DD>-<slug>.md` lint rule without
+    # forcing template authors to bake a date into the on-disk filename.
     _written=0
     while IFS= read -r _rel; do
         [ -n "$_rel" ] || continue
         _src="$_files_dir/$_rel"
-        _dst="$HIVE_DIR/$_rel"
+        _dst_rel="$_rel"
+        case "$_dst_rel" in
+            *__DAYS_AGO_*)
+                # Resolve every distinct marker in the path to a real date.
+                _path_markers="$(printf '%s' "$_dst_rel" | grep -oE '__DAYS_AGO_[0-9]+__' | sort -u)"
+                for _pm in $_path_markers; do
+                    _pn="${_pm#__DAYS_AGO_}"; _pn="${_pn%__}"
+                    case "$_pn" in ''|*[!0-9]*) continue ;; esac
+                    _pd="$(_mh_seed_relative_date "$_pn")"
+                    # Only substitute the literal marker; no regex metas to
+                    # escape because the marker is alnum + underscore.
+                    _dst_rel="$(printf '%s' "$_dst_rel" | sed "s/${_pm}/${_pd}/g")"
+                done
+                ;;
+        esac
+        _dst="$HIVE_DIR/$_dst_rel"
         _mh_seed_substitute "$_src" "$_dst" \
             || _mh_die "Failed to write $_dst"
         _written=$((_written + 1))
