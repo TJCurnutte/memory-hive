@@ -1244,27 +1244,29 @@ mh_diff() {
         #   3. Last resort: if we can't decide, mark "modified" — that
         #      message ("file changed after ref") is always true for
         #      anything `find -newer` returned.
+        # Try birth time first (macOS APFS, Linux ext4 with statx).
         _btime="$(stat -f %B "$_f" 2>/dev/null || stat -c %W "$_f" 2>/dev/null || printf '')"
-        # Linux returns 0 (or '-') when the FS doesn't track birth time.
         case "$_btime" in
             ''|0|-) _btime="" ;;
         esac
         _is_new=0
         if [ -n "$_btime" ]; then
-            if [ "$_btime" -gt "$_ref_mtime" ]; then
-                _is_new=1
-            fi
+            # Real birth time is authoritative.
+            [ "$_btime" -gt "$_ref_mtime" ] && _is_new=1
         else
-            _ctime="$(stat -c %Z "$_f" 2>/dev/null || stat -f %c "$_f" 2>/dev/null || printf '')"
+            # Fallback: if ctime ≈ mtime AND ctime > ref, the file's
+            # inode metadata was set ≈ when the content was last written
+            # — characteristic of a fresh creation. An in-place append
+            # bumps both, but on filesystems where ctime tracks "any
+            # metadata change" the gap to mtime tends to be larger over
+            # time. Imperfect; documented in the PR description.
             _mtime="$(_mh_mtime_epoch "$_f")"
+            _ctime="$(stat -c %Z "$_f" 2>/dev/null || stat -f %c "$_f" 2>/dev/null || printf '')"
             if [ -n "$_ctime" ] && [ -n "$_mtime" ] \
                 && [ "$_ctime" -gt "$_ref_mtime" ]; then
-                # ctime ≈ mtime within 2s → fresh creation.
                 _delta=$((_ctime - _mtime))
                 [ "$_delta" -lt 0 ] && _delta=$(( -_delta ))
-                if [ "$_delta" -le 2 ]; then
-                    _is_new=1
-                fi
+                [ "$_delta" -le 2 ] && _is_new=1
             fi
         fi
         if [ "$_is_new" -eq 1 ]; then
