@@ -8,6 +8,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- **`memory-hive tag` + `memory-hive tags`.** Lightweight topical tagging for
+  learning files. `tag <file> <tag1> [tag2 ...]` adds tags to YAML
+  frontmatter (lowercase / dashes / 2-24 chars, comma-separated, sorted
+  alphabetically, deduplicated). `tags` lists every tag in the hive with
+  its file count; `tags --tag <name>` lists files using a tag; `tags --agent
+  <name>` limits the scan to one agent's silo. Lets topical clusters emerge
+  from data so the curator can spin up new `learnings/distilled/<topic>.md`
+  files when a tag passes a threshold.
+
 - **Multi-platform integration.** The installer now auto-detects and wires up
   every major agent platform that has a stable plain-text config file on
   local disk. 17 auto-inject targets, 5 manual-instructions platforms, plus

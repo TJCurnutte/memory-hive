@@ -250,6 +250,83 @@ jobs:
               { echo "Re-install changed the managed block (not idempotent)"; exit 1; }
           echo "Idempotency smoke OK"
 
+      - name: Tagging smoke — tag + tags verbs
+        shell: bash
+        run: |
+          set -eu
+          INSTALL_DIR="$(mktemp -d)"
+          export MEMORY_HIVE_DIR="$INSTALL_DIR"
+          export MEMORY_HIVE_SKIP_CLAUDE_MD=1
+          export MEMORY_HIVE_REPO="$(pwd)"
+          sh install.sh < /dev/null
+
+          # Seed a raw learning file with frontmatter.
+          mkdir -p "$INSTALL_DIR/hive/learnings/raw"
+          SEED="$INSTALL_DIR/hive/learnings/raw/coder-tagging-smoke.md"
+          cat > "$SEED" <<'EOF'
+          ---
+          date: 2026-04-24
+          agent: coder
+          context: ci tagging smoke
+          ---
+
+          # Body
+          EOF
+
+          # tag with a single tag, expect frontmatter to gain it.
+          sh "$INSTALL_DIR/memory-hive" tag "$SEED" testing
+          grep -q '^tags: testing$' "$SEED" || { echo "tag was not written"; exit 1; }
+
+          # Idempotent re-tag: adding the same tag again must NOT duplicate.
+          sh "$INSTALL_DIR/memory-hive" tag "$SEED" testing
+          test "$(grep -c '^tags:' "$SEED")" -eq 1 || { echo "duplicate tags: line"; exit 1; }
+          grep -q '^tags: testing$' "$SEED" || { echo "tag dedup broke the line"; exit 1; }
+
+          # Add more tags; result must be sorted alphabetically.
+          sh "$INSTALL_DIR/memory-hive" tag "$SEED" parallel fixtures
+          grep -q '^tags: fixtures, parallel, testing$' "$SEED" \
+              || { echo "tags not merged/sorted as expected:"; grep '^tags:' "$SEED"; exit 1; }
+
+          # Invalid tag (uppercase) must fail with non-zero exit.
+          set +e
+          sh "$INSTALL_DIR/memory-hive" tag "$SEED" Bad > /tmp/mh-tag-err.log 2>&1
+          rc=$?
+          set -e
+          [ "$rc" -ne 0 ] || { echo "uppercase tag accepted (should reject)"; exit 1; }
+
+          # File without frontmatter must fail with helpful message.
+          NOFM="$INSTALL_DIR/hive/learnings/raw/no-fm.md"
+          echo "no frontmatter" > "$NOFM"
+          set +e
+          sh "$INSTALL_DIR/memory-hive" tag "$NOFM" testing > /tmp/mh-nofm.log 2>&1
+          rc=$?
+          set -e
+          [ "$rc" -ne 0 ] || { echo "tag accepted file without frontmatter"; exit 1; }
+          grep -q "no YAML frontmatter" /tmp/mh-nofm.log \
+              || { echo "expected 'no YAML frontmatter' in error"; cat /tmp/mh-nofm.log; exit 1; }
+
+          # tags listing should show every tag with count >= 1.
+          sh "$INSTALL_DIR/memory-hive" tags > /tmp/mh-tags.out
+          grep -q ' testing$' /tmp/mh-tags.out  || { echo "testing missing from tags output"; cat /tmp/mh-tags.out; exit 1; }
+          grep -q ' parallel$' /tmp/mh-tags.out || { echo "parallel missing from tags output"; cat /tmp/mh-tags.out; exit 1; }
+          grep -q ' fixtures$' /tmp/mh-tags.out || { echo "fixtures missing from tags output"; cat /tmp/mh-tags.out; exit 1; }
+          # Count for "testing" must be exactly 1 (one file uses it).
+          count="$(awk '$2 == "testing" { print $1 }' /tmp/mh-tags.out)"
+          [ "$count" = "1" ] || { echo "expected count=1 for testing, got $count"; exit 1; }
+
+          # tags --tag <name> lists files using that tag.
+          sh "$INSTALL_DIR/memory-hive" tags --tag testing > /tmp/mh-tag-files.out
+          grep -q "learnings/raw/coder-tagging-smoke.md" /tmp/mh-tag-files.out \
+              || { echo "expected file in --tag listing"; cat /tmp/mh-tag-files.out; exit 1; }
+
+          # tags --agent coder restricts the scan; --agent ghost finds nothing.
+          sh "$INSTALL_DIR/memory-hive" tags --agent coder | grep -q ' testing$' \
+              || { echo "--agent coder lost the tag"; exit 1; }
+          sh "$INSTALL_DIR/memory-hive" tags --agent ghost | grep -q "no tagged" \
+              || { echo "--agent ghost should report empty"; exit 1; }
+
+          echo "Tagging smoke OK"
+
       - name: Doctor smoke — multi-platform health check
         shell: bash
         run: |
