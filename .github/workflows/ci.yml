@@ -139,6 +139,122 @@ jobs:
           sh "$INSTALL_DIR/memory-hive" doctor
           echo "CLI smoke OK"
 
+      - name: CLI smoke — promote
+        shell: bash
+        run: |
+          set -eu
+          INSTALL_DIR="$(mktemp -d)"
+          export MEMORY_HIVE_DIR="$INSTALL_DIR"
+          export MEMORY_HIVE_SKIP_CLAUDE_MD=1
+          export MEMORY_HIVE_REPO="$(pwd)"
+          sh install.sh < /dev/null
+
+          # Seed a raw learning under hive/learnings/raw/<agent>/.
+          # Heredoc bodies are dedented via sed because YAML's `run: |` block
+          # forces leading indentation; without dedent the markdown frontmatter
+          # would not start at column 0.
+          mkdir -p "$INSTALL_DIR/hive/learnings/raw/coder"
+          sed 's/^          //' > "$INSTALL_DIR/hive/learnings/raw/coder/2026-04-23-test-isolation.md" <<'RAW'
+          ---
+          date: 2026-04-23
+          agent: coder
+          context: parallel test workers leak DB state
+          ---
+
+          # Test isolation across parallel workers
+
+          ## What happened
+
+          Intermittent failures only under 4+ workers.
+
+          ## Generalizable rule
+
+          Shared test fixtures must not mutate state. Anything that writes
+          to a DB, filesystem, or mutable global should be function-scoped.
+          RAW
+
+          # Promote it. Default --into infers patterns.md.
+          sh "$INSTALL_DIR/memory-hive" promote \
+              hive/learnings/raw/coder/2026-04-23-test-isolation.md \
+              | tee /tmp/mh-promote.out
+
+          # Distilled must contain the new section + a backlink.
+          DISTILLED="$INSTALL_DIR/hive/learnings/distilled/patterns.md"
+          test -f "$DISTILLED"
+          grep -q "## Test isolation across parallel workers" "$DISTILLED"
+          grep -q "../raw/coder/2026-04-23-test-isolation.md" "$DISTILLED"
+          grep -q "Contributing agent:.*coder" "$DISTILLED"
+
+          # DECISIONS.md must record the promotion.
+          DEC="$INSTALL_DIR/hive/curator/DECISIONS.md"
+          test -f "$DEC"
+          grep -q "Promoted .learnings/raw/coder/2026-04-23-test-isolation.md" "$DEC"
+
+          # Raw file must be untouched (source of truth).
+          grep -q "## Generalizable rule" \
+              "$INSTALL_DIR/hive/learnings/raw/coder/2026-04-23-test-isolation.md"
+
+          # --dry-run must not write.
+          mkdir -p "$INSTALL_DIR/hive/learnings/raw/coder"
+          sed 's/^          //' > "$INSTALL_DIR/hive/learnings/raw/coder/dry.md" <<'RAW'
+          ---
+          date: 2026-04-23
+          agent: coder
+          context: dry-run check
+          ---
+
+          # Dry run check
+          RAW
+          BEFORE_BYTES="$(wc -c < "$DISTILLED")"
+          sh "$INSTALL_DIR/memory-hive" promote \
+              hive/learnings/raw/coder/dry.md --dry-run > /dev/null
+          AFTER_BYTES="$(wc -c < "$DISTILLED")"
+          [ "$BEFORE_BYTES" = "$AFTER_BYTES" ] || \
+              { echo "FAIL: --dry-run wrote to distilled"; exit 1; }
+
+          # Refuses paths outside learnings/raw/.
+          mkdir -p "$INSTALL_DIR/outside"
+          sed 's/^          //' > "$INSTALL_DIR/outside/x.md" <<'RAW'
+          ---
+          date: 2026-04-23
+          agent: coder
+          context: should refuse
+          ---
+
+          # Outside
+          RAW
+          if sh "$INSTALL_DIR/memory-hive" promote \
+              "$INSTALL_DIR/outside/x.md" > /dev/null 2>&1; then
+              echo "FAIL: promote did not refuse outside path"
+              exit 1
+          fi
+
+          # Refuses missing frontmatter.
+          echo "no frontmatter" > "$INSTALL_DIR/hive/learnings/raw/coder/bad.md"
+          if sh "$INSTALL_DIR/memory-hive" promote \
+              hive/learnings/raw/coder/bad.md > /dev/null 2>&1; then
+              echo "FAIL: promote did not refuse missing frontmatter"
+              exit 1
+          fi
+
+          # --into honors explicit target.
+          sed 's/^          //' > "$INSTALL_DIR/hive/learnings/raw/coder/win.md" <<'RAW'
+          ---
+          date: 2026-04-23
+          agent: coder
+          context: shipped a feature
+          ---
+
+          # Shipped a feature
+
+          It works.
+          RAW
+          sh "$INSTALL_DIR/memory-hive" promote \
+              hive/learnings/raw/coder/win.md --into wins.md > /dev/null
+          grep -q "## Shipped a feature" "$INSTALL_DIR/hive/learnings/distilled/wins.md"
+
+          echo "Promote smoke OK"
+
       - name: Platform integration smoke — auto-inject
         shell: bash
         run: |
