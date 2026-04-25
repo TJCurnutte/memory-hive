@@ -250,6 +250,87 @@ jobs:
               { echo "Re-install changed the managed block (not idempotent)"; exit 1; }
           echo "Idempotency smoke OK"
 
+      - name: CLI smoke — tail
+        shell: bash
+        run: |
+          set -eu
+          INSTALL_DIR="$(mktemp -d)"
+          export MEMORY_HIVE_DIR="$INSTALL_DIR"
+          export MEMORY_HIVE_SKIP_CLAUDE_MD=1
+          export MEMORY_HIVE_REPO="$(pwd)"
+          sh install.sh < /dev/null > /dev/null
+
+          # Need a non-main agent so log.md writes classify cleanly.
+          sh "$INSTALL_DIR/memory-hive" add coder --role coder > /dev/null
+
+          # Sleep before the first seeded write so both files are strictly
+          # newer than the install baseline marker (otherwise mh_tail filters
+          # them out as install-time scaffolding).
+          sleep 2
+
+          # Seed two writes with distinct mtimes. The newer one (DECISIONS.md)
+          # must appear FIRST in tail output, with its content extracted.
+          # Use printf instead of a heredoc so YAML's literal-block indentation
+          # does not bleed into the file content (would break `^## ` matches).
+          mkdir -p "$INSTALL_DIR/hive/curator"
+          printf '# coder — log\n\n## 2026-04-24\n\n- Older entry seeded by tail smoke test.\n' \
+              > "$INSTALL_DIR/hive/agents/coder/log.md"
+          sleep 2
+          printf '# Decisions\n\n## 2026-04-24 — Newer entry seeded by tail smoke test\n\nRationale line for the smoke test extractor.\n' \
+              > "$INSTALL_DIR/hive/curator/DECISIONS.md"
+
+          # Run tail and snapshot output.
+          sh "$INSTALL_DIR/memory-hive" tail -n 5 > /tmp/mh-tail.out
+          cat /tmp/mh-tail.out
+
+          # Newer write (DECISIONS) must appear before older (log.md) in output.
+          dec_line=$(grep -n "DECISIONS.md" /tmp/mh-tail.out | head -1 | cut -d: -f1)
+          log_line=$(grep -n "log.md" /tmp/mh-tail.out | head -1 | cut -d: -f1)
+          [ -n "$dec_line" ] || { echo "DECISIONS.md not in tail output"; exit 1; }
+          [ -n "$log_line" ] || { echo "log.md not in tail output"; exit 1; }
+          [ "$dec_line" -lt "$log_line" ] || \
+            { echo "Order wrong: DECISIONS at $dec_line, log at $log_line"; exit 1; }
+
+          # Content extraction: dated heading + paragraph must show up.
+          grep -q "Newer entry seeded by tail smoke test" /tmp/mh-tail.out || \
+            { echo "DECISIONS heading text missing"; exit 1; }
+          grep -q "Rationale line for the smoke test extractor" /tmp/mh-tail.out || \
+            { echo "DECISIONS body text missing"; exit 1; }
+          grep -q "Older entry seeded by tail smoke test" /tmp/mh-tail.out || \
+            { echo "log.md body missing"; exit 1; }
+
+          # --silo filter: only coder writes.
+          sh "$INSTALL_DIR/memory-hive" tail --silo coder > /tmp/mh-tail-silo.out
+          grep -q "agents/coder/log.md" /tmp/mh-tail-silo.out || \
+            { echo "--silo coder did not include coder log"; exit 1; }
+          ! grep -q "curator/DECISIONS.md" /tmp/mh-tail-silo.out || \
+            { echo "--silo coder leaked curator file"; exit 1; }
+
+          # --since filter (today): both writes today, both should show.
+          today=$(date +%Y-%m-%d)
+          sh "$INSTALL_DIR/memory-hive" tail --since "$today" > /tmp/mh-tail-since.out
+          grep -q "DECISIONS.md" /tmp/mh-tail-since.out
+          grep -q "log.md"       /tmp/mh-tail-since.out
+
+          # Bad flags must error non-zero.
+          set +e
+          sh "$INSTALL_DIR/memory-hive" tail -n abc > /dev/null 2>&1
+          rc=$?
+          set -e
+          [ "$rc" -ne 0 ] || { echo "Bad -n value should error"; exit 1; }
+
+          set +e
+          sh "$INSTALL_DIR/memory-hive" tail --since 2026/04/24 > /dev/null 2>&1
+          rc=$?
+          set -e
+          [ "$rc" -ne 0 ] || { echo "Bad --since format should error"; exit 1; }
+
+          # help text mentions tail.
+          sh "$INSTALL_DIR/memory-hive" help | grep -q "memory-hive tail" || \
+            { echo "help missing tail entry"; exit 1; }
+
+          echo "Tail CLI smoke OK"
+
       - name: Doctor smoke — multi-platform health check
         shell: bash
         run: |
