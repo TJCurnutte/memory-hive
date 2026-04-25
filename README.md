@@ -209,6 +209,43 @@ conflict-resolution rules, see [HIVE_ARCHITECTURE.md](HIVE_ARCHITECTURE.md).
 
 ---
 
+## CLI Verbs
+
+`memory-hive <verb>` is the single entry point. Run `memory-hive help` for
+the full reference. The verbs cluster into four categories:
+
+**Lifecycle** — `add`, `list`, `archive`, `role`, `rename`, `register`,
+`setup`, `apply`, `doctor`. Manage silos and keep the install healthy.
+
+**Observability** — see what's happening in the hive without manual grep:
+
+| Verb | What |
+|---|---|
+| `tail [-n N] [--silo <name>] [--since <date>]` | Most recent N writes with key content extracted |
+| `watch` | Streaming live counter (Ctrl+C to exit) |
+| `stats` | Honest counts: silos, raw learnings, distilled files, decisions |
+| `digest [--today \| --yesterday \| --week \| --since <date>]` | Human-readable change summary for a window |
+| `query <term> [--silo] [--kind] [--since]` | Grep every text surface of the hive |
+| `diff [--since <checkpoint\|date>]` | What changed since a reference point |
+| `checkpoint [--name <name>] \| --list` | Save a reference marker for later diffs |
+
+**Curator workflow** — close the loop from raw → distilled:
+
+| Verb | What |
+|---|---|
+| `dedup [--per-agent] [--strict]` | Cluster near-duplicate raw learnings |
+| `confidence` | Cluster aligned observations, suggest upgrades |
+| `promote <raw-file>` | One-command: append summary + log decision |
+| `stale [--days N]` | Surface raw learnings with no curator decision |
+| `lint [--fix]` | Validate frontmatter schema |
+| `tag <file> <tag>` / `tags` | Tag learnings, see emerging topics |
+| `citations` | Build cross-agent citation graph |
+
+Every verb is pure shell, ships a CI smoke test, and reads from the
+existing two-layer architecture without changing it.
+
+---
+
 ## Role Templates
 
 The installer ships six starter role descriptions under

@@ -6,16 +6,74 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Added
+### Added — Curator + observability verbs (10 new commands)
 
-- **`memory-hive tag` + `memory-hive tags`.** Lightweight topical tagging for
-  learning files. `tag <file> <tag1> [tag2 ...]` adds tags to YAML
-  frontmatter (lowercase / dashes / 2-24 chars, comma-separated, sorted
-  alphabetically, deduplicated). `tags` lists every tag in the hive with
-  its file count; `tags --tag <name>` lists files using a tag; `tags --agent
-  <name>` limits the scan to one agent's silo. Lets topical clusters emerge
-  from data so the curator can spin up new `learnings/distilled/<topic>.md`
-  files when a tag passes a threshold.
+A wave of parallel feature work added ten new CLI verbs that close the loop
+between agent contributions and curator promotion. All are pure shell, all
+ship a CI smoke test, all read from the existing two-layer architecture
+without changing it.
+
+- **`memory-hive tail [-n N] [--silo <name>] [--since <YYYY-MM-DD>]`** —
+  Like `tail -f` for the hive (non-streaming). Prints the N most recent
+  hive writes with key content extracted per kind: log/DECISIONS/CONFLICTS
+  show the newest dated heading + first paragraph; memory/context show the
+  tail; learnings show H1 + frontmatter. Use `watch` for the streaming view.
+
+- **`memory-hive promote <raw-file> [--into <name>] [--title <text>] [--dry-run]`** —
+  One-command curator workflow. Reads a raw learning, appends a summary
+  with backlink to a distilled file, and logs the decision in
+  `curator/DECISIONS.md`. Raw file stays untouched as source of truth.
+  `--into` defaults to inferring from frontmatter `kind:`.
+
+- **`memory-hive confidence`** — Clusters raw learnings by normalized title
+  and suggests upgrades when a cluster crosses an architecture threshold
+  (3 aligned low → medium, 3 aligned medium → high). Suggest-only; curator
+  decides what to promote.
+
+- **`memory-hive tag <file> <tag1> [tag2 ...]`** + **`memory-hive tags [--agent <name>] [--tag <name>]`** —
+  Lightweight topical tagging for learning files. `tag` adds to YAML
+  frontmatter (lowercase, dashes, 2-24 chars, sorted alphabetically,
+  deduplicated). `tags` lists every tag in the hive with file count;
+  `--tag <name>` lists files using a tag; `--agent <name>` limits the scan
+  to one silo. Lets topical clusters emerge so the curator can spin up new
+  `learnings/distilled/<topic>.md` files when a tag passes a threshold.
+
+- **`memory-hive stale [--days N] [--agent <name>] [--count]`** + doctor
+  integration — Surfaces raw learnings >N days old (default 7) with no
+  curator decision. `doctor` lists top 5 inline; auto-escalates to a
+  warning when count exceeds `MEMORY_HIVE_STALE_THRESHOLD` (default 20).
+  Files already referenced in `DECISIONS.md` are excluded.
+
+- **`memory-hive checkpoint [--name <name>] | --list`** + **`memory-hive diff [--since <checkpoint|YYYY-MM-DD>] [--verbose]`** —
+  Save a named reference marker, then show every hive write since that
+  point. Default `--since` is the most recent checkpoint, or the install
+  baseline if none exists. Lists New vs Modified files, classified by
+  agent. Honors `.baseline-installed` so installer scaffolding never
+  appears in diffs.
+
+- **`memory-hive dedup [--per-agent] [--strict] [--threshold N]`** —
+  Cluster near-duplicate raw learnings by normalized title. Default mode
+  is cross-agent (catches when two agents independently document the same
+  finding); `--per-agent` restricts within a single silo.
+
+- **`memory-hive query <term> [--silo <name>] [--kind <k>] [--since <date>]`** —
+  Searchable hive. Greps every text surface (silo log/memory/context,
+  learnings raw + distilled, knowledge, registry, curator) with
+  line-number context. Filter by silo, kind, or date.
+
+- **`memory-hive citations`** — Cross-agent citation graph. Walks every
+  file for `[..](path)` links and builds a who-cites-whom map. Surfaces
+  team topology without manual tracking.
+
+- **`memory-hive lint [--fix] [--strict] [<path>]`** — Frontmatter schema
+  validation for learning files. Checks required keys, date format, valid
+  agent, valid confidence. `--fix` rewrites where safe; `--strict` exits
+  non-zero on warnings.
+
+- **`memory-hive digest [--today | --yesterday | --week | --since YYYY-MM-DD]`** —
+  Human-readable change summary for a time window (default rolling 24h).
+  Per-agent newest writes with extracted content, ordered newest-first.
+  "What's been happening?" without manual grep.
 
 - **Multi-platform integration.** The installer now auto-detects and wires up
   every major agent platform that has a stable plain-text config file on
