@@ -250,6 +250,93 @@ jobs:
               { echo "Re-install changed the managed block (not idempotent)"; exit 1; }
           echo "Idempotency smoke OK"
 
+      - name: Confidence smoke — upgrade suggestion appears
+        shell: bash
+        run: |
+          set -eu
+          INSTALL_DIR="$(mktemp -d)"
+          export MEMORY_HIVE_DIR="$INSTALL_DIR"
+          export MEMORY_HIVE_SKIP_CLAUDE_MD=1
+          export MEMORY_HIVE_REPO="$(pwd)"
+          sh install.sh < /dev/null > /dev/null
+
+          # Seed three raw learnings under three different agents, all
+          # `confidence: low`, all with the same first-H1 (modulo
+          # capitalization/punctuation — the normalizer should fold them).
+          RAW="$INSTALL_DIR/hive/learnings/raw"
+          mkdir -p "$RAW/coder" "$RAW/reviewer" "$RAW/researcher"
+
+          cat > "$RAW/coder/2026-04-23-test-isolation.md" <<'EOF'
+          ---
+          date: 2026-04-23
+          agent: coder
+          context: parallel test workers leak DB state
+          confidence: low
+          ---
+
+          # Test isolation parallel
+
+          Function-scoped fixtures fix it.
+          EOF
+
+          cat > "$RAW/reviewer/2026-04-24-flaky-tests.md" <<'EOF'
+          ---
+          date: 2026-04-24
+          agent: reviewer
+          context: flaky tests under -n auto
+          confidence: low
+          ---
+
+          # Test Isolation, Parallel!
+
+          Saw the same flake elsewhere.
+          EOF
+
+          cat > "$RAW/researcher/2026-04-24-parallel-fix.md" <<'EOF'
+          ---
+          date: 2026-04-24
+          agent: researcher
+          context: parallel fix
+          confidence: low
+          ---
+
+          # test-isolation parallel
+
+          Confirmed across repos.
+          EOF
+
+          # Also seed one file with no frontmatter so we can check the
+          # lint-warning surface.
+          cat > "$RAW/coder/2026-04-25-no-fm.md" <<'EOF'
+          # No frontmatter
+
+          This file should be flagged for lint.
+          EOF
+
+          OUT="$(sh "$INSTALL_DIR/memory-hive" confidence)"
+          printf '%s\n' "$OUT" > /tmp/mh-conf.out
+          cat /tmp/mh-conf.out
+
+          # Required assertions:
+          #   - cluster header references the (raw) title
+          #   - upgrade suggestion line is present
+          #   - the rule citation matches HIVE_ARCHITECTURE
+          #   - all three seed files appear in the Files list
+          #   - the no-frontmatter file is reported as needing lint
+          grep -q "Test isolation parallel" /tmp/mh-conf.out
+          grep -q "3 low" /tmp/mh-conf.out
+          grep -q "UPGRADE TO MEDIUM" /tmp/mh-conf.out
+          grep -q "3 aligned low" /tmp/mh-conf.out
+          grep -q "coder/2026-04-23-test-isolation.md" /tmp/mh-conf.out
+          grep -q "reviewer/2026-04-24-flaky-tests.md" /tmp/mh-conf.out
+          grep -q "researcher/2026-04-24-parallel-fix.md" /tmp/mh-conf.out
+          grep -q "2026-04-25-no-fm.md" /tmp/mh-conf.out
+          grep -q "Summary: 1 cluster" /tmp/mh-conf.out
+
+          # Help also references the verb.
+          sh "$INSTALL_DIR/memory-hive" help | grep -q "memory-hive confidence"
+          echo "Confidence smoke OK"
+
       - name: Doctor smoke — multi-platform health check
         shell: bash
         run: |

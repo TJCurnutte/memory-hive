@@ -293,8 +293,14 @@ Not all learning is equal. The hive uses confidence gates:
 **Upgrade rules:**
 - 3 aligned low-confidence observations → medium
 - 3 aligned medium → high
+- 3+ aligned high → ready for promotion to `distilled/`
 
 This prevents speculation from polluting core knowledge.
+
+Run `memory-hive confidence` to scan `learnings/raw/<agent>/*.md`,
+cluster aligned observations by normalized title, and surface the
+upgrades a curator should consider. The verb suggests only — the
+curator still decides what to actually promote.
 
 ---
 
