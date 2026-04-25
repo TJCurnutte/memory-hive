@@ -1321,6 +1321,16 @@ Usage:
         memory-hive digest --week
         memory-hive digest --since 2026-04-20
 
+  memory-hive curate [--dry-run | --apply]
+      One-pass autonomous curator. Runs dedup, confidence, lint --strict,
+      and stale in order, then prints a compact summary
+      ("X clusters need attention, Y promotions ready, Z lint violations,
+      N stale items."). Default is --dry-run (suggest only). --apply runs
+      promotions for clusters with 3+ aligned high-confidence
+      observations; the representative file is the highest-confidence,
+      newest-mtime cluster member. Every action is printed even under
+      --apply so the curator stays in the loop.
+
   memory-hive help
       Show this message.
 
@@ -4682,6 +4692,263 @@ mh_digest() {
 }
 
 
+# --- curate ----------------------------------------------------------------
+#
+# `mh_curate` is the autonomous one-pass curator. It runs the existing
+# curator-loop verbs in the order a human would and prints a compact
+# summary at the end. Default mode is --dry-run (suggest only). --apply
+# flips to actually run promotions for the highest-confidence clusters.
+#
+# Steps:
+#   1. dedup        — cross-agent near-duplicate clusters (informational).
+#   2. confidence   — clusters and their upgrade status. Promotion-ready
+#                     clusters (3+ aligned high) are remembered for step 3.
+#   3. promotions   — print the exact `memory-hive promote` invocation per
+#                     promotion-ready cluster. Under --apply, run them.
+#   4. lint --strict— frontmatter schema gate. Reports violations.
+#   5. stale        — raw learnings >7d with no DECISIONS.md backlink.
+#   6. summary      — "X clusters need attention, Y promotions ready,
+#                     Z lint violations, N stale items."
+#
+# We capture each step's stdout into a temp file and tee it back so the
+# user sees progress; the temp files are reparsed for the summary.
+#
+# Reused helpers:
+#   _mh_dedup_title, _mh_dedup_normalize       (cluster anchor selection)
+#   _mh_promote_extract_frontmatter            (pick best file per cluster)
+#   _mh_mtime_epoch                            (tiebreak by mtime)
+#
+# Flags:
+#   --dry-run   (default) Only suggest; never write.
+#   --apply     Run promotions for every promotion-ready cluster. The
+#               representative file is the one with the highest
+#               confidence (high > medium > low), tiebreak: newest mtime.
+#   -h | --help Usage.
+
+# _mh_curate_pick_promote_file <file_a> <file_b> -> echoes the "better" of
+# the two files for promotion. Better = higher confidence; tiebreak =
+# newer mtime. Used to fold a list of cluster members down to one.
+_mh_curate_pick_promote_file() {
+    _fa="$1"
+    _fb="$2"
+    [ -n "$_fa" ] || { printf '%s' "$_fb"; return 0; }
+    [ -n "$_fb" ] || { printf '%s' "$_fa"; return 0; }
+    _ca="$(_mh_promote_extract_frontmatter "$_fa" confidence)"
+    _cb="$(_mh_promote_extract_frontmatter "$_fb" confidence)"
+    _rank_a=0; _rank_b=0
+    case "$_ca" in high) _rank_a=3 ;; medium) _rank_a=2 ;; low) _rank_a=1 ;; esac
+    case "$_cb" in high) _rank_b=3 ;; medium) _rank_b=2 ;; low) _rank_b=1 ;; esac
+    if [ "$_rank_a" -gt "$_rank_b" ]; then
+        printf '%s' "$_fa"; return 0
+    fi
+    if [ "$_rank_b" -gt "$_rank_a" ]; then
+        printf '%s' "$_fb"; return 0
+    fi
+    # Tie: newer mtime wins.
+    _ma="$(_mh_mtime_epoch "$_fa" 2>/dev/null)"
+    _mb="$(_mh_mtime_epoch "$_fb" 2>/dev/null)"
+    [ -n "$_ma" ] || _ma=0
+    [ -n "$_mb" ] || _mb=0
+    if [ "$_mb" -gt "$_ma" ]; then
+        printf '%s' "$_fb"
+    else
+        printf '%s' "$_fa"
+    fi
+}
+
+mh_curate() {
+    _mh_require_install
+
+    _apply=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --dry-run) _apply=0 ;;
+            --apply)   _apply=1 ;;
+            -h|--help)
+                cat <<'CURATEHELP'
+Usage: memory-hive curate [--dry-run | --apply]
+
+One-pass autonomous curator. Runs dedup, confidence, lint, and stale in
+order, then prints a compact summary. Default is --dry-run (suggest
+only). --apply runs promotions for clusters with 3+ aligned high-
+confidence observations (the "promotion-ready" tier).
+
+Steps:
+  1. dedup        cross-agent near-duplicate clusters
+  2. confidence   upgrade suggestions (low->medium, medium->high,
+                  high->promotion-ready)
+  3. promotions   one `promote` invocation per promotion-ready cluster.
+                  Under --apply, the verb actually runs them.
+  4. lint --strict frontmatter schema check (errors + warnings)
+  5. stale        raw learnings >7 days old, no DECISIONS.md backlink
+
+Every action the verb would take is printed, even in --apply mode, so
+the curator stays in the loop.
+CURATEHELP
+                return 0
+                ;;
+            *) _mh_die "Unknown flag: $1 (try \`memory-hive curate --help\`)" ;;
+        esac
+        shift
+    done
+
+    _mode="dry-run"
+    [ "$_apply" -eq 1 ] && _mode="apply"
+
+    _tmpdir="$(mktemp -d 2>/dev/null || mktemp -d -t mh-curate)" \
+        || _mh_die "Could not create temp dir"
+
+    _dedup_out="$_tmpdir/dedup.out"
+    _conf_out="$_tmpdir/confidence.out"
+    _lint_out="$_tmpdir/lint.out"
+    _stale_out="$_tmpdir/stale.out"
+    _promote_log="$_tmpdir/promotions.log"
+    : > "$_promote_log"
+
+    printf '\n=== memory-hive curate (%s) ===\n' "$_mode"
+    printf '%s\n\n' '------------------------------'
+
+    # --- 1. dedup ----------------------------------------------------------
+    printf -- '--- 1. dedup (cross-agent near-duplicate clusters) ---\n'
+    mh_dedup > "$_dedup_out" 2>&1 || :
+    cat "$_dedup_out"
+
+    # --- 2. confidence -----------------------------------------------------
+    printf -- '--- 2. confidence (upgrade-ready clusters) ---\n'
+    mh_confidence > "$_conf_out" 2>&1 || :
+    cat "$_conf_out"
+
+    # --- 3. promotions -----------------------------------------------------
+    # Re-walk raw/ to find promotion-ready clusters (3+ files with
+    # confidence: high and the same normalized title). Reuse the dedup
+    # normalizer so the cluster keys line up with what `confidence` printed.
+    printf -- '--- 3. promotions (3+ aligned high) ---\n'
+    _ready_count=0
+    _applied_count=0
+    _raw_root="$HIVE_DIR/learnings/raw"
+    if [ -d "$_raw_root" ]; then
+        _key_file="$_tmpdir/keys"
+        : > "$_key_file"
+        for _agent_dir in "$_raw_root"/*; do
+            [ -d "$_agent_dir" ] || continue
+            for _f in "$_agent_dir"/*.md; do
+                [ -f "$_f" ] || continue
+                _conf="$(_mh_promote_extract_frontmatter "$_f" confidence)"
+                [ "$_conf" = "high" ] || continue
+                _title="$(_mh_dedup_title "$_f")"
+                _norm="$(_mh_dedup_normalize "$_title")"
+                [ -n "$_norm" ] || continue
+                printf '%s\t%s\n' "$_norm" "$_f" >> "$_key_file"
+            done
+        done
+
+        if [ -s "$_key_file" ]; then
+            _sorted="$_tmpdir/keys.sorted"
+            LC_ALL=C sort "$_key_file" > "$_sorted"
+
+            _cur_norm=""
+            _cur_count=0
+            _cur_pick=""
+            _cur_files=""
+
+            _flush() {
+                [ -n "$_cur_norm" ] || return 0
+                if [ "$_cur_count" -ge 3 ]; then
+                    _ready_count=$((_ready_count + 1))
+                    _rel="${_cur_pick#"$HIVE_DIR/"}"
+                    _raw_arg="${_cur_pick#"$HIVE_DIR/learnings/raw/"}"
+                    printf '\nCluster (%d high-confidence files): "%s"\n' \
+                        "$_cur_count" "$_cur_norm"
+                    printf '%s\n' "$_cur_files" | while IFS= read -r _ln; do
+                        [ -n "$_ln" ] && printf '    %s\n' "${_ln#"$HIVE_DIR/"}"
+                    done
+                    printf '  representative: %s\n' "$_rel"
+                    if [ "$_apply" -eq 1 ]; then
+                        printf '  applying: memory-hive promote %s\n' "$_raw_arg"
+                        if mh_promote "$_raw_arg" >> "$_promote_log" 2>&1; then
+                            _applied_count=$((_applied_count + 1))
+                            printf '  -> promoted.\n'
+                        else
+                            printf '  -> FAILED (see log: %s).\n' "$_promote_log"
+                        fi
+                    else
+                        printf '  suggest: memory-hive promote %s\n' "$_raw_arg"
+                    fi
+                fi
+            }
+
+            while IFS=$(printf '\t') read -r _norm _path; do
+                [ -n "$_norm" ] || continue
+                if [ "$_norm" != "$_cur_norm" ]; then
+                    _flush
+                    _cur_norm="$_norm"
+                    _cur_count=1
+                    _cur_pick="$_path"
+                    _cur_files="$_path"
+                else
+                    _cur_count=$((_cur_count + 1))
+                    _cur_pick="$(_mh_curate_pick_promote_file "$_cur_pick" "$_path")"
+                    _cur_files="$_cur_files
+$_path"
+                fi
+            done < "$_sorted"
+            _flush
+        fi
+    fi
+    if [ "$_ready_count" -eq 0 ]; then
+        printf 'No promotion-ready clusters (need 3+ files with `confidence: high` and same title).\n'
+    fi
+    printf '\n'
+
+    # --- 4. lint --strict --------------------------------------------------
+    printf -- '--- 4. lint --strict (schema violations) ---\n'
+    set +e
+    mh_lint --strict > "$_lint_out" 2>&1
+    _lint_rc=$?
+    set -e
+    cat "$_lint_out"
+    # Lint tally line: "<E> errors, <W> warnings across <N> files."
+    _lint_errors=0
+    _lint_warns=0
+    _tally="$(awk '/errors,.*warnings across/ { print; exit }' "$_lint_out" 2>/dev/null)"
+    if [ -n "$_tally" ]; then
+        _lint_errors="$(printf '%s\n' "$_tally" | awk '{print $1+0}')"
+        _lint_warns="$(printf '%s\n' "$_tally" | awk '{print $3+0}')"
+    fi
+    _lint_total=$((_lint_errors + _lint_warns))
+    printf '\n'
+
+    # --- 5. stale ----------------------------------------------------------
+    printf -- '--- 5. stale (raw learnings >7d, no DECISIONS.md backlink) ---\n'
+    mh_stale > "$_stale_out" 2>&1 || :
+    cat "$_stale_out"
+    _stale_count="$(mh_stale --count 2>/dev/null | tr -dc '0-9')"
+    [ -n "$_stale_count" ] || _stale_count=0
+    printf '\n'
+
+    # --- 6. summary --------------------------------------------------------
+    # Cluster-needs-attention count: any "Cluster N" line emitted by dedup
+    # (those are clusters with >=2 files sharing a normalized title).
+    _attention_clusters="$(awk '/^Cluster [0-9]+ \(/ {n++} END {print n+0}' "$_dedup_out" 2>/dev/null)"
+    [ -n "$_attention_clusters" ] || _attention_clusters=0
+
+    printf -- '--- summary ---\n'
+    if [ "$_apply" -eq 1 ]; then
+        printf '%s clusters need attention, %s promotions ready (%s applied), %s lint violations, %s stale items.\n' \
+            "$_attention_clusters" "$_ready_count" "$_applied_count" "$_lint_total" "$_stale_count"
+    else
+        printf '%s clusters need attention, %s promotions ready, %s lint violations, %s stale items.\n' \
+            "$_attention_clusters" "$_ready_count" "$_lint_total" "$_stale_count"
+    fi
+    if [ "$_apply" -eq 0 ]; then
+        printf '(dry-run mode — re-run with --apply to actually promote.)\n'
+    fi
+
+    rm -rf "$_tmpdir"
+    return 0
+}
+
+
 # --- dispatch ----------------------------------------------------------------
 
 if [ $# -eq 0 ]; then
@@ -4716,6 +4983,7 @@ case "$_verb" in
     query|search) mh_query "$@" ;;
     lint)     mh_lint "$@" ;;
     digest)   mh_digest "$@" ;;
+    curate)   mh_curate "$@" ;;
     help|-h|--help) mh_help ;;
     *)
         printf 'Unknown command: %s\n\n' "$_verb" >&2
