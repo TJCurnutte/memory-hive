@@ -294,17 +294,6 @@ jobs:
           sleep 1
           mkdir -p "$INSTALL_DIR/hive/learnings/raw/main"
           echo "raw" > "$INSTALL_DIR/hive/learnings/raw/main/ci-note.md"
-          # Debug: dump timestamps the heuristic relies on so any future
-          # platform-drift failure is diagnosable from logs.
-          echo "--- timestamp dump ---"
-          ls -la "$INSTALL_DIR/hive/learnings/raw/main/ci-note.md"
-          stat -c '%n  birth=%W ctime=%Z mtime=%Y' \
-            "$INSTALL_DIR/hive/learnings/raw/main/ci-note.md" \
-            "$INSTALL_DIR/hive/.checkpoints/ci-test.marker" 2>/dev/null || \
-          stat -f '%N  birth=%B ctime=%c mtime=%m' \
-            "$INSTALL_DIR/hive/learnings/raw/main/ci-note.md" \
-            "$INSTALL_DIR/hive/.checkpoints/ci-test.marker" 2>/dev/null
-          echo "--- /timestamp dump ---"
           sh "$INSTALL_DIR/memory-hive" diff --since ci-test | tee /tmp/mh-diff2.out
           awk '/^New files/ {flag=1; next} /^$/ {flag=0} flag' /tmp/mh-diff2.out > /tmp/mh-diff-new.out
           grep -q "learnings/raw/main/ci-note.md" /tmp/mh-diff-new.out \

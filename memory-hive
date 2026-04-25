@@ -1245,9 +1245,15 @@ mh_diff() {
         #      message ("file changed after ref") is always true for
         #      anything `find -newer` returned.
         # Try birth time first (macOS APFS, Linux ext4 with statx).
-        _btime="$(stat -f %B "$_f" 2>/dev/null || stat -c %W "$_f" 2>/dev/null || printf '')"
+        # Order matters: GNU stat (-c) on macOS would produce a usage
+        # error to stderr but no output; BSD stat (-f %B) on Linux
+        # interprets -f as filesystem-stat and emits a multi-line
+        # human-readable format. Try GNU first, then BSD, and validate
+        # the result is a positive integer before trusting it.
+        _btime="$(stat -c %W "$_f" 2>/dev/null || stat -f %B "$_f" 2>/dev/null || printf '')"
         case "$_btime" in
-            ''|0|-) _btime="" ;;
+            ''|0|-)                 _btime="" ;;
+            *[!0-9]*)               _btime="" ;;  # non-numeric → garbage
         esac
         _is_new=0
         if [ -n "$_btime" ]; then
@@ -1262,6 +1268,8 @@ mh_diff() {
             # time. Imperfect; documented in the PR description.
             _mtime="$(_mh_mtime_epoch "$_f")"
             _ctime="$(stat -c %Z "$_f" 2>/dev/null || stat -f %c "$_f" 2>/dev/null || printf '')"
+            case "$_ctime" in *[!0-9]*) _ctime="" ;; esac
+            case "$_mtime" in *[!0-9]*) _mtime="" ;; esac
             if [ -n "$_ctime" ] && [ -n "$_mtime" ] \
                 && [ "$_ctime" -gt "$_ref_mtime" ]; then
                 _delta=$((_ctime - _mtime))
