@@ -540,6 +540,14 @@ Usage:
       counter. Ctrl+C to exit. Uses fswatch or inotifywait if
       available; falls back to polling (5s).
 
+  memory-hive query <term> [--silo <name>] [--kind <k>] [--since <date>]
+                           [--paths-only] [--regex]
+      Search every text surface of the hive (silo logs/memory/context,
+      raw + distilled learnings, knowledge, curator, registry, raw/).
+      Default is fixed-string match; pass --regex for ERE. Output is
+      grouped by file, ANSI-highlighted on a tty, exits 1 if no
+      matches. Run \`memory-hive query --help\` for full flag docs.
+
   memory-hive help
       Show this message.
 
@@ -927,6 +935,339 @@ mh_setup() {
         sh "$_installer"
 }
 
+# --- query: searchable hive ---------------------------------------------------
+#
+# `memory-hive query <term>` — grep across every text surface of the hive so
+# nothing the user (or an agent) wrote becomes write-only. We grep $HIVE_DIR
+# directly instead of reusing _mh_classify because the search target is
+# broader (every .md under hive/, including curator/, registry/, raw/,
+# knowledge/). Skips _archived/, .git, .upstream/.local backups, and
+# dotfiles by construction.
+#
+# Defaults to fixed-string match (`grep -F`); pass --regex to opt into ERE.
+# Honest-first: if the term contains regex metacharacters and --regex was
+# NOT passed, we warn the user once before running so a mistyped query
+# doesn't silently treat the regex as a literal.
+
+# _mh_query_has_regex_meta <term> — return 0 if the term contains characters
+# that mean something different in regex than literal text. Conservative
+# list: . * + ? ( ) [ ] { } ^ $ | \. We don't flag - or _ even though
+# they're technically regex-significant inside character classes.
+_mh_query_has_regex_meta() {
+    case "$1" in
+        *[.*+?\(\)\[\]\{\}\^\$\|\\]*) return 0 ;;
+        *) return 1 ;;
+    esac
+}
+
+# _mh_query_classify_path <abspath> — prints the file's "kind" (log,
+# memory, context, learning, distilled, raw, knowledge, curator, registry,
+# other). Used by --kind filtering. Path-driven and intentionally simple
+# — we trust the on-disk layout the installer creates.
+_mh_query_classify_path() {
+    case "$1" in
+        "$HIVE_DIR"/*) _qrel="${1#"$HIVE_DIR"/}" ;;
+        *) printf 'other'; return 0 ;;
+    esac
+    case "$_qrel" in
+        agents/*/log.md)            printf 'log' ;;
+        agents/*/memory.md)         printf 'memory' ;;
+        agents/*/context.md)        printf 'context' ;;
+        agents/*/learnings/*.md)    printf 'learning' ;;
+        learnings/raw/*)            printf 'raw' ;;
+        learnings/distilled/*)      printf 'distilled' ;;
+        knowledge/*)                printf 'knowledge' ;;
+        curator/*)                  printf 'curator' ;;
+        registry/*)                 printf 'registry' ;;
+        raw/*)                      printf 'raw' ;;
+        *)                          printf 'other' ;;
+    esac
+}
+
+# _mh_query_file_list — print one absolute path per line for every text
+# file under $HIVE_DIR that is in scope for query. Mirrors
+# _mh_hive_file_list (skipping .git/.upstream/.local/.DS_Store) plus
+# extra excludes for _archived/ and dotfiles, and limits to .md files.
+# Sanitized agent names guarantee no spaces/newlines in path segments.
+_mh_query_file_list() {
+    [ -d "$HIVE_DIR" ] || return 0
+    find "$HIVE_DIR" -type f -name '*.md' \
+        ! -path "*/_archived/*" \
+        ! -path "*/.git/*" \
+        ! -name '.*' \
+        ! -name "*.upstream" \
+        ! -name "*.local" \
+        ! -name ".DS_Store" \
+        2>/dev/null
+}
+
+# _mh_query_highlight <term> <line> — re-emit the line with ANSI bold-red
+# wrapped around every literal occurrence of <term>. Used only when stdout
+# is a tty. We sed-escape the term so regex metacharacters don't blow up
+# the s/// pattern.
+_mh_query_highlight() {
+    _term="$1"
+    _line="$2"
+    _esc="$(printf '%s' "$_term" | sed -e 's/[\.[\*^$/&#]/\\&/g')"
+    _hl_open="$(printf '\033[1;31m')"
+    _hl_close="$(printf '\033[0m')"
+    printf '%s' "$_line" | sed "s#${_esc}#${_hl_open}&${_hl_close}#g"
+}
+
+mh_query() {
+    _mh_require_install
+
+    _q_term=""
+    _q_silo=""
+    _q_kind=""
+    _q_since=""
+    _q_paths_only=0
+    _q_regex=0
+    _q_max_per_file=10
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            -h|--help)
+                cat <<'EOF'
+Usage: memory-hive query <term> [flags]
+
+Searches every text surface of the hive for <term>:
+  agents/*/log.md, memory.md, context.md
+  agents/*/learnings/*.md
+  learnings/raw/**/*.md, learnings/distilled/*.md
+  knowledge/*.md, curator/*.md, registry/*.md, raw/**/*.md
+
+Flags:
+  --silo <name>            Limit to that agent's silo.
+  --kind <k>               Scope by classification:
+                             log | memory | context | learning |
+                             raw | distilled | knowledge | curator | registry
+  --since <YYYY-MM-DD>     Only files modified on/after that date.
+  --paths-only             Print matching paths, no content.
+  --regex                  Treat <term> as an extended regular expression
+                             (default is fixed-string).
+
+Exits 1 if there are no matches (so it pipes cleanly into shell conditionals).
+
+Examples:
+  memory-hive query "circular import"
+  memory-hive query api --silo coder --kind memory
+  memory-hive query 2026-04 --kind log --since 2026-04-20
+  memory-hive query --regex 'TODO|FIXME' --paths-only
+EOF
+                return 0
+                ;;
+            --silo)
+                shift
+                [ $# -gt 0 ] || _mh_die "--silo needs a value"
+                _q_silo="$1"; shift ;;
+            --silo=*)  _q_silo="${1#--silo=}"; shift ;;
+            --kind)
+                shift
+                [ $# -gt 0 ] || _mh_die "--kind needs a value"
+                _q_kind="$1"; shift ;;
+            --kind=*)  _q_kind="${1#--kind=}"; shift ;;
+            --since)
+                shift
+                [ $# -gt 0 ] || _mh_die "--since needs a value"
+                _q_since="$1"; shift ;;
+            --since=*) _q_since="${1#--since=}"; shift ;;
+            --paths-only) _q_paths_only=1; shift ;;
+            --regex)      _q_regex=1; shift ;;
+            --) shift; _q_term="$1"; shift; break ;;
+            -*) _mh_die "Unknown flag: $1 (try --help)" ;;
+            *)
+                if [ -z "$_q_term" ]; then
+                    _q_term="$1"
+                else
+                    _mh_die "Unexpected argument: $1 (only one term; quote multi-word queries)"
+                fi
+                shift
+                ;;
+        esac
+    done
+
+    [ -n "$_q_term" ] || _mh_die "Usage: memory-hive query <term> [flags]   (try --help)"
+
+    # Validate --kind early so a typo fails before the search runs.
+    if [ -n "$_q_kind" ]; then
+        case "$_q_kind" in
+            log|memory|context|learning|raw|distilled|knowledge|curator|registry) ;;
+            *) _mh_die "Unknown --kind '$_q_kind'. Valid: log memory context learning raw distilled knowledge curator registry" ;;
+        esac
+    fi
+
+    # Validate --silo (must be a real on-disk silo; refuse archived/hidden).
+    if [ -n "$_q_silo" ]; then
+        case "$_q_silo" in
+            _archived|.*) _mh_die "Cannot search archived or hidden silos." ;;
+        esac
+        if [ ! -d "$AGENTS_DIR/$_q_silo" ]; then
+            _mh_die "No such silo: $_q_silo"
+        fi
+    fi
+
+    # Validate --since (YYYY-MM-DD only — keep parsing simple + portable).
+    _q_since_epoch=0
+    if [ -n "$_q_since" ]; then
+        case "$_q_since" in
+            [0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]) ;;
+            *) _mh_die "--since must be YYYY-MM-DD (got: $_q_since)" ;;
+        esac
+        # GNU date first, BSD date second.
+        _q_since_epoch="$(date -d "$_q_since 00:00:00" +%s 2>/dev/null \
+            || date -j -f '%Y-%m-%d %H:%M:%S' "$_q_since 00:00:00" +%s 2>/dev/null \
+            || printf '0')"
+        [ "$_q_since_epoch" -gt 0 ] || _mh_die "Could not parse --since date: $_q_since"
+    fi
+
+    # Honest warning: regex metas in a fixed-string query are usually a mistake.
+    if [ "$_q_regex" -eq 0 ] && _mh_query_has_regex_meta "$_q_term"; then
+        printf '(note: "%s" contains regex metacharacters but is being treated literally;\n' "$_q_term" >&2
+        printf '       pass --regex if you meant a regular expression)\n\n' >&2
+    fi
+
+    # Tty-aware highlighting. Only colorize when stdout is a real terminal.
+    _q_color=0
+    [ -t 1 ] && _q_color=1
+
+    # Pick grep flavor. -F = fixed-string (default), -E = extended regex.
+    if [ "$_q_regex" -eq 1 ]; then
+        _q_grep_flag="-E"
+    else
+        _q_grep_flag="-F"
+    fi
+
+    # Build the candidate file list with --silo / --kind / --since applied
+    # up front, so we never grep files that don't qualify and per-file
+    # output ordering stays deterministic.
+    _q_files="$INSTALL_DIR/.query-files.$$"
+    _mh_query_file_list | while IFS= read -r _f; do
+        [ -n "$_f" ] || continue
+        if [ -n "$_q_silo" ]; then
+            case "$_f" in
+                "$AGENTS_DIR/$_q_silo"/*) ;;
+                *) continue ;;
+            esac
+        fi
+        if [ -n "$_q_kind" ]; then
+            _fkind="$(_mh_query_classify_path "$_f")"
+            [ "$_fkind" = "$_q_kind" ] || continue
+        fi
+        if [ "$_q_since_epoch" -gt 0 ]; then
+            _fmt="$(_mh_mtime_epoch "$_f")"
+            [ -n "$_fmt" ] || continue
+            [ "$_fmt" -ge "$_q_since_epoch" ] || continue
+        fi
+        printf '%s\n' "$_f"
+    done | sort > "$_q_files"
+
+    if [ ! -s "$_q_files" ]; then
+        rm -f "$_q_files"
+        printf 'No files in scope for query.\n' >&2
+        return 1
+    fi
+
+    # --- search loop -------------------------------------------------------
+    # Per-file grep with line numbers, capped at $_q_max_per_file rows.
+    # Counters live in a temp file because the while-pipeline runs in a
+    # subshell on POSIX sh and any plain-shell counters wouldn't survive.
+    _q_counts="$INSTALL_DIR/.query-counts.$$"
+    : > "$_q_counts"
+    _q_first=1
+
+    while IFS= read -r _f; do
+        [ -n "$_f" ] || continue
+        # -n line numbers, -I skip binary, -h no filename (we print our own).
+        _q_hits="$(grep -nIh "$_q_grep_flag" -e "$_q_term" "$_f" 2>/dev/null || true)"
+        [ -n "$_q_hits" ] || continue
+
+        _q_count="$(printf '%s\n' "$_q_hits" | wc -l | tr -d ' ')"
+        printf 'F\n' >> "$_q_counts"
+        _i=0
+        while [ "$_i" -lt "$_q_count" ]; do
+            printf 'M\n' >> "$_q_counts"
+            _i=$((_i + 1))
+        done
+
+        if [ "$_q_paths_only" -eq 1 ]; then
+            printf '%s\n' "${_f#"$HIVE_DIR"/}"
+            continue
+        fi
+
+        # Heading style cribbed from rg: blank line between files, cyan-bold
+        # path (when tty), then `line:content` rows.
+        if [ "$_q_first" -eq 0 ]; then printf '\n'; fi
+        _q_first=0
+
+        _qrel="${_f#"$HIVE_DIR"/}"
+        if [ "$_q_color" -eq 1 ]; then
+            printf '\033[1;36m%s\033[0m\n' "$_qrel"
+        else
+            printf '%s\n' "$_qrel"
+        fi
+
+        # Cap per-file rows in a subshell so its counters don't bleed into
+        # the outer while-loop.
+        printf '%s\n' "$_q_hits" | (
+            _shown=0
+            _truncated=0
+            while IFS= read -r _row; do
+                [ -n "$_row" ] || continue
+                _shown=$((_shown + 1))
+                if [ "$_shown" -gt "$_q_max_per_file" ]; then
+                    _truncated=1
+                    break
+                fi
+                # Chop "lineno:content" at the first colon only — content
+                # itself may contain colons.
+                _ln="${_row%%:*}"
+                _body="${_row#*:}"
+                if [ "$_q_color" -eq 1 ]; then
+                    _body_hl="$(_mh_query_highlight "$_q_term" "$_body")"
+                    printf '  \033[2m%s\033[0m: %s\n' "$_ln" "$_body_hl"
+                else
+                    printf '  %s: %s\n' "$_ln" "$_body"
+                fi
+            done
+            if [ "$_truncated" -eq 1 ]; then
+                _more=$((_q_count - _q_max_per_file))
+                printf '  ... +%s more match(es) in this file\n' "$_more"
+            fi
+        )
+    done < "$_q_files"
+    rm -f "$_q_files"
+
+    # Aggregate counters from the temp file. Use wc -l rather than grep -c
+    # because grep -c exits non-zero on zero matches, which would force a
+    # fallback path; wc -l is unconditional. tr strips macOS' leading spaces.
+    if [ -s "$_q_counts" ]; then
+        _q_total_files="$(grep '^F$' "$_q_counts" 2>/dev/null | wc -l | tr -d ' ')"
+        _q_total_matches="$(grep '^M$' "$_q_counts" 2>/dev/null | wc -l | tr -d ' ')"
+    else
+        _q_total_files=0
+        _q_total_matches=0
+    fi
+    rm -f "$_q_counts"
+
+    if [ "$_q_total_matches" -eq 0 ]; then
+        printf 'No matches for "%s".\n' "$_q_term" >&2
+        return 1
+    fi
+
+    if [ "$_q_paths_only" -eq 0 ]; then
+        printf '\n'
+    fi
+    if [ "$_q_color" -eq 1 ]; then
+        printf '\033[2m%s match(es) across %s file(s).\033[0m\n' \
+            "$_q_total_matches" "$_q_total_files" >&2
+    else
+        printf '%s match(es) across %s file(s).\n' \
+            "$_q_total_matches" "$_q_total_files" >&2
+    fi
+    return 0
+}
+
 mh_list() {
     _mh_require_install
     if [ ! -d "$AGENTS_DIR" ]; then
@@ -1121,6 +1462,7 @@ case "$_verb" in
     apply)    _mh_require_install; mh_apply "$@" ;;
     stats)    mh_stats ;;
     watch)    mh_watch ;;
+    query|search) mh_query "$@" ;;
     help|-h|--help) mh_help ;;
     *)
         printf 'Unknown command: %s\n\n' "$_verb" >&2
