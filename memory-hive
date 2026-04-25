@@ -891,6 +891,13 @@ Usage:
       you can `ls -la` yourself. No timers, no proxies, no fake
       activity.
 
+  memory-hive dedup [--per-agent] [--strict] [--threshold N]
+      Scan hive/learnings/raw/ and report near-duplicate clusters so the
+      curator can consolidate. Default groups across all agents by
+      normalized H1/title. --strict adds a first-paragraph word-overlap
+      filter (default 50%, tunable with --threshold). Print-only;
+      raw files are never modified.
+
   memory-hive watch
       Live stream of file events as agents write to the hive. Prints
       timestamp + agent + file for each event and keeps a running
@@ -2918,6 +2925,395 @@ mh_diff() {
 }
 
 
+# --- dedup: detect near-duplicate raw learnings -----------------------------
+#
+# Problem: hive/learnings/raw/<agent>/*.md accumulates near-duplicates as
+# multiple agents independently observe the same pattern. Without dedup the
+# curator's queue grows linearly and signal thins.
+#
+# Approach (cheap, POSIX, non-destructive):
+#   1. Walk hive/learnings/raw/<agent>/*.md
+#   2. For each file extract a title -- first H1 heading, falling back to the
+#      filename's slug (stripping a leading YYYY-MM-DD- date if present).
+#   3. Normalize the title: lowercase, non-alphanumeric -> space, drop a small
+#      stopword list, sort+dedupe the remaining tokens, rejoin with single
+#      spaces. Sorting tokens means "retry backoff cap" and "cap retry backoff"
+#      collapse to the same key.
+#   4. Group files by normalized key. Any group with 2+ entries is a cluster.
+#
+# --strict adds a second pass: keep the cluster only if first-paragraph
+# word-overlap with the cluster anchor is >= threshold (default 50%). Overlap
+# is |A intersect B| / max(|A|, |B|) over significant tokens (post-stopword)
+# in the first paragraph of each file.
+#
+# This verb never modifies raw learnings; it only reports.
+
+# _mh_dedup_stopwords -- significant-word filter. Drop articles, prepositions,
+# auxiliaries, and the most generic English glue. Kept short on purpose: the
+# point is to collapse "the test isolation rule" and "test isolation rule"
+# into the same key, not to do real NLP.
+_mh_dedup_stopwords() {
+    printf '%s\n' \
+        a an the and or but if then else for of to in on at by with from \
+        is are was were be been being am do does did done doing has have \
+        had having i you he she it we they me him her us them my your his \
+        its our their this that these those as so not no yes also only \
+        very just than which who whom whose what when where why how \
+        about into onto over under between through during after before \
+        because while although though even still already once here there
+}
+
+# _mh_dedup_normalize <text> -> prints normalized title (sorted token list,
+# space-separated, stopwords dropped). Empty input -> empty output.
+_mh_dedup_normalize() {
+    _txt="$1"
+    [ -n "$_txt" ] || return 0
+    _stop="$(_mh_dedup_stopwords | tr '\n' ' ')"
+    printf '%s' "$_txt" \
+        | tr '[:upper:]' '[:lower:]' \
+        | tr -c 'a-z0-9' ' ' \
+        | tr -s ' ' '\n' \
+        | awk -v stop=" $_stop " '
+            NF && length($0) > 1 {
+                pat = " " $0 " "
+                if (index(stop, pat) == 0) print $0
+            }
+        ' \
+        | sort -u \
+        | tr '\n' ' ' \
+        | sed -e 's/ *$//' -e 's/^ *//'
+}
+
+# _mh_dedup_title <file> -> prints the file's title:
+#   1. First H1 ("# foo") if present
+#   2. Else: filename slug, with leading YYYY-MM-DD- stripped, dashes -> spaces
+_mh_dedup_title() {
+    _f="$1"
+    _h1="$(awk '
+        /^# / {
+            line = $0
+            sub(/^# +/, "", line)
+            sub(/[[:space:]]+$/, "", line)
+            if (line != "") { print line; exit }
+        }
+    ' "$_f" 2>/dev/null)"
+    if [ -n "$_h1" ]; then
+        printf '%s' "$_h1"
+        return 0
+    fi
+    _base="$(basename "$_f" .md)"
+    case "$_base" in
+        [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-*)
+            _base="$(printf '%s' "$_base" | cut -c12-)"
+            ;;
+    esac
+    printf '%s' "$_base" | tr '-_' '  '
+}
+
+# _mh_dedup_first_para <file> -> prints the first paragraph (lines after any
+# YAML frontmatter and the first H1, up to the next blank line). Used by
+# --strict.
+_mh_dedup_first_para() {
+    _f="$1"
+    awk '
+        BEGIN { fm = 0; saw_fm = 0; past_h1 = 0; in_para = 0 }
+        NR == 1 && /^---$/ { fm = 1; saw_fm = 1; next }
+        fm == 1 {
+            if ($0 ~ /^---$/) { fm = 0 }
+            next
+        }
+        /^# / && past_h1 == 0 { past_h1 = 1; next }
+        past_h1 == 0 && saw_fm == 0 { past_h1 = 1 }
+        past_h1 == 1 {
+            if ($0 ~ /^[[:space:]]*$/) {
+                if (in_para == 1) { exit }
+                next
+            }
+            if ($0 ~ /^#/) { next }
+            in_para = 1
+            print
+        }
+    ' "$_f" 2>/dev/null
+}
+
+# _mh_dedup_tokens <text> -> prints one significant token per line (lowercased,
+# stopwords dropped, deduped via sort -u). Used to compute set overlap.
+_mh_dedup_tokens() {
+    _txt="$1"
+    [ -n "$_txt" ] || return 0
+    _stop="$(_mh_dedup_stopwords | tr '\n' ' ')"
+    printf '%s' "$_txt" \
+        | tr '[:upper:]' '[:lower:]' \
+        | tr -c 'a-z0-9' ' ' \
+        | tr -s ' ' '\n' \
+        | awk -v stop=" $_stop " '
+            NF && length($0) > 1 {
+                pat = " " $0 " "
+                if (index(stop, pat) == 0) print $0
+            }
+        ' \
+        | sort -u
+}
+
+# _mh_dedup_overlap_pct <file_a> <file_b> -> prints integer percentage 0..100
+# of word-overlap on first-paragraph tokens. |A intersect B| / max(|A|,|B|).
+# Empty paragraphs -> 0.
+_mh_dedup_overlap_pct() {
+    _fa="$1"; _fb="$2"
+    _ta="$INSTALL_DIR/.dedup-a.$$"
+    _tb="$INSTALL_DIR/.dedup-b.$$"
+    _mh_dedup_tokens "$(_mh_dedup_first_para "$_fa")" > "$_ta" 2>/dev/null
+    _mh_dedup_tokens "$(_mh_dedup_first_para "$_fb")" > "$_tb" 2>/dev/null
+    _na=$(wc -l < "$_ta" 2>/dev/null | tr -d ' ')
+    _nb=$(wc -l < "$_tb" 2>/dev/null | tr -d ' ')
+    [ -z "$_na" ] && _na=0
+    [ -z "$_nb" ] && _nb=0
+    if [ "$_na" -eq 0 ] || [ "$_nb" -eq 0 ]; then
+        rm -f "$_ta" "$_tb"
+        printf '0'
+        return 0
+    fi
+    _inter=$(comm -12 "$_ta" "$_tb" 2>/dev/null | wc -l | tr -d ' ')
+    [ -z "$_inter" ] && _inter=0
+    _denom=$_na
+    [ "$_nb" -gt "$_denom" ] && _denom=$_nb
+    rm -f "$_ta" "$_tb"
+    [ "$_denom" -eq 0 ] && { printf '0'; return 0; }
+    printf '%d' $((_inter * 100 / _denom))
+}
+
+mh_dedup() {
+    _mh_require_install
+
+    _across_agents=1
+    _strict=0
+    _threshold=50
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --across-agents) _across_agents=1 ;;
+            --per-agent)     _across_agents=0 ;;
+            --strict)        _strict=1 ;;
+            --threshold)
+                shift
+                [ $# -gt 0 ] || _mh_die "--threshold needs a value (0..100)"
+                _threshold="$1"
+                ;;
+            --threshold=*)
+                _threshold="${1#--threshold=}"
+                ;;
+            -h|--help)
+                cat <<EOF
+Usage: memory-hive dedup [--per-agent] [--strict] [--threshold N]
+  --per-agent       Cluster within each agent's raw/ dir only.
+                    Default is to cluster across all agents.
+  --strict          Filter clusters by first-paragraph word-overlap.
+  --threshold N     Strict overlap threshold, 0..100 (default 50).
+Output is print-only; raw files are never modified.
+EOF
+                return 0
+                ;;
+            *) _mh_die "Unknown flag: $1 (try: memory-hive dedup --help)" ;;
+        esac
+        shift
+    done
+
+    case "$_threshold" in
+        ''|*[!0-9]*) _mh_die "--threshold must be an integer 0..100" ;;
+    esac
+    if [ "$_threshold" -lt 0 ] || [ "$_threshold" -gt 100 ]; then
+        _mh_die "--threshold must be an integer 0..100"
+    fi
+
+    _raw_root="$HIVE_DIR/learnings/raw"
+    if [ ! -d "$_raw_root" ]; then
+        printf 'No raw learnings directory at %s -- nothing to dedup.\n' "$_raw_root"
+        return 0
+    fi
+
+    # Tuples file: each line is "scope|normkey TAB relpath TAB abspath".
+    _tuples="$INSTALL_DIR/.dedup-tuples.$$"
+    : > "$_tuples"
+
+    _file_count=0
+    for _agent_dir in "$_raw_root"/*; do
+        [ -d "$_agent_dir" ] || continue
+        _agent="$(basename "$_agent_dir")"
+        for _f in "$_agent_dir"/*.md; do
+            [ -f "$_f" ] || continue
+            _file_count=$((_file_count + 1))
+            _title="$(_mh_dedup_title "$_f")"
+            _norm="$(_mh_dedup_normalize "$_title")"
+            [ -n "$_norm" ] || continue
+            if [ "$_across_agents" -eq 1 ]; then
+                _scope="*"
+            else
+                _scope="$_agent"
+            fi
+            _rel="${_f#"$HIVE_DIR"/}"
+            printf '%s\t%s\t%s\n' "$_scope|$_norm" "$_rel" "$_f" >> "$_tuples"
+        done
+    done
+
+    if [ "$_file_count" -eq 0 ]; then
+        rm -f "$_tuples"
+        printf 'No raw learnings found under %s -- nothing to dedup.\n' "$_raw_root"
+        return 0
+    fi
+
+    _sorted="$INSTALL_DIR/.dedup-sorted.$$"
+    LC_ALL=C sort "$_tuples" > "$_sorted"
+    rm -f "$_tuples"
+
+    # Group adjacent tuples with the same key. For each group of >= 2 emit
+    # a cluster record into $_clusters as:
+    #   ===CLUSTER===
+    #   <displayed normalized title>
+    #   <relpath 1>
+    #   <relpath 2>
+    #   ...
+    _clusters="$INSTALL_DIR/.dedup-clusters.$$"
+    : > "$_clusters"
+
+    _flush_cluster() {
+        [ -n "$_cur_key" ] || return 0
+        _count=$(printf '%s\n' "$_cur_files" | grep -c .)
+        [ "$_count" -ge 2 ] || return 0
+
+        if [ "$_strict" -eq 1 ]; then
+            _kept_files=""
+            _anchor=""
+            _i=1
+            _IFS_save="$IFS"
+            IFS='
+'
+            for _line in $_cur_files; do
+                _path_for_line="$(printf '%s\n' "$_cur_paths" | sed -n "${_i}p")"
+                if [ -z "$_anchor" ]; then
+                    _anchor="$_path_for_line"
+                    _kept_files="$_line"
+                else
+                    _pct="$(_mh_dedup_overlap_pct "$_anchor" "$_path_for_line")"
+                    if [ "$_pct" -ge "$_threshold" ]; then
+                        if [ -z "$_kept_files" ]; then
+                            _kept_files="$_line"
+                        else
+                            _kept_files="$_kept_files
+$_line"
+                        fi
+                    fi
+                fi
+                _i=$((_i + 1))
+            done
+            IFS="$_IFS_save"
+            _kept_count=$(printf '%s\n' "$_kept_files" | grep -c .)
+            [ "$_kept_count" -ge 2 ] || return 0
+            _cur_files="$_kept_files"
+        fi
+
+        _disp_key="${_cur_key#*|}"
+        printf '%s\n' "===CLUSTER===" >> "$_clusters"
+        printf '%s\n' "$_disp_key" >> "$_clusters"
+        printf '%s\n' "$_cur_files" >> "$_clusters"
+    }
+
+    _cur_key=""
+    _cur_files=""
+    _cur_paths=""
+    while IFS=$(printf '\t') read -r _key _rel _abs; do
+        [ -n "$_key" ] || continue
+        if [ "$_key" != "$_cur_key" ]; then
+            _flush_cluster
+            _cur_key="$_key"
+            _cur_files="$_rel"
+            _cur_paths="$_abs"
+        else
+            _cur_files="$_cur_files
+$_rel"
+            _cur_paths="$_cur_paths
+$_abs"
+        fi
+    done < "$_sorted"
+    _flush_cluster
+    rm -f "$_sorted"
+
+    printf '\nMemory Hive -- dedup candidates\n'
+    printf '%s\n\n' '------------------------------'
+
+    if [ ! -s "$_clusters" ]; then
+        rm -f "$_clusters"
+        if [ "$_strict" -eq 1 ]; then
+            printf 'No clusters above %d%% first-paragraph overlap (scanned %d files).\n\n' \
+                "$_threshold" "$_file_count"
+        else
+            printf 'No near-duplicates found (scanned %d files).\n\n' "$_file_count"
+        fi
+        return 0
+    fi
+
+    _cluster_n=0
+    _files_total=0
+    _state=0
+    _cur_disp=""
+    _cur_lines=""
+    while IFS= read -r _line; do
+        if [ "$_line" = "===CLUSTER===" ]; then
+            if [ "$_state" -eq 2 ]; then
+                _cluster_n=$((_cluster_n + 1))
+                _n=$(printf '%s\n' "$_cur_lines" | grep -c .)
+                _files_total=$((_files_total + _n))
+                printf 'Cluster %d (%d entries, normalized title: "%s"):\n' \
+                    "$_cluster_n" "$_n" "$_cur_disp"
+                printf '%s\n' "$_cur_lines" | while IFS= read -r _ln; do
+                    [ -n "$_ln" ] && printf '  %s\n' "$_ln"
+                done
+                printf '\n'
+            fi
+            _state=1
+            _cur_disp=""
+            _cur_lines=""
+            continue
+        fi
+        if [ "$_state" -eq 1 ]; then
+            _cur_disp="$_line"
+            _state=2
+            continue
+        fi
+        if [ "$_state" -eq 2 ]; then
+            if [ -z "$_cur_lines" ]; then
+                _cur_lines="$_line"
+            else
+                _cur_lines="$_cur_lines
+$_line"
+            fi
+        fi
+    done < "$_clusters"
+    if [ "$_state" -eq 2 ] && [ -n "$_cur_disp" ]; then
+        _cluster_n=$((_cluster_n + 1))
+        _n=$(printf '%s\n' "$_cur_lines" | grep -c .)
+        _files_total=$((_files_total + _n))
+        printf 'Cluster %d (%d entries, normalized title: "%s"):\n' \
+            "$_cluster_n" "$_n" "$_cur_disp"
+        printf '%s\n' "$_cur_lines" | while IFS= read -r _ln; do
+            [ -n "$_ln" ] && printf '  %s\n' "$_ln"
+        done
+        printf '\n'
+    fi
+    rm -f "$_clusters"
+
+    printf '%d cluster(s) found, %d files involved (scanned %d).\n\n' \
+        "$_cluster_n" "$_files_total" "$_file_count"
+    if [ "$_strict" -eq 1 ]; then
+        printf 'Filter: --strict, threshold %d%% first-paragraph overlap.\n\n' "$_threshold"
+    fi
+    printf 'Curator next step:\n'
+    printf '  Pick the strongest entry per cluster, promote it to learnings/distilled/,\n'
+    printf '  and archive (or merge) the others. Raw files were not modified.\n\n'
+
+    return 0
+}
+
+
 # --- dispatch ----------------------------------------------------------------
 
 if [ $# -eq 0 ]; then
@@ -2947,6 +3343,7 @@ case "$_verb" in
     stale)    mh_stale "$@" ;;
     checkpoint) mh_checkpoint "$@" ;;
     diff)     mh_diff "$@" ;;
+    dedup)    mh_dedup "$@" ;;
     help|-h|--help) mh_help ;;
     *)
         printf 'Unknown command: %s\n\n' "$_verb" >&2
