@@ -139,6 +139,82 @@ jobs:
           sh "$INSTALL_DIR/memory-hive" doctor
           echo "CLI smoke OK"
 
+      - name: CLI smoke — dedup near-duplicate raw learnings
+        shell: bash
+        run: |
+          set -eu
+          INSTALL_DIR="$(mktemp -d)"
+          export MEMORY_HIVE_DIR="$INSTALL_DIR"
+          export MEMORY_HIVE_SKIP_CLAUDE_MD=1
+          export MEMORY_HIVE_REPO="$(pwd)"
+          sh install.sh < /dev/null
+
+          # Seed two near-duplicate raw learnings under different agents.
+          # Same topic ("test isolation across parallel workers"), different
+          # filenames and prose. dedup --across-agents (default) must cluster
+          # them; --per-agent must NOT.
+          mkdir -p "$INSTALL_DIR/hive/learnings/raw/coder"
+          mkdir -p "$INSTALL_DIR/hive/learnings/raw/reviewer"
+          mkdir -p "$INSTALL_DIR/hive/learnings/raw/researcher"
+
+          cat > "$INSTALL_DIR/hive/learnings/raw/coder/2026-04-23-test-isolation.md" <<'L1'
+          ---
+          date: 2026-04-23
+          agent: coder
+          ---
+
+          # Test isolation in parallel workers
+
+          Pytest -n auto produced flaky test_user_creation due to a session-scoped
+          DB fixture being reused across tests in the same worker.
+          L1
+
+          cat > "$INSTALL_DIR/hive/learnings/raw/reviewer/2026-04-24-flaky-tests.md" <<'L2'
+          ---
+          date: 2026-04-24
+          agent: reviewer
+          ---
+
+          # Test isolation parallel workers
+
+          Reviewer noticed flaky tests in parallel mode caused by shared mutable
+          DB fixture. Function-scoped fixtures fix the flake.
+          L2
+
+          # Unrelated learning — must not cluster.
+          cat > "$INSTALL_DIR/hive/learnings/raw/researcher/2026-04-24-embedding-latency.md" <<'L3'
+          ---
+          date: 2026-04-24
+          agent: researcher
+          ---
+
+          # Embedding model latency notes
+
+          Sentence-transformers all-MiniLM-L6-v2 averages 8ms per sentence on M1.
+          L3
+
+          # 1) Default (across-agents): one cluster of two files.
+          sh "$INSTALL_DIR/memory-hive" dedup | tee /tmp/mh-dedup.out
+          grep -q "1 cluster(s) found, 2 files involved" /tmp/mh-dedup.out
+          grep -q "coder/2026-04-23-test-isolation.md" /tmp/mh-dedup.out
+          grep -q "reviewer/2026-04-24-flaky-tests.md" /tmp/mh-dedup.out
+          # The unrelated entry must NOT appear in any cluster body.
+          ! grep -q "embedding-latency" /tmp/mh-dedup.out
+
+          # 2) --per-agent must find no clusters (the two duplicates live in
+          #    different agent dirs).
+          sh "$INSTALL_DIR/memory-hive" dedup --per-agent | tee /tmp/mh-dedup-per.out
+          grep -q "No near-duplicates found" /tmp/mh-dedup-per.out
+
+          # 3) --help is a documented shape, must succeed and mention threshold.
+          sh "$INSTALL_DIR/memory-hive" dedup --help | grep -q -- "--threshold"
+
+          # 4) Raw files were never modified (sanity: count + content unchanged).
+          test "$(find "$INSTALL_DIR/hive/learnings/raw" -name '*.md' | wc -l | tr -d ' ')" = "3"
+          grep -q "test_user_creation" "$INSTALL_DIR/hive/learnings/raw/coder/2026-04-23-test-isolation.md"
+
+          echo "Dedup smoke OK"
+
       - name: Platform integration smoke — auto-inject
         shell: bash
         run: |
