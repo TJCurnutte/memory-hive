@@ -1331,6 +1331,28 @@ Usage:
       newest-mtime cluster member. Every action is printed even under
       --apply so the curator stays in the loop.
 
+  memory-hive bundle [--for <agent>] [--max-tokens N] [--out <file>]
+      Concatenate the canonical hive surfaces into a single
+      prompt-injection-ready markdown bundle. Closes the gap between
+      "memory exists on disk" and "the agent's prompt knows about it."
+      Sections are emitted in this order, each under a markdown H1
+      heading naming its source path:
+        1. hive/index.md
+        2. hive/registry/AGENTS.md
+        3. hive/knowledge/HUMAN_CONTEXT.md (and other knowledge files)
+        4. hive/learnings/distilled/*.md (newest first)
+        5. agents/<for>/context.md + memory.md (only with --for)
+      Default writes to stdout; --out <file> writes to disk. --max-tokens
+      uses a 1 token ~ 4 chars estimate and trims oldest distilled
+      content first when over budget. Footer summary on stderr.
+      Honors .baseline-installed: unedited installer scaffolding files
+      (e.g. an empty HUMAN_CONTEXT.md template) are skipped so they
+      don't pollute the bundle. Examples:
+        memory-hive bundle
+        memory-hive bundle --for coder
+        memory-hive bundle --for main --max-tokens 4000
+        memory-hive bundle --out ~/prompts/hive-context.md
+
   memory-hive help
       Show this message.
 
@@ -4949,6 +4971,274 @@ $_path"
 }
 
 
+# mh_bundle — concatenate canonical hive surfaces into a single
+# prompt-injection-ready markdown blob. Default goes to stdout; --out
+# writes to a file. --for <agent> appends that agent's silo (context +
+# memory). --max-tokens does a rough char-budget trim (1 token ~= 4
+# chars), dropping the oldest distilled file first when over budget.
+#
+# Section ordering (leads with most-portable context — if the receiver's
+# context overflows, the tail is what gets cut):
+#   1. hive/index.md                      — system overview
+#   2. hive/registry/AGENTS.md            — who's who
+#   3. hive/knowledge/HUMAN_CONTEXT.md    — human facts (curated, dense)
+#   4. hive/knowledge/*.md (the rest)     — other curated knowledge
+#   5. hive/learnings/distilled/*.md      — canonical patterns (newest first)
+#   6. agents/<for>/context.md            — target agent state (if --for)
+#   7. agents/<for>/memory.md             — target agent durable memory
+#
+# Honors $HIVE_DIR/.baseline-installed: any individual file whose mtime
+# is at or before the baseline is treated as untouched installer
+# scaffolding and skipped (it would just be placeholder noise in the
+# bundle). The receiver should never see "ships empty by design"
+# templates.
+mh_bundle() {
+    _mh_require_install
+    [ -d "$HIVE_DIR" ] || _mh_die "Hive directory missing: $HIVE_DIR"
+
+    _for_agent=""
+    _max_tokens=""
+    _out_file=""
+
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --for)
+                shift
+                [ -n "${1:-}" ] || _mh_die "--for needs an agent name."
+                _for_agent="$1"
+                ;;
+            --for=*)
+                _for_agent="${1#--for=}"
+                [ -n "$_for_agent" ] || _mh_die "--for needs an agent name."
+                ;;
+            --max-tokens)
+                shift
+                [ -n "${1:-}" ] || _mh_die "--max-tokens needs an integer."
+                _max_tokens="$1"
+                ;;
+            --max-tokens=*)
+                _max_tokens="${1#--max-tokens=}"
+                ;;
+            --out)
+                shift
+                [ -n "${1:-}" ] || _mh_die "--out needs a file path."
+                _out_file="$1"
+                ;;
+            --out=*)
+                _out_file="${1#--out=}"
+                ;;
+            -h|--help)
+                printf 'Usage: memory-hive bundle [--for <agent>] [--max-tokens N] [--out <file>]\n'
+                printf '  Concatenate hive surfaces into a single prompt-injection-ready bundle.\n'
+                printf '  Default: stdout. --max-tokens trims oldest distilled content first.\n'
+                return 0
+                ;;
+            *)
+                _mh_die "Unknown bundle flag: $1 (try --for, --max-tokens, --out)"
+                ;;
+        esac
+        shift
+    done
+
+    # Validate --max-tokens.
+    if [ -n "$_max_tokens" ]; then
+        case "$_max_tokens" in
+            ''|*[!0-9]*) _mh_die "--max-tokens must be a positive integer (got: $_max_tokens)" ;;
+        esac
+        [ "$_max_tokens" -gt 0 ] || _mh_die "--max-tokens must be > 0"
+    fi
+
+    # Validate --for: agent silo must exist.
+    if [ -n "$_for_agent" ]; then
+        if [ ! -d "$AGENTS_DIR/$_for_agent" ]; then
+            _mh_die "Unknown agent silo: $_for_agent (try: memory-hive list)"
+        fi
+    fi
+
+    # Resolve baseline mtime — files at-or-before this are unedited
+    # installer scaffolding and should not pollute the bundle.
+    _baseline_file="$HIVE_DIR/.baseline-installed"
+    _baseline_mtime=0
+    if [ -f "$_baseline_file" ]; then
+        _baseline_mtime="$(_mh_mtime_epoch "$_baseline_file")"
+        [ -n "$_baseline_mtime" ] || _baseline_mtime=0
+    fi
+
+    # _bundle_skip_baseline <path> → 0 if the file should be skipped
+    # (mtime <= baseline; unedited template), else 1.
+    _bundle_skip_baseline() {
+        [ "$_baseline_mtime" -gt 0 ] || return 1
+        _bs_mt="$(_mh_mtime_epoch "$1")"
+        [ -n "$_bs_mt" ] || return 1
+        [ "$_bs_mt" -le "$_baseline_mtime" ] && return 0
+        return 1
+    }
+
+    # Build the ordered file list. Each line is a path; blank-line lists
+    # are not used because POSIX sh has no real arrays.
+    _file_list="$(mktemp -t mh-bundle.XXXXXX)"
+    : > "$_file_list"
+
+    # 1. hive/index.md (always include — even if mtime <= baseline; it's
+    #    the entry point and not a "ships empty" template).
+    if [ -f "$HIVE_DIR/index.md" ]; then
+        printf '%s\n' "$HIVE_DIR/index.md" >> "$_file_list"
+    fi
+
+    # 2. registry/AGENTS.md (always include — register rebuilds it on
+    #    every silo change, so its mtime tracks the install state).
+    if [ -f "$HIVE_DIR/registry/AGENTS.md" ]; then
+        printf '%s\n' "$HIVE_DIR/registry/AGENTS.md" >> "$_file_list"
+    fi
+
+    # 3. knowledge/HUMAN_CONTEXT.md — only if edited past baseline.
+    _hc="$HIVE_DIR/knowledge/HUMAN_CONTEXT.md"
+    if [ -f "$_hc" ] && ! _bundle_skip_baseline "$_hc"; then
+        printf '%s\n' "$_hc" >> "$_file_list"
+    fi
+
+    # 4. Other knowledge/*.md, alphabetical, skipping HUMAN_CONTEXT
+    #    (handled above) and unedited baseline templates.
+    if [ -d "$HIVE_DIR/knowledge" ]; then
+        for _kf in "$HIVE_DIR"/knowledge/*.md; do
+            [ -f "$_kf" ] || continue
+            case "$(basename "$_kf")" in
+                HUMAN_CONTEXT.md) continue ;;
+            esac
+            _bundle_skip_baseline "$_kf" && continue
+            printf '%s\n' "$_kf" >> "$_file_list"
+        done
+    fi
+
+    # 5. learnings/distilled/*.md — newest first (this matters for the
+    #    --max-tokens trim path: we drop from the end of the bundle, so
+    #    putting newest first means the oldest distilled gets cut first).
+    if [ -d "$HIVE_DIR/learnings/distilled" ]; then
+        _distilled_tmp="$(mktemp -t mh-bundle-d.XXXXXX)"
+        : > "$_distilled_tmp"
+        for _df in "$HIVE_DIR"/learnings/distilled/*.md; do
+            [ -f "$_df" ] || continue
+            _bundle_skip_baseline "$_df" && continue
+            _dmt="$(_mh_mtime_epoch "$_df")"
+            [ -n "$_dmt" ] || _dmt=0
+            printf '%s\t%s\n' "$_dmt" "$_df" >> "$_distilled_tmp"
+        done
+        # Newest first.
+        sort -nr "$_distilled_tmp" | while IFS=$(printf '\t') read -r _ _p; do
+            [ -n "$_p" ] && printf '%s\n' "$_p"
+        done >> "$_file_list"
+        rm -f "$_distilled_tmp"
+    fi
+
+    # 6+7. Target agent silo (context.md, memory.md) — appended last
+    #      so a context-overflow at the receiver doesn't lose the
+    #      hive-wide canon.
+    if [ -n "$_for_agent" ]; then
+        _ac="$AGENTS_DIR/$_for_agent/context.md"
+        _am="$AGENTS_DIR/$_for_agent/memory.md"
+        # Always include (silo files are agent-owned, not template scaffolding).
+        [ -f "$_ac" ] && printf '%s\n' "$_ac" >> "$_file_list"
+        [ -f "$_am" ] && printf '%s\n' "$_am" >> "$_file_list"
+    fi
+
+    # Compose the bundle into a temp buffer first so we can measure size,
+    # apply the token budget, then emit (to stdout or to --out).
+    _bundle_tmp="$(mktemp -t mh-bundle-out.XXXXXX)"
+    : > "$_bundle_tmp"
+
+    _file_count=0
+    while IFS= read -r _path; do
+        [ -n "$_path" ] || continue
+        [ -f "$_path" ] || continue
+        _rel="${_path#"$HIVE_DIR"/}"
+        # H1 heading with the source path so the receiver can tell each piece apart.
+        printf '# hive/%s\n\n' "$_rel" >> "$_bundle_tmp"
+        cat "$_path" >> "$_bundle_tmp"
+        # Trailing blank line + section separator.
+        printf '\n\n' >> "$_bundle_tmp"
+        _file_count=$((_file_count + 1))
+    done < "$_file_list"
+
+    # --max-tokens trim: 1 token ≈ 4 chars. If over budget, recompute the
+    # bundle while dropping the oldest distilled file (i.e. the LAST
+    # distilled-section in the file list — distilled is sorted newest
+    # first). Repeat until within budget or no distilled left to drop.
+    if [ -n "$_max_tokens" ]; then
+        _budget_chars=$((_max_tokens * 4))
+        _cur_chars="$(wc -c < "$_bundle_tmp" | tr -d ' ')"
+        while [ "$_cur_chars" -gt "$_budget_chars" ]; do
+            # Find the last distilled entry in the list and drop it.
+            _last_distilled_line=""
+            _ln=0
+            while IFS= read -r _p; do
+                _ln=$((_ln + 1))
+                case "$_p" in
+                    "$HIVE_DIR"/learnings/distilled/*) _last_distilled_line="$_ln" ;;
+                esac
+            done < "$_file_list"
+            if [ -z "$_last_distilled_line" ]; then
+                # Nothing left to drop. Stop trying.
+                break
+            fi
+            # Remove that line from the file list.
+            _new_list="$(mktemp -t mh-bundle-l.XXXXXX)"
+            awk -v drop="$_last_distilled_line" 'NR != drop' "$_file_list" > "$_new_list"
+            mv "$_new_list" "$_file_list"
+
+            # Recompose the bundle.
+            : > "$_bundle_tmp"
+            _file_count=0
+            while IFS= read -r _path; do
+                [ -n "$_path" ] || continue
+                [ -f "$_path" ] || continue
+                _rel="${_path#"$HIVE_DIR"/}"
+                printf '# hive/%s\n\n' "$_rel" >> "$_bundle_tmp"
+                cat "$_path" >> "$_bundle_tmp"
+                printf '\n\n' >> "$_bundle_tmp"
+                _file_count=$((_file_count + 1))
+            done < "$_file_list"
+            _cur_chars="$(wc -c < "$_bundle_tmp" | tr -d ' ')"
+        done
+
+        # If we're still over budget after dropping all distilled (e.g. a
+        # single huge knowledge file is bigger than the whole budget),
+        # truncate the tail of the bundle as a last resort. Use dd for
+        # byte-precise truncation — awk's length() counts characters
+        # under multi-byte locales, which overshoots when the content
+        # has em-dashes/UTF-8 (Ubuntu CI vs. macOS LC_ALL differ here).
+        # dd bs=1 count=N is universal POSIX and byte-exact.
+        _cur_chars="$(wc -c < "$_bundle_tmp" | tr -d ' ')"
+        if [ "$_cur_chars" -gt "$_budget_chars" ]; then
+            _trunc_tmp="$(mktemp -t mh-bundle-t.XXXXXX)"
+            dd if="$_bundle_tmp" of="$_trunc_tmp" bs=1 count="$_budget_chars" \
+                2>/dev/null
+            mv "$_trunc_tmp" "$_bundle_tmp"
+        fi
+    fi
+
+    # Emit. Stdout by default; --out writes to file.
+    _final_chars="$(wc -c < "$_bundle_tmp" | tr -d ' ')"
+    _final_tokens=$(( _final_chars / 4 ))
+
+    if [ -n "$_out_file" ]; then
+        # Make sure parent dir exists if it's a path with directories.
+        _out_parent="$(dirname "$_out_file")"
+        [ -d "$_out_parent" ] || mkdir -p "$_out_parent"
+        cat "$_bundle_tmp" > "$_out_file"
+    else
+        cat "$_bundle_tmp"
+    fi
+
+    # Footer summary on stderr (so it doesn't pollute stdout pipelines).
+    # Wrap so SIGPIPE on the printf — if the user closed stderr — doesn't
+    # take the script down under set -e.
+    printf 'Bundle: %s chars, %s files, ~%s tokens (4 chars/token estimate)\n' \
+        "$_final_chars" "$_file_count" "$_final_tokens" >&2 || :
+
+    rm -f "$_file_list" "$_bundle_tmp"
+}
+
+
 # --- dispatch ----------------------------------------------------------------
 
 if [ $# -eq 0 ]; then
@@ -4984,6 +5274,7 @@ case "$_verb" in
     lint)     mh_lint "$@" ;;
     digest)   mh_digest "$@" ;;
     curate)   mh_curate "$@" ;;
+    bundle)   mh_bundle "$@" ;;
     help|-h|--help) mh_help ;;
     *)
         printf 'Unknown command: %s\n\n' "$_verb" >&2

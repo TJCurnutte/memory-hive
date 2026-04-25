@@ -1191,6 +1191,109 @@ jobs:
 
           echo "Curate apply OK"
 
+      - name: CLI smoke — bundle assembles prompt-ready context
+        shell: bash
+        run: |
+          set -eu
+          INSTALL_DIR="$(mktemp -d)"
+          export MEMORY_HIVE_DIR="$INSTALL_DIR"
+          export MEMORY_HIVE_SKIP_CLAUDE_MD=1
+          export MEMORY_HIVE_REPO="$(pwd)"
+          sh install.sh < /dev/null > /dev/null
+
+          # Sleep so seeded files have mtimes strictly newer than the
+          # install baseline (otherwise the bundle's baseline filter
+          # treats them as install scaffolding and skips them).
+          sleep 2
+
+          # Seed a knowledge file (HUMAN_CONTEXT) and a distilled file.
+          # Use printf to avoid YAML literal-block indent contamination.
+          printf '%s\n' '# Human Context' \
+                       '' \
+                       '- BUNDLE-CANARY-HUMAN: this is the curated human context.' \
+              > "$INSTALL_DIR/hive/knowledge/HUMAN_CONTEXT.md"
+
+          mkdir -p "$INSTALL_DIR/hive/learnings/distilled"
+          printf '%s\n' '# Patterns' \
+                       '' \
+                       '## BUNDLE-CANARY-DISTILLED' \
+                       '' \
+                       'A distilled pattern that bundle should surface.' \
+              > "$INSTALL_DIR/hive/learnings/distilled/patterns.md"
+
+          # Stamp main's context.md with a canary so --for main can find it.
+          printf '%s\n' '# main context' \
+                       '' \
+                       'BUNDLE-CANARY-MAIN-CTX' \
+              > "$INSTALL_DIR/hive/agents/main/context.md"
+
+          # 1) Default bundle: both seeds appear, main canary does NOT.
+          sh "$INSTALL_DIR/memory-hive" bundle > /tmp/mh-bundle.out 2> /tmp/mh-bundle.err
+          grep -q "BUNDLE-CANARY-HUMAN" /tmp/mh-bundle.out || \
+              { echo "FAIL: HUMAN_CONTEXT not in default bundle"; cat /tmp/mh-bundle.out; exit 1; }
+          grep -q "BUNDLE-CANARY-DISTILLED" /tmp/mh-bundle.out || \
+              { echo "FAIL: distilled patterns not in default bundle"; cat /tmp/mh-bundle.out; exit 1; }
+          if grep -q "BUNDLE-CANARY-MAIN-CTX" /tmp/mh-bundle.out; then
+              echo "FAIL: default bundle leaked main silo (no --for given)"
+              exit 1
+          fi
+          # Footer summary lives on stderr.
+          grep -q "Bundle:.*chars,.*files,.*tokens" /tmp/mh-bundle.err || \
+              { echo "FAIL: footer summary missing on stderr"; cat /tmp/mh-bundle.err; exit 1; }
+          # Sections must be H1-headed with their source path.
+          grep -q "^# hive/index.md" /tmp/mh-bundle.out || \
+              { echo "FAIL: no H1 heading for index.md"; exit 1; }
+          grep -q "^# hive/knowledge/HUMAN_CONTEXT.md" /tmp/mh-bundle.out || \
+              { echo "FAIL: no H1 heading for HUMAN_CONTEXT.md"; exit 1; }
+
+          # 2) --for main appends main silo (context.md must show up).
+          sh "$INSTALL_DIR/memory-hive" bundle --for main > /tmp/mh-bundle-main.out 2> /tmp/mh-bundle-main.err
+          grep -q "BUNDLE-CANARY-MAIN-CTX" /tmp/mh-bundle-main.out || \
+              { echo "FAIL: --for main did not include main's context.md"; cat /tmp/mh-bundle-main.out; exit 1; }
+          grep -q "^# hive/agents/main/context.md" /tmp/mh-bundle-main.out || \
+              { echo "FAIL: --for main: no H1 for agents/main/context.md"; exit 1; }
+
+          # 3) --out writes to a file (and stdout stays empty).
+          sh "$INSTALL_DIR/memory-hive" bundle --out /tmp/mh-bundle-file.md \
+              > /tmp/mh-bundle-stdout.out 2> /tmp/mh-bundle-file.err
+          test -s /tmp/mh-bundle-file.md || \
+              { echo "FAIL: --out did not write to file"; exit 1; }
+          grep -q "BUNDLE-CANARY-HUMAN" /tmp/mh-bundle-file.md || \
+              { echo "FAIL: --out file missing canary"; exit 1; }
+          if [ -s /tmp/mh-bundle-stdout.out ]; then
+              echo "FAIL: --out should leave stdout empty, got:"
+              cat /tmp/mh-bundle-stdout.out
+              exit 1
+          fi
+          grep -q "Bundle:.*chars" /tmp/mh-bundle-file.err || \
+              { echo "FAIL: --out should still print footer to stderr"; cat /tmp/mh-bundle-file.err; exit 1; }
+
+          # 4) --max-tokens trims the bundle below the budget. Full
+          # bundle is several thousand chars; 50 tokens = 200 chars
+          # absolute cap, so the trimmed output must be <= 200 chars.
+          sh "$INSTALL_DIR/memory-hive" bundle --max-tokens 50 > /tmp/mh-bundle-trim.out 2> /tmp/mh-bundle-trim.err
+          full_chars="$(wc -c < /tmp/mh-bundle.out | tr -d ' ')"
+          trim_chars="$(wc -c < /tmp/mh-bundle-trim.out | tr -d ' ')"
+          [ "$trim_chars" -le 200 ] || \
+              { echo "FAIL: trimmed bundle is $trim_chars chars, expected <= 200"; exit 1; }
+          [ "$trim_chars" -lt "$full_chars" ] || \
+              { echo "FAIL: trim did not reduce size ($trim_chars vs $full_chars)"; exit 1; }
+
+          # 5) Unknown agent dies with a useful error.
+          set +e
+          sh "$INSTALL_DIR/memory-hive" bundle --for ghost > /tmp/mh-bundle-bad.out 2>&1
+          rc=$?
+          set -e
+          [ "$rc" -ne 0 ] || { echo "FAIL: --for ghost should error"; exit 1; }
+          grep -q "Unknown agent silo: ghost" /tmp/mh-bundle-bad.out || \
+              { echo "FAIL: error message did not mention ghost"; cat /tmp/mh-bundle-bad.out; exit 1; }
+
+          # 6) Help mentions the verb.
+          sh "$INSTALL_DIR/memory-hive" help | grep -q "memory-hive bundle" || \
+              { echo "FAIL: help missing bundle entry"; exit 1; }
+
+          echo "Bundle smoke OK"
+
       - name: Doctor smoke — multi-platform health check
         shell: bash
         run: |
