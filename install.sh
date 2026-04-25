@@ -1535,10 +1535,10 @@ else
     : > "$_prev_wired_file" 2>/dev/null || true
 fi
 
-_emit_platform_lines PLATFORM_WIRED  "wired "
-_emit_platform_lines PLATFORM_GONE   "gone  "
-_emit_platform_lines PLATFORM_MANUAL "manual"
-_emit_platform_lines PLATFORM_SKIPPED "skip  "
+_emit_platform_lines PLATFORM_WIRED   "wired"
+_emit_platform_lines PLATFORM_GONE    "gone "
+_emit_platform_lines PLATFORM_MANUAL  "manual"
+_emit_platform_lines PLATFORM_SKIPPED "skip "
 
 if [ -n "$CREATED_SILOS" ] && [ -n "$EXISTING_SILOS" ]; then
     printf '  Silos created: %s\n' "$CREATED_SILOS"
