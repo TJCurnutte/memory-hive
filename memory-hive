@@ -1230,16 +1230,20 @@ mh_digest() {
         done
     done
 
-    if [ "$_total_writes" -eq 1 ] && [ "$_agent_count" -eq 1 ]; then
-        printf '\nTotal: 1 write across 1 agent.\n\n'
-    elif [ "$_total_writes" -eq 1 ]; then
-        printf '\nTotal: 1 write across %s agents.\n\n' "$_agent_count"
-    elif [ "$_agent_count" -eq 1 ]; then
-        printf '\nTotal: %s writes across 1 agent.\n\n' "$_total_writes"
-    else
-        printf '\nTotal: %s writes across %s agents.\n\n' \
-            "$_total_writes" "$_agent_count"
-    fi
+    # Tolerate SIGPIPE: users pipe `digest | grep -q ...` and the consumer
+    # closes early; with `set -e` we'd otherwise abort here on EPIPE.
+    {
+        if [ "$_total_writes" -eq 1 ] && [ "$_agent_count" -eq 1 ]; then
+            printf '\nTotal: 1 write across 1 agent.\n\n'
+        elif [ "$_total_writes" -eq 1 ]; then
+            printf '\nTotal: 1 write across %s agents.\n\n' "$_agent_count"
+        elif [ "$_agent_count" -eq 1 ]; then
+            printf '\nTotal: %s writes across 1 agent.\n\n' "$_total_writes"
+        else
+            printf '\nTotal: %s writes across %s agents.\n\n' \
+                "$_total_writes" "$_agent_count"
+        fi
+    } 2>/dev/null || :
 
     rm -f "$_records"
 }

@@ -155,7 +155,8 @@ jobs:
           grep -q "Nothing changed in this window" /tmp/mh-dig-empty.out
 
           # Help mentions the digest verb.
-          sh "$INSTALL_DIR/memory-hive" help | grep -q "memory-hive digest"
+          sh "$INSTALL_DIR/memory-hive" help > /tmp/mh-help.out
+          grep -q "memory-hive digest" /tmp/mh-help.out
 
           # Sleep so the log mtime is strictly newer than the install
           # baseline. Filesystems with second-granularity mtimes need this.
@@ -179,12 +180,15 @@ jobs:
           grep -q "Smoke-test entry" /tmp/mh-dig.out
           grep -q "Total: 1 write across 1 agent" /tmp/mh-dig.out
 
-          # --week alias works.
-          sh "$INSTALL_DIR/memory-hive" digest --week | grep -q "Smoke-test entry"
+          # --week alias works. (Redirect first; piping straight into
+          # `grep -q` triggers SIGPIPE on the CLI's own printfs under
+          # bash's set -e -o pipefail and that's not a real failure.)
+          sh "$INSTALL_DIR/memory-hive" digest --week > /tmp/mh-dig-week.out
+          grep -q "Smoke-test entry" /tmp/mh-dig-week.out
 
           # --since YYYY-MM-DD parses on both GNU date and BSD date.
-          sh "$INSTALL_DIR/memory-hive" digest --since 2026-01-01 \
-            | grep -q "Smoke-test entry"
+          sh "$INSTALL_DIR/memory-hive" digest --since 2026-01-01 > /tmp/mh-dig-since.out
+          grep -q "Smoke-test entry" /tmp/mh-dig-since.out
 
           # Bad date is rejected with a clear error.
           if sh "$INSTALL_DIR/memory-hive" digest --since notadate \
