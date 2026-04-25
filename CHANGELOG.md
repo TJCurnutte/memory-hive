@@ -6,7 +6,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-### Added — Curator + observability verbs (10 new commands)
+## [0.2.0] — 2026-04-24 — `multi-platform + curator loop`
+
+### Added — Curator + observability verbs (11 new commands)
 
 A wave of parallel feature work added ten new CLI verbs that close the loop
 between agent contributions and curator promotion. All are pure shell, all
