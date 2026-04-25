@@ -183,15 +183,6 @@ humanize_age() {
     fi
 }
 
-# rel_path <path> — strip the install dir prefix for terser output.
-rel_path() {
-    _p="$1"
-    case "$_p" in
-        "$HIVE_DIR"/*) printf 'hive/%s' "${_p#$HIVE_DIR/}" ;;
-        *) printf '%s' "$_p" ;;
-    esac
-}
-
 # ---------------------------------------------------------------------------
 # Resolve agent list.
 # ---------------------------------------------------------------------------
@@ -273,6 +264,8 @@ check_agent() {
     # "possible cross-silo write (by someone)" — review required.
     _lane_hits=""
     _lane_count=0
+    _lane_tmp="$(mktemp -t mh-comp-lane.XXXXXX)" || _lane_tmp=""
+    [ -n "$_lane_tmp" ] || return 0
     for _other in "$AGENTS_DIR"/*; do
         [ -d "$_other" ] || continue
         _other_name="$(basename "$_other")"
@@ -289,10 +282,10 @@ check_agent() {
                 printf '%s|%s\n' "$_other_name" "$_rel"
             fi
         done
-    done > /tmp/.mh-lane.$$ 2>/dev/null
+    done > "$_lane_tmp" 2>/dev/null
 
-    if [ -s /tmp/.mh-lane.$$ ]; then
-        _lane_count="$(wc -l < /tmp/.mh-lane.$$ | tr -d ' ')"
+    if [ -s "$_lane_tmp" ]; then
+        _lane_count="$(wc -l < "$_lane_tmp" | tr -d ' ')"
     fi
 
     if [ "$_lane_count" = "0" ] || [ -z "$_lane_count" ]; then
@@ -310,30 +303,34 @@ check_agent() {
             [ "$_ag" -lt 0 ] && _ag=0
             printf '    - agents/%s/%s (%s)\n' "$_owner" "$_rel" "$(humanize_age "$_ag")"
             _shown=$(( _shown + 1 ))
-        done < /tmp/.mh-lane.$$
+        done < "$_lane_tmp"
         if [ "$_lane_count" -gt 5 ]; then
             printf '    %s… and %s more%s\n' "$DIM" "$(( _lane_count - 5 ))" "$RESET"
         fi
         TOTAL_WARNINGS=$(( TOTAL_WARNINGS + 1 ))
     fi
-    rm -f /tmp/.mh-lane.$$
+    rm -f "$_lane_tmp"
 
     # --- C3: knowledge direct-writes --------------------------------------
     _knowledge_hits=""
     _knowledge_count=0
+    _know_tmp=""
     if [ -d "$KNOWLEDGE_DIR" ]; then
-        ( cd "$KNOWLEDGE_DIR" && find . -type f 2>/dev/null ) | while IFS= read -r _rel; do
-            _rel="${_rel#./}"
-            [ -n "$_rel" ] || continue
-            _full="$KNOWLEDGE_DIR/$_rel"
-            _m="$(file_mtime "$_full")"
-            [ -n "$_m" ] || continue
-            if [ "$_m" -ge "$WINDOW_START" ]; then
-                printf '%s\n' "$_rel"
+        _know_tmp="$(mktemp -t mh-comp-know.XXXXXX)" || _know_tmp=""
+        if [ -n "$_know_tmp" ]; then
+            ( cd "$KNOWLEDGE_DIR" && find . -type f 2>/dev/null ) | while IFS= read -r _rel; do
+                _rel="${_rel#./}"
+                [ -n "$_rel" ] || continue
+                _full="$KNOWLEDGE_DIR/$_rel"
+                _m="$(file_mtime "$_full")"
+                [ -n "$_m" ] || continue
+                if [ "$_m" -ge "$WINDOW_START" ]; then
+                    printf '%s\n' "$_rel"
+                fi
+            done > "$_know_tmp" 2>/dev/null
+            if [ -s "$_know_tmp" ]; then
+                _knowledge_count="$(wc -l < "$_know_tmp" | tr -d ' ')"
             fi
-        done > /tmp/.mh-knowledge.$$ 2>/dev/null
-        if [ -s /tmp/.mh-knowledge.$$ ]; then
-            _knowledge_count="$(wc -l < /tmp/.mh-knowledge.$$ | tr -d ' ')"
         fi
     fi
 
@@ -342,20 +339,22 @@ check_agent() {
     else
         printf '  C3 knowledge writes  %b %s file(s) modified in last %s\n' "$FAIL_MARK" "$_knowledge_count" "$SINCE_ARG"
         _shown=0
-        while IFS= read -r _rel; do
-            [ "$_shown" -ge 5 ] && break
-            _mt="$(file_mtime "$KNOWLEDGE_DIR/$_rel")"
-            _ag=$(( NOW_EPOCH - _mt ))
-            [ "$_ag" -lt 0 ] && _ag=0
-            printf '    - knowledge/%s (modified %s)\n' "$_rel" "$(humanize_age "$_ag")"
-            _shown=$(( _shown + 1 ))
-        done < /tmp/.mh-knowledge.$$
+        if [ -n "$_know_tmp" ] && [ -f "$_know_tmp" ]; then
+            while IFS= read -r _rel; do
+                [ "$_shown" -ge 5 ] && break
+                _mt="$(file_mtime "$KNOWLEDGE_DIR/$_rel")"
+                _ag=$(( NOW_EPOCH - _mt ))
+                [ "$_ag" -lt 0 ] && _ag=0
+                printf '    - knowledge/%s (modified %s)\n' "$_rel" "$(humanize_age "$_ag")"
+                _shown=$(( _shown + 1 ))
+            done < "$_know_tmp"
+        fi
         if [ "$_knowledge_count" -gt 5 ]; then
             printf '    %s… and %s more%s\n' "$DIM" "$(( _knowledge_count - 5 ))" "$RESET"
         fi
         TOTAL_VIOLATIONS=$(( TOTAL_VIOLATIONS + 1 ))
     fi
-    rm -f /tmp/.mh-knowledge.$$
+    [ -n "$_know_tmp" ] && rm -f "$_know_tmp"
 
     # --- C4: log.md shape -------------------------------------------------
     if [ ! -f "$_log" ]; then

@@ -1635,8 +1635,6 @@ jobs:
               hive/agents/coder/memory.md \
               hive/agents/reviewer/log.md \
               hive/agents/researcher/log.md \
-              hive/learnings/raw/coder/parallel-test-isolation.md \
-              hive/learnings/raw/researcher/warmup-outside-window.md \
               hive/learnings/distilled/patterns.md \
               hive/learnings/distilled/wins.md \
               hive/learnings/distilled/mistakes.md \
@@ -1647,6 +1645,21 @@ jobs:
                   exit 1
               fi
           done
+
+          # Raw learnings: filenames carry a substituted date prefix
+          # (<YYYY-MM-DD>-<slug>.md) so any non-empty match is sufficient.
+          ls "$INSTALL_DIR"/hive/learnings/raw/coder/*-parallel-test-isolation.md \
+              >/dev/null 2>&1 \
+              || { echo "FAIL: parallel-test-isolation seed missing"; exit 1; }
+          ls "$INSTALL_DIR"/hive/learnings/raw/researcher/*-warmup-outside-window.md \
+              >/dev/null 2>&1 \
+              || { echo "FAIL: warmup-outside-window seed missing"; exit 1; }
+
+          # Lint --strict must pass on freshly seeded data — the on-disk
+          # filenames satisfy the YYYY-MM-DD-<slug>.md convention because
+          # the seeder substitutes path markers along with body markers.
+          sh "$INSTALL_DIR/memory-hive" lint --strict > /tmp/mh-seed-lint.out 2>&1 \
+              || { echo "FAIL: seeded files fail lint --strict"; cat /tmp/mh-seed-lint.out; exit 1; }
 
           # No date-marker should leak through unsubstituted.
           if grep -r '__DAYS_AGO_' "$INSTALL_DIR/hive" > /tmp/mh-seed-leak.out 2>/dev/null; then

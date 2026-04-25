@@ -45,13 +45,15 @@ if ! grep -q "^## \[${VERSION}\]" CHANGELOG.md; then
 fi
 
 TAG="v${VERSION}"
-if git tag -l | grep -qx "$TAG"; then
+# `git tag --list <pattern>` matches exact tag names safely (no pipe to grep,
+# no risk of partial-match false positives).
+if [ -n "$(git tag --list "$TAG")" ]; then
     printf 'ERROR: tag %s already exists locally.\n' "$TAG" >&2
     exit 1
 fi
 
 git fetch origin --tags --quiet
-if git ls-remote --tags origin "refs/tags/${TAG}" | grep -q .; then
+if [ -n "$(git ls-remote --tags origin "refs/tags/${TAG}")" ]; then
     printf 'ERROR: tag %s already exists on origin.\n' "$TAG" >&2
     exit 1
 fi

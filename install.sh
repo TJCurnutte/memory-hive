@@ -1496,7 +1496,7 @@ fi
 # Use ~ for $HOME in display paths for readability.
 display_path() {
     case "$1" in
-        "$HOME"/*) printf '~%s' "${1#$HOME}" ;;
+        "$HOME"/*) printf '~%s' "${1#"$HOME"}" ;;
         *) printf '%s' "$1" ;;
     esac
 }
