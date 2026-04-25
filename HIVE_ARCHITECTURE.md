@@ -146,11 +146,20 @@ canonical files, plus topical files as the hive grows:
 
 The curator's workspace for maintaining the hive.
 
-**`DRAFT.md`** — Pending contributions from agents.
+**`CONFLICTS.md`** — When two agents contradict each other. Both
+perspectives preserved until resolved. Populated by
+[`memory-hive conflicts --write`](INTEGRATION.md).
 
-**`CONFLICTS.md`** — When two agents contradict each other. Both perspectives preserved until resolved.
+**`DECISIONS.md`** — Audit trail of every curation decision. Appended
+to by [`memory-hive promote`](INTEGRATION.md) and
+[`memory-hive curate --apply`](INTEGRATION.md).
 
-**`DECISIONS.md`** — Audit trail of every curation decision.
+> Note: earlier versions of this architecture had a `DRAFT.md` queue
+> for pending contributions. In practice agents write directly to
+> `learnings/raw/[agent-id]/` and the curator scans that path — there
+> is no separate draft step. The verbs `tail`, `digest`, `confidence`,
+> and `dedup` give the curator everything they need to triage raw
+> contributions without an intermediate queue.
 
 ---
 
@@ -172,14 +181,26 @@ Each agent has its own private directory:
 
 ## The Curation Loop
 
-The curator runs this loop after every task or on a schedule:
+The curator runs this loop after every task or on a schedule. The
+shipped CLI verbs collapse most of it into one command:
 
-1. **Collect** — Check `curator/DRAFT.md` for new contributions
-2. **Review** — Read raw learnings, identify what matters
-3. **Promote** — Move valuable learnings to `learnings/distilled/`
-4. **Resolve** — Handle any conflicts in `curator/CONFLICTS.md`
-5. **Archive** — Raw learnings >7 days old → review and archive
-6. **Log** — Every decision goes to `DECISIONS.md`
+1. **Collect** — `memory-hive tail` or `digest` shows new raw
+   contributions; `dedup` clusters near-duplicates across agents
+2. **Review** — `memory-hive confidence` flags clusters that have
+   crossed an upgrade threshold; `lint` validates frontmatter
+3. **Promote** — `memory-hive promote <raw-file>` appends a summary
+   with backlink to `learnings/distilled/<topic>.md` (raw stays as
+   source of truth)
+4. **Resolve** — `memory-hive conflicts --write` populates
+   `curator/CONFLICTS.md` when two agents disagree
+5. **Triage stale** — `memory-hive stale` lists raw learnings >7 days
+   old without a curator decision
+6. **Log** — Every promotion + every conflict resolution lands in
+   `DECISIONS.md` automatically
+
+`memory-hive curate` runs steps 1–5 in one pass and prints a single
+summary line. Default is dry-run; `--apply` performs promotions for
+clusters at the high-confidence threshold.
 
 ---
 
@@ -211,13 +232,18 @@ When an agent completes a task:
 ```
 1. Agent writes learnings to hive/learnings/raw/[agent-id]/
 2. Agent updates own silo: agents/[agent-id]/log.md
-3. Agent submits contribution summary to curator/DRAFT.md
-4. Curator reviews within 24h
-5. Curator promotes valuable learnings to learnings/distilled/
-6. Curator logs decision to curator/DECISIONS.md
-7. Next agent to spawn sees updated hive
-8. System is now smarter than before the task
+3. Curator scans hive/learnings/raw/ (memory-hive tail / digest /
+   confidence / dedup surface what's new and what aligns)
+4. Curator promotes valuable learnings to learnings/distilled/ via
+   memory-hive promote (or memory-hive curate --apply for the whole
+   loop in one pass)
+5. Curator logs decision to curator/DECISIONS.md (automatic on promote)
+6. Next agent to spawn sees updated hive
+7. System is now smarter than before the task
 ```
+
+There is no separate `DRAFT.md` queue. `learnings/raw/[agent-id]/`
+*is* the queue.
 
 ---
 

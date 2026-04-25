@@ -196,8 +196,8 @@ Task completes
 ┌────────────────────────────────────────────────┐
 │ 1. Write learnings to hive/learnings/raw/      │
 │ 2. Update private silo (agents/[id]/log.md)    │
-│ 3. Submit summary to curator/DRAFT.md          │
-│ 4. Curator reviews → promotes to distilled/    │
+│ 3. Curator scans raw/ (tail / digest / dedup)  │
+│ 4. Curator promotes raw → distilled (promote)  │
 │ 5. Next agent boots → reads updated hive       │
 └────────────────────────────────────────────────┘
     │
