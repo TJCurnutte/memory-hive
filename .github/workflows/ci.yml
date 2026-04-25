@@ -796,6 +796,86 @@ jobs:
 
           echo "Dedup smoke OK"
 
+      - name: Query smoke — searchable hive
+        shell: bash
+        run: |
+          set -eu
+          INSTALL_DIR="$(mktemp -d)"
+          export MEMORY_HIVE_DIR="$INSTALL_DIR"
+          export MEMORY_HIVE_SKIP_CLAUDE_MD=1
+          export MEMORY_HIVE_REPO="$(pwd)"
+          sh install.sh < /dev/null > /dev/null
+
+          # Seed a deterministic canary string in three different surfaces
+          # (silo log, silo memory, and a raw learning) so each filter flag
+          # has something to assert on.
+          sh "$INSTALL_DIR/memory-hive" add qtester --role coder > /dev/null
+          echo "- alphazebra: query canary line in log" \
+              >> "$INSTALL_DIR/hive/agents/qtester/log.md"
+          echo "- alphazebra also in memory" \
+              >> "$INSTALL_DIR/hive/agents/qtester/memory.md"
+          mkdir -p "$INSTALL_DIR/hive/learnings/raw"
+          cat > "$INSTALL_DIR/hive/learnings/raw/qtester-seed.md" <<'SEED'
+          ---
+          date: 2026-04-24
+          agent: qtester
+          context: query smoke
+          ---
+          alphazebra is the canary
+          SEED
+
+          # 1. Default search finds the canary across all three surfaces.
+          sh "$INSTALL_DIR/memory-hive" query alphazebra > /tmp/q1.out 2>&1
+          grep -q "agents/qtester/log.md"        /tmp/q1.out
+          grep -q "agents/qtester/memory.md"     /tmp/q1.out
+          grep -q "learnings/raw/qtester-seed.md" /tmp/q1.out
+          grep -q "3 match(es) across 3 file"    /tmp/q1.out
+
+          # 2. --paths-only is one relative path per line.
+          sh "$INSTALL_DIR/memory-hive" query alphazebra --paths-only \
+              > /tmp/q2.out 2>&1
+          grep -q "^agents/qtester/log.md$"        /tmp/q2.out
+          grep -q "^agents/qtester/memory.md$"     /tmp/q2.out
+          grep -q "^learnings/raw/qtester-seed.md$" /tmp/q2.out
+
+          # 3. --kind log narrows to the log file only.
+          sh "$INSTALL_DIR/memory-hive" query alphazebra --kind log \
+              --paths-only > /tmp/q3.out 2>&1
+          grep -q "^agents/qtester/log.md$"        /tmp/q3.out
+          ! grep -q "memory.md"                    /tmp/q3.out
+
+          # 4. --silo qtester narrows to that silo (excludes raw/).
+          sh "$INSTALL_DIR/memory-hive" query alphazebra --silo qtester \
+              --paths-only > /tmp/q4.out 2>&1
+          grep -q "^agents/qtester/log.md$"        /tmp/q4.out
+          ! grep -q "learnings/raw"                /tmp/q4.out
+
+          # 5. No match exits 1 (so it pipes into shell conditionals).
+          set +e
+          sh "$INSTALL_DIR/memory-hive" query "zzznotinhive_xyzqq" \
+              > /tmp/q5.out 2>&1
+          rc=$?
+          set -e
+          [ "$rc" -eq 1 ] || { echo "expected exit 1 on no-match, got $rc"; exit 1; }
+
+          # 6. --regex accepts an ERE pattern.
+          sh "$INSTALL_DIR/memory-hive" query --regex 'alpha[a-z]+' \
+              --paths-only > /tmp/q6.out 2>&1
+          grep -q "qtester/log.md"                 /tmp/q6.out
+
+          # 7. Bad --kind dies cleanly (exit 1, error to stderr).
+          set +e
+          sh "$INSTALL_DIR/memory-hive" query foo --kind nope \
+              > /tmp/q7.out 2>&1
+          rc=$?
+          set -e
+          [ "$rc" -eq 1 ] || { echo "expected exit 1 on bad --kind, got $rc"; exit 1; }
+          grep -q "Unknown --kind"                 /tmp/q7.out
+
+          # 8. Top-level help mentions the new verb.
+          sh "$INSTALL_DIR/memory-hive" help | grep -q "memory-hive query"
+          echo "Query smoke OK"
+
       - name: Doctor smoke — multi-platform health check
         shell: bash
         run: |
