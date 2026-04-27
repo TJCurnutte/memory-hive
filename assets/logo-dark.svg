@@ -2,34 +2,23 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 480 96" fill="none">
   <title>Memory Hive</title>
   <!--
-    Dark-theme wordmark. Sister to hive-swarm/assets/logo-dark.svg —
-    same 480×96 viewBox, same wordmark proportions, paired aesthetic.
-    Honeycomb mark on left + italic-serif "Memory" + bold-sans "Hive"
-    + teal accent dot.
-
-    Bug fix: previous version hardcoded x="545" for "Hive", which broke
-    on GitHub because Instrument Serif isn't available there and the
-    fallback font has different metrics, so "Memory" overflowed and
-    overlapped "Hive". Switched to <tspan dx=...> for relative spacing.
+    Dark-theme wordmark — matches the brand-mark in the site navbar
+    (memoryhive.neural-forge.io). Top cell outlined + light-amber fill;
+    bottom-left cell outlined; bottom-right cell solid amber. All in
+    the amber accent. Plus italic-serif "Memory" + bold-sans "Hive"
+    + a small teal accent dot at the end.
   -->
 
-  <!-- Honeycomb cluster (3 cells: top-center + bottom-left + bottom-right) -->
-  <g transform="translate(8 12)">
-    <polygon points="22,2 42,2 52,18 42,34 22,34 12,18"
-             stroke="#F59E0B" stroke-width="2" stroke-linejoin="round"
-             fill="#F59E0B" fill-opacity="0.14" />
-    <polygon points="2,30 22,30 32,46 22,62 2,62 -8,46"
-             stroke="#14B8A6" stroke-width="2" stroke-linejoin="round" />
-    <polygon points="42,30 62,30 72,46 62,62 42,62 32,46"
-             stroke="#14B8A6" stroke-width="2" stroke-linejoin="round"
-             fill="#14B8A6" fill-opacity="0.14" />
-    <circle cx="32" cy="18" r="2.5" fill="#F59E0B" />
-    <circle cx="12" cy="46" r="2.5" fill="#14B8A6" />
-    <circle cx="52" cy="46" r="2.5" fill="#14B8A6" />
+  <!-- Brand mark — single-color, mirrors site navbar exactly -->
+  <g transform="translate(8 14) scale(1.85)" stroke="#fbbf24" stroke-width="1.6" stroke-linejoin="round">
+    <polygon points="21,2 30,7.2 30,17.6 21,22.8 12,17.6 12,7.2"
+             fill="#fbbf24" fill-opacity="0.18" />
+    <polygon points="11,17 20,22.2 20,32.6 11,37.8 2,32.6 2,22.2" />
+    <polygon points="31,17 40,22.2 40,32.6 31,37.8 22,32.6 22,22.2"
+             fill="#fbbf24" fill-opacity="0.9" />
   </g>
 
-  <!-- Wordmark — relative dx so "Hive" places after "Memory" regardless
-       of which serif font GitHub falls back to. -->
+  <!-- Wordmark — relative dx for font-metric robustness on GitHub. -->
   <text x="96" y="62"
         font-family="'Instrument Serif', 'EB Garamond', Georgia, 'Times New Roman', serif"
         font-size="56"
@@ -43,6 +32,6 @@
         fill="#F59E0B">Hive</tspan>
   </text>
 
-  <!-- Teal accent dot. -->
-  <circle cx="368" cy="55" r="4" fill="#14B8A6" />
+  <!-- Teal accent dot — bridge color shared with hive-swarm. -->
+  <circle cx="368" cy="55" r="4" fill="#5eead4" />
 </svg>
