@@ -20,12 +20,13 @@ Opt out with `MEMORY_HIVE_SKIP_HERMES=1`.
 
 ---
 
-## Hermes Swarm Extension (multi-device)
+## Hive Swarm — multi-device compute mesh
 
-If you're running Hermes across multiple devices via the
-[Hermes Swarm Extension](https://github.com/TJCurnutte/hermes-swarm)
-(hardware-aware swarm controller, GPU routing, carbon-aware
-scheduling), Memory Hive interoperates cleanly:
+If you're running multiple devices in a personal compute mesh via
+[Hive Swarm](https://github.com/TJCurnutte/hive-swarm) (hardware-aware
+swarm controller, GPU routing, carbon-aware scheduling — works with
+Hermes Agent, OpenClaw, NanoClaw, or any agent runtime), Memory Hive
+interoperates cleanly:
 
 - **Mount the same `~/.memory-hive/hive/` on every node in the mesh**
   — via NFS, Syncthing, or a shared volume. Peer-spawned agents read
@@ -39,6 +40,9 @@ scheduling), Memory Hive interoperates cleanly:
   to a remote worker, so a GPU node spawned by the swarm sees the
   same canonical truth as your local planner.
 
-Memory Hive is the memory layer (what agents remember). Hermes Swarm
+Memory Hive is the memory layer (what agents remember). Hive Swarm
 is the compute layer (how/where agents run). They're orthogonal —
-either works without the other, and they compose cleanly.
+either works without the other, and they compose cleanly. Both ship
+as part of the [neural-forge.io](https://neural-forge.io) family —
+[memoryhive.neural-forge.io](https://memoryhive.neural-forge.io) and
+[hiveswarm.neural-forge.io](https://hiveswarm.neural-forge.io).
