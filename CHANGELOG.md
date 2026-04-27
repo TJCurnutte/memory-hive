@@ -6,6 +6,54 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-04-25 — `audit pass + Hive Swarm interop`
+
+### Fixed (audit pass — PRs #21 + #22 + follow-ups)
+
+- **`mh_seed` shipped lint-failing templates.** Bundled scenario raw
+  learnings used bare slug filenames; running `memory-hive lint --strict`
+  (or `memory-hive curate`) on a freshly-seeded hive surfaced 9 warnings
+  per scenario. Renamed 16 templates across all three scenarios to use
+  the `__DAYS_AGO_N__` substitution convention so dates match
+  frontmatter and `lint --strict` passes clean.
+- **`mh_watch` was bash-only on Linux.** The fswatch branch used
+  `read -r -d ''` which dash (Ubuntu's `/bin/sh`) does not support.
+  Switched to newline-delimited reads — works under both bash and dash.
+- **`check-compliance.sh` TOCTOU.** Used predictable `/tmp/.mh-lane.$$`
+  temp paths — symlink-attack vector and PID-recycle bug. Switched to
+  `mktemp`.
+- **Architecture documentation drift.** `HIVE_ARCHITECTURE.md` and
+  README ASCII diagram described a `DRAFT.md` queue between agents and
+  the curator — but the shipped 0.2.0/0.3.0 verbs (`promote`, `dedup`,
+  `confidence`, `curate`) bypass it. Rewrote the Curation Loop and Task
+  Completion Flow sections so each step names the verb that performs
+  it. The legacy file classifier still recognizes `DRAFT.md` if present
+  — no behavior change for anyone who already had one.
+- **Six docs-audit fixes** across README, CHANGELOG, CONTRIBUTING,
+  MIGRATION reconciling verb counts (28), platform counts (23),
+  category counts (3 not 4), legacy env-var references
+  (`MEMORY_HIVE_SKIP_CLAUDE_MD` → `MEMORY_HIVE_SKIP_CLAUDE_CODE` plus
+  per-platform vars), and the repo-layout tree (added `assets/`,
+  `scripts/`, `examples/`, `templates/platforms/`,
+  `templates/scenarios/`).
+- **Site SEO**: production HTML now emits a full OG/Twitter meta-tag
+  set with the v0.2.0 OG card image, canonical URL, and
+  `metadataBase`. Anything sharing the URL on Slack/X/LinkedIn now
+  renders properly.
+- **8 assorted shell-portability nits** caught by ruff/shellcheck:
+  cleanup of dead code, robust temp-file handling, consistent quoting.
+
+### Added
+
+- **Hive Swarm interop note** in `templates/platforms/hermes.md`. The
+  hardware-aware swarm controller (compute layer, sister to Memory
+  Hive's memory layer) now ships separately at
+  [github.com/TJCurnutte/hive-swarm](https://github.com/TJCurnutte/hive-swarm)
+  / [hiveswarm.neural-forge.io](https://hiveswarm.neural-forge.io).
+  Documents how to mount the hive across a multi-machine mesh, namespace
+  silos by hostname, and use `memory-hive bundle --for <agent>` to ship
+  context to remote workers.
+
 ## [0.3.0] — 2026-04-25 — `autonomous curator + onboarding`
 
 ### Added — 5 new verbs that close the agent self-loop
