@@ -1,36 +1,28 @@
 # Handoff — Memory Hive + Hive Swarm dual project
 
-Active across **two GitHub repos** + **two Next.js sites** that ship as a sister-product
-family on `neural-forge.io`. Working dirs all live under `/tmp/` (volatile — macOS prunes
-inactive files; reattach config from sister dir if files vanish).
+Two GitHub product repos + two private Next.js site repos that ship as a
+sister-product family on `neural-forge.io`. Working dirs all live in `/tmp/`
+(volatile — macOS prunes inactive files; previous handoff already saw
+this happen and recovered config from sister dir).
 
-| Project | Path | Repo / URL |
-|---|---|---|
-| memory-hive (canon) | `/tmp/memory-hive` | github.com/TJCurnutte/memory-hive · memoryhive.neural-forge.io |
-| hive-swarm (sister) | `/tmp/hive-swarm` | github.com/TJCurnutte/hive-swarm · hiveswarm.neural-forge.io |
-| memoryhive site | `/tmp/memory-hive-site` | Vercel project `memory-hive-site`, no git |
-| hiveswarm site | `/tmp/hive-swarm-site` | Vercel project `hive-swarm-site`, no git |
+| Project | Path | Repo | Live URL |
+|---|---|---|---|
+| memory-hive (canon) | `/tmp/memory-hive` | github.com/TJCurnutte/memory-hive (public) | memoryhive.neural-forge.io |
+| hive-swarm (sister) | `/tmp/hive-swarm` | github.com/TJCurnutte/hive-swarm (public) | hiveswarm.neural-forge.io |
+| memoryhive site | `/tmp/memory-hive-site` | github.com/TJCurnutte/memory-hive-site (**private**) | (Vercel proj `memory-hive-site`) |
+| hiveswarm site | `/tmp/hive-swarm-site` | github.com/TJCurnutte/hive-swarm-site (**private**) | (Vercel proj `hive-swarm-site`) |
 
 ## Branch & Tree
 
-**memory-hive** — branch `main`, clean except for spurious local `D` rows (macOS `/tmp`
-pruning artifacts; remote repo is fine; do **not** stage with `git add -A`).
+**memory-hive** — branch `main`, working tree clean except one untracked
+asset.
 
 ```
-git status --short:
- D LICENSE
- D hive/curator/CONFLICTS.md
- D hive/curator/DRAFT.md
- D hive/knowledge/SOUL.md
- D hive/learnings/distilled/{cross-agent-insights,mistakes,patterns,wins}.md
- D hive/tasks/queue.md
- D templates/claude-boot-block.md
- D update.sh
+$ git status --short
 ?? assets/og-card-v0.3.png
-```
 
-```
-git log --oneline -10:
+$ git log --oneline -10
+a52d5d4 codex handoff
 42a1c1c fix: GitHub logo now matches site navbar mark exactly
 655eb4d fix: GitHub logo overlap — switch to relative tspan dx spacing
 fdb3be5 chore: cut v0.3.1 — audit pass + Hive Swarm interop
@@ -40,131 +32,167 @@ e371820 docs: add Hermes Swarm Extension interop note
 f1856f7 Merge PR #22 (shell audit — 8 fixes)
 9770e7f Merge PR #21 (docs audit — 6 fixes)
 8061649 fix: assorted shell-portability nits
-4f8ad99 fix: seed substitutes __DAYS_AGO_N__; mh_watch POSIX; help
+
+$ git stash list      # empty
 ```
 
-`git stash list`: empty.
+**Sister repos:**
 
-**hive-swarm** — branch `main`. Three untracked OG cards in `assets/`. Latest commits:
-`7f0413a` (logo rename Hermes→Hive), `bbaa5fd` (full hermes→hive rename), `685e282`
-(initial v0.1.0).
+- `/tmp/hive-swarm` (`main`): tip `07da429` "docs(README): use python3 -m pip
+  for install command". Three untracked OG cards in `assets/`.
+- `/tmp/memory-hive-site` (`main`): tip `a4c975e` "docs: add README". Clean.
+- `/tmp/hive-swarm-site` (`main`): tip `d064c6c` "fix(install): use python3
+  -m pip for the install command". Clean.
 
 ## What this session accomplished
 
-- **memory-hive v0.3.1 shipped** — audit-pass release ([CHANGELOG.md:9](CHANGELOG.md))
-  capturing PRs #21+#22 (14 fixes), arch-doc reconciliation, Hive Swarm interop note.
-  GitHub release published. Tag `v0.3.1` is `Latest`.
-- **hive-swarm v0.1.0 created from scratch** at `/tmp/hive-swarm` — full Python package
-  (9 modules, 4 schemas, 42 tests, runtime-agnostic integration example, FastAPI
-  heartbeat daemon). Repo created at github.com/TJCurnutte/hive-swarm. v0.1.0 release
-  published.
-- **Renamed `hermes-swarm` → `hive-swarm`** mid-session. User push-back: name was too
-  Hermes-specific; same orchestration applies to OpenClaw, NanoClaw, Claude Code, custom
-  runtimes. Bulk perl rename across `.py/.md/.toml/.yml/.yaml/.json`, plus HTTP headers
-  (`X-Hermes-*` → `X-Hive-*`) and env var (`HERMES_SWARM_SECRET` → `HIVE_SWARM_SECRET`).
-  GitHub repo renamed via `gh repo rename`. Two follow-ups landed for SVG assets which
-  the bulk rename missed.
-- **GitHub logos fixed** on both repos — wordmark overlap from hardcoded `x="545"` →
-  `<tspan dx="0.18em">` for font-metric robustness on GitHub's serif fallback. Then a
-  second fix to make memory-hive's GitHub logo match the site navbar's monochrome
-  3-cell honeycomb exactly (commits `655eb4d`, `42a1c1c`).
-- **Sister site `hiveswarm.neural-forge.io` built + deployed** — cloned APIARY design
-  system from memoryhive site, swapped palette to indigo `#6366F1` + cyan `#22D3EE`
-  (memoryhive stayed amber + teal). Both share the cyan/teal bridge accent.
-- **`/changelog` pages on both sites** — release-card layout showing latest 3 releases
-  with version, date, tagline, sections, bullet lists. Top-of-page link to GitHub
-  Releases. Implemented with a custom inline-markdown parser (`page.tsx:38-127`) and
-  card CSS appended to each `globals.css`.
-- **Two-agent audit pass** on memory-hive — PR #21 (docs/site, 6 fixes + site SEO + 5
-  missing verbs surfaced) and PR #22 (shell/CI/templates, 8 fixes — top: `mh_seed`
-  shipped lint-failing templates; renamed 16 templates to use `__DAYS_AGO_N__` marker).
-  Both merged.
-- **Commands.tsx compaction** on both sites — was a wall of 34 verb paragraphs (~3
-  screens of vertical scroll on mobile). Now a chip-grid with hover tooltips +
-  "Expand details" toggle for power readers + "Full reference on GitHub" link.
-  See `Commands.tsx:chipLabel()` for the verb-name extraction heuristic.
+- **Renamed `hermes-swarm` → `hive-swarm`** mid-session — agent-runtime
+  agnostic. Bulk perl rewrite across `.py/.md/.toml/.yml/.yaml/.json`, plus
+  HTTP headers (`X-Hermes-*` → `X-Hive-*`), env vars, and (in a follow-up)
+  the SVG assets. Pushed to renamed GitHub repo.
+- **`hive-swarm` v0.1.0 published** — full Python package (9 modules, 4
+  schemas, 42 tests, runtime-agnostic integration example, FastAPI
+  heartbeat daemon). [`hive_swarm/`](../hive-swarm/hive_swarm),
+  [`docs/RFC.md`](../hive-swarm/docs/RFC.md).
+- **`memory-hive` v0.3.1 cut** — captures audit-pass PRs #21 + #22 (14 fixes),
+  arch-doc reconciliation, Hive Swarm interop note. See `CHANGELOG.md:9-90`.
+- **Two private site repos created** — `memory-hive-site` and `hive-swarm-site`
+  on GitHub, both private. Initial commits pushed for each.
+- **Both sites deployed to production** — memoryhive.neural-forge.io,
+  hiveswarm.neural-forge.io. Live + green.
+- **`/changelog` page** on each site — release-card layout showing latest 3
+  releases with version, date, tagline, sections, GitHub-Releases link at
+  top. `app/changelog/page.tsx` parses CHANGELOG.md inline.
+- **Commands.tsx compaction** on both sites — was a wall of 34 verb
+  paragraphs; now a chip-grid with hover tooltips + "Expand details" toggle
+  for power readers. `Commands.tsx:chipLabel()` extracts verb names.
+- **GitHub README logos fixed** — wordmark overlap from hardcoded
+  `x="545"` switched to `<tspan dx="0.18em">` (commits `655eb4d`,
+  `42a1c1c`). Memory Hive's logo now mirrors the site navbar's monochrome
+  3-cell honeycomb exactly.
+- **Install command fixed**: `pip install hive-swarm` → `python3 -m pip
+  install hive-swarm` everywhere (Hero, QuickStart, HowItWorks, Footer,
+  Commands, README). Was breaking on macOS where `pip` isn't on PATH by
+  default.
 
 ## In-progress work
 
-- **Two X launch posts staged but not posted**:
-  1. **Post 1 — memory-hive v0.3 launch.** Text was typed into the X composer via
-     Chrome MCP successfully but `file_upload` returns `{"code":-32000,"message":"Not
-     allowed"}`. Image at `/tmp/mh-card-v3/card.png` (1200×630, "Agents that remember"
-     headline, two-layer architecture verbs). User must drag image in + click Post
-     manually. **Composer was never closed** — may still be open in their browser.
-  2. **Post 2 — hive-swarm v0.1.0.** Copy is ready; image iteration in progress. User
-     rejected the first OG-style image and the dense 5-step infographic. Last action:
-     I gave them a Claude-Design prompt at the end of the previous turn so they can
-     generate a better image themselves. They have not come back with the result.
-- **memory-hive-site `/tmp` pruning recovery** — restored config files (`package.json`,
-  `tsconfig.json`, etc.) from `/tmp/hive-swarm-site` and rewrote `Principles.tsx` from
-  scratch (sister site's version was hive-swarm-flavored). Built + deployed cleanly.
-  See `src/components/Principles.tsx`.
+- **`/tmp/memory-hive/assets/og-card-v0.3.png`** — untracked launch image
+  (1.7 MB, 1200×630). Was created for the v0.3 X launch but never
+  committed. **Decision pending**: commit or rm.
+- **Three untracked OG cards in `/tmp/hive-swarm/assets/`** —
+  `og-card-launch.png`, `og-card-launch-4k.png`, `og-card-v0.1.0.png`. Same
+  question.
+- **X launch posts** — copy + images ready in Preview, never fired. User
+  said "don't worry about X posts" near end of session — explicitly
+  deferred.
+- **Vercel→GitHub auto-deploy linkage** — investigated, blocked by Vercel
+  GitHub App not having access to the new private site repos. User opted
+  to defer ("don't worry about the github stuff this is all saved here
+  locally anyway"). Manual `vercel --prod` from each site dir is the
+  current deploy path.
+- **Last manual deploy used `--prebuilt`** because regular `vercel --prod`
+  started erroring with "Unexpected error" mid-session — likely transient
+  Vercel platform issue. Workaround flow:
+  ```
+  npx vercel pull --yes --environment production
+  npx vercel build --prod --yes
+  npx vercel deploy --prebuilt --prod --yes
+  ```
 
 ## Decisions & rationale
 
-- **Hive-swarm runtime-agnostic**, not Hermes-only. Same controller logic applies to any
-  runtime that can call a Python `preplan_hook(task) -> SchedulerPlan` before spawning
-  agents. Hermes Agent stays as a *named* supported runtime, alongside OpenClaw,
-  NanoClaw, Claude Code. The integration example is `examples/runtime_integration.py`.
-- **Brains-vs-muscle separation in hive-swarm** — controller produces plans, caller
-  supplies the `runner` callable. Controller has no opinion about *what* a "local agent"
-  is, only *where* work goes. Documented in `docs/RFC.md`.
-- **Sister-site palette bridge: teal/cyan.** Memory Hive (amber `#F59E0B` primary) and
-  Hive Swarm (indigo `#6366F1` primary) both use teal/cyan as accent. Reads as a
-  product family without making the sites identical.
-- **Chip-grid Commands**: rejected hover-only descriptions. Kept the full paragraph
-  view available behind the "Expand details" toggle. This balances scannability with
-  full-reference accessibility.
-- **`<tspan dx>` for SVG wordmarks**: chose relative spacing over `textLength` because
-  `dx` is universally supported and stable across font fallbacks; `textLength` distorts
-  characters. See `assets/logo-light.svg:35`.
-- **Brittle / temporary**: `/tmp/` is volatile — macOS will prune it. Sites should
-  eventually move to git repos so they survive. The tiny markdown renderer in
-  `src/app/changelog/page.tsx` is hand-rolled; if changelog format gets fancier
-  (tables, nested lists), swap for `marked` or `remark`.
+- **Renamed hermes-swarm → hive-swarm** to be agent-runtime-agnostic.
+  Hermes Agent stays as one of several supported runtimes alongside
+  OpenClaw, NanoClaw, Claude Code, custom. Integration example renamed
+  `hermes_integration.py` → `runtime_integration.py`.
+- **Brains-vs-muscle separation in hive-swarm** — controller produces
+  plans, caller supplies the `runner` callable. Controller has no opinion
+  about *what* a "local agent" is, only *where* work goes.
+  [`hive-swarm/docs/RFC.md`](../hive-swarm/docs/RFC.md).
+- **Sister-site palette bridge: teal/cyan.** Memory Hive amber `#F59E0B`
+  primary, Hive Swarm indigo `#6366F1` primary; both share teal/cyan as
+  accent. Reads as a product family.
+- **Site repos private, product repos public.** Public-facing READMEs and
+  install URLs need product repos public. Site source has nothing useful
+  for a third-party reader; private avoids leaking landing-page copy
+  iteration.
+- **Install command: `python3 -m pip`** over `pip` or `pip3`. Most
+  universal; works on macOS Homebrew Python, Apple Python, Ubuntu, WSL2,
+  fresh installs. `pip3` works on macOS but not always on Linux.
+- **Inline markdown renderer** in `app/changelog/page.tsx` — hand-rolled,
+  ~50 lines. Sufficient for our Keep-a-Changelog format. Swap for `marked`
+  if format gets fancier.
+- **Brittle / temporary**:
+  - `/tmp/` is volatile — macOS will prune it. Site dirs now have GitHub
+    backups, but the venv in `/tmp/hive-swarm/.venv` doesn't.
+  - Vercel auto-deploy never fully wired up; manual deploy is the canon
+    flow until reconnected.
+  - `~/.zshrc` has a stale `source ~/.openclaw/completions/openclaw.zsh`
+    line that errors on every new shell (OpenClaw was uninstalled). Not
+    blocking anything — flagged for cleanup.
 
 ## Next steps (numbered, concrete)
 
-1. **Decide Post 2 image path.** User is iterating in Claude Design with the prompt I
-   provided. Either: (a) wait for their result, or (b) accept the existing 4K
-   `/tmp/hs-info-card/card-4k.png` and proceed. **Verify**: ask user.
-2. **Fire Post 1 + Post 2 to X.** Drive Chrome to `x.com/compose/post` via Chrome MCP
-   (`mcp__Claude_in_Chrome__navigate` → `find` textbox → `computer.left_click` +
-   `computer.type` with the staged copy). User drags image in + clicks Post. Verify:
-   tweet visible at x.com/traviscurnutte.
-3. **Sites need git repos.** Both `/tmp/memory-hive-site` and `/tmp/hive-swarm-site` are
-   not under version control — they survived this session by accident. Init each with
-   `git init && gh repo create TJCurnutte/<name>-site --source . --push`. Verify: `gh
-   repo view`.
-4. **Restore memory-hive `/tmp/` pruned files.** `cd /tmp/memory-hive && git checkout
-   HEAD -- LICENSE update.sh hive/ templates/claude-boot-block.md` to drop the spurious
-   `D` rows from `git status`. Verify: `git status` clean.
-5. **Commit hive-swarm OG cards.** `cd /tmp/hive-swarm && git add assets/og-card-*.png
-   && git commit -m "assets: launch + 4K OG cards" && git push`. Verify: cards visible
-   on the GitHub releases page.
+1. **Decide what to do with the four untracked OG cards.** Either commit
+   them to their respective product repos (`memory-hive/assets/og-card-v0.3.png`
+   and `hive-swarm/assets/og-card-launch{,-4k}.png` + `og-card-v0.1.0.png`)
+   or delete. Commit recommended — they document each launch. Verify:
+   `git status` shows clean tree afterward.
+2. **Push memory-hive HANDOFF.md update.** This file. Run `git add
+   HANDOFF.md && git commit -m "codex handoff" && git push origin main`
+   from `/tmp/memory-hive`.
+3. **Reconnect Vercel auto-deploy** (when convenient). Open
+   https://vercel.com/thricealwaysnice-7369s-projects/<project>/settings/git
+   for each site project, click "Connect Git Repository" → pick the
+   matching repo → set production branch to `main`. Verify: push a noop
+   commit, watch a new deployment appear in `npx vercel ls <project>`.
+4. **Ship X launch posts** if/when ready. Copy + 4K images already staged
+   in `/tmp/mh-card-v3/card.png` and `/tmp/hs-info-card/card-4k.png`.
+   File-upload via Chrome MCP is blocked by extension permissions in this
+   environment; user must drag the image into the X composer.
+5. **Live verify `memory-hive curate --apply`** against the user's actual
+   hive at `~/.memory-hive`. CI smoke test passes; live verification
+   would catch real-world template/prompt edge cases. `memory-hive curate`
+   (dry-run) first, review summary, then `--apply` only if it looks
+   reasonable.
 
 ## Environment & gotchas
 
-- **Vercel CLI**: `npx vercel` (current 50.39.0; v52.0.0 available). Both sites linked
-  via `.vercel/project.json` to scope `thricealwaysnice-7369s-projects`.
-- **Python 3.11** is the canonical interpreter for `/tmp/hive-swarm/.venv` (3.10+
-  required). Run `pip install -e '.[dev]'` after recreating the venv.
-- **DNS subdomain**: `hiveswarm.neural-forge.io` is wired via `vercel domains add`.
-- **GH CLI (`gh`)** authenticated as TJCurnutte; releases auto-publish via
-  `.github/workflows/release.yml` on tag push.
-- **Chrome MCP `file_upload` is blocked** in the user's environment — workaround: the
-  user drags images from Preview into the X composer themselves.
+- **Vercel CLI**: `npx vercel` (currently 50.39.0, latest is 52.0.0 —
+  upgrade with `npm i -g vercel@latest`). Auth at
+  `~/Library/Application Support/com.vercel.cli/auth.json`.
+- **Python 3.11** is the canonical interpreter for `/tmp/hive-swarm/.venv`
+  (3.10+ required). Recreate after `/tmp` prune with `/opt/homebrew/bin/python3.11
+  -m venv .venv && .venv/bin/pip install -e '.[dev]'`.
+- **GH CLI** authenticated as TJCurnutte; `gh auth status` shows scopes
+  `gist read:org repo workflow`. Insufficient to query `/user/installations`
+  (App-installation listing) — would need an App-authorized token.
+- **DNS**: `memoryhive.neural-forge.io` and `hiveswarm.neural-forge.io`
+  are both wired via `vercel domains add`. Parent domain `neural-forge.io`
+  was already configured on Vercel before this session.
 - **Do NOT commit** these scratch dirs: `/tmp/mh-card-v3/`, `/tmp/hs-card/`,
-  `/tmp/hs-launch-card/`, `/tmp/hs-info-card/`. They contain throwaway HTML+PNG.
+  `/tmp/hs-launch-card/`, `/tmp/hs-info-card/`. Throwaway HTML+PNG used to
+  generate launch images.
+- **Vercel team scope**: `team_DSASPJdmyzsqFRuI5vqGHRny` (slug
+  `thricealwaysnice-7369s-projects`).
+- **Vercel project IDs**: memory-hive-site `prj_t8iSF0t6TilZ9g84ZnDfk961svw7`,
+  hive-swarm-site `prj_TWiljQIxeNbVzDTu06eaaq1cGP9G`.
+- **Manual deploy fallback** when `vercel --prod` errors:
+  `vercel pull --yes --environment production && vercel build --prod --yes
+  && vercel deploy --prebuilt --prod --yes`.
 
 ## Open questions
 
-- **Post 2 image**: which version does user want to ship — the 4K info-poster at
-  `/tmp/hs-info-card/card-4k.png`, or whatever they generate in Claude Design?
-- **Are the Vercel-only sites OK to keep out of git long-term?** They're surviving on
-  Vercel's deployed bundle alone. Recommend git-init for resilience but user hasn't
-  said.
-- **Memory Hive curate's auto-promote behavior in CI** — PR #16 was merged but should
-  be smoke-tested manually against a real hive (synthetic CI test exists; live verify
-  has not been done).
+- **OG cards** — keep them committed alongside each release, or only
+  reference from CHANGELOG via the `/og-card-vX.png` URL on the live site
+  (already serving)? Current state: not in git, served from
+  `<site>/public/`.
+- **Auto-deploy reconnection priority** — the manual flow works fine.
+  Reconnecting only matters if you'll iterate on site copy frequently.
+- **Live `curate --apply`** — never run on the user's hive. Worth doing
+  before promising the verb is production-ready in v0.3.x. User wants to
+  review the dry-run summary first.
+- **Vercel Pro / Free tier limits** — both sites are deployed on the
+  current account; no warnings hit yet, but worth confirming the team
+  is on the right plan if launch traffic spikes.
