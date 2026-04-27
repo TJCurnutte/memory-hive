@@ -452,6 +452,7 @@ _mh_platform_is_skipped() {
     _id="$1"
     _env_name="$(_mh_platform_field "$_id" skip_env 2>/dev/null || printf '')"
     [ -n "$_env_name" ] || return 1
+    _val=0
     eval "_val=\${$_env_name:-0}"
     [ "$_val" = "1" ]
 }
@@ -619,6 +620,7 @@ merge_hive_block() {
 PLATFORM_WIRED=""
 PLATFORM_MANUAL=""
 PLATFORM_SKIPPED=""
+# shellcheck disable=SC2034
 PLATFORM_GONE=""
 WIRED_TARGETS=""  # legacy — kept for banner compatibility below
 
@@ -656,7 +658,7 @@ _mh_record() {
 # is set, also treat MEMORY_HIVE_SKIP_CLAUDE_CODE as 1 for backward
 # compatibility with pre-multi-platform installers.
 if [ "${MEMORY_HIVE_SKIP_CLAUDE_MD:-0}" = "1" ]; then
-    MEMORY_HIVE_SKIP_CLAUDE_CODE=1
+    export MEMORY_HIVE_SKIP_CLAUDE_CODE=1
 fi
 
 for _pid in $_mh_platform_ids; do
@@ -1034,7 +1036,7 @@ _wizard_create_one() {
             _wrolefile="$TMP_DIR/wizard-role-$$.md"
             printf '%s\n' "$_wrole" > "$_wrolefile"
             _wtmp="$_wfile.wizard.$$"
-            awk -v rolefile="$_wrolefile" '
+            if awk -v rolefile="$_wrolefile" '
                 BEGIN { inrole = 0 }
                 /^## Role$/ {
                     print
@@ -1056,7 +1058,12 @@ _wizard_create_one() {
                     }
                     print
                 }
-            ' "$_wfile" > "$_wtmp" && mv "$_wtmp" "$_wfile" || rm -f "$_wtmp"
+            ' "$_wfile" > "$_wtmp"; then
+                mv "$_wtmp" "$_wfile" || { rm -f "$_wtmp"; return 1; }
+            else
+                rm -f "$_wtmp"
+                return 1
+            fi
             rm -f "$_wrolefile"
         fi
     fi
@@ -1219,7 +1226,7 @@ _wizard_import_one() {
             _wrolefile="$TMP_DIR/wizard-import-role-$$.md"
             printf '%s\n' "$_role_text" > "$_wrolefile"
             _wtmp="$_wfile.import.$$"
-            awk -v rolefile="$_wrolefile" '
+            if awk -v rolefile="$_wrolefile" '
                 BEGIN { inrole = 0 }
                 /^## Role$/ {
                     print
@@ -1241,7 +1248,12 @@ _wizard_import_one() {
                     }
                     print
                 }
-            ' "$_wfile" > "$_wtmp" && mv "$_wtmp" "$_wfile" || rm -f "$_wtmp"
+            ' "$_wfile" > "$_wtmp"; then
+                mv "$_wtmp" "$_wfile" || { rm -f "$_wtmp"; return 1; }
+            else
+                rm -f "$_wtmp"
+                return 1
+            fi
             rm -f "$_wrolefile"
         fi
     fi
@@ -1598,31 +1610,37 @@ fi
 printf '\n%sYour roster:%s\n' "$BOLD" "$RESET"
 _mh_roster_any=0
 # Sort so output is deterministic across runs and filesystems.
-for _rp in $(ls "$AGENTS_DIR" 2>/dev/null | sort); do
-    _rn="$_rp"
-    _rd="$AGENTS_DIR/$_rn"
-    [ -d "$_rd" ] || continue
-    case "$_rn" in
-        _archived|.*) continue ;;
-    esac
-    _mh_roster_any=1
-    _rrole=""
-    if [ -f "$_rd/context.md" ]; then
-        _rrole="$(awk '/^## Role$/{flag=1;next} /^## /{flag=0} flag' "$_rd/context.md" \
-            | sed -e 's/^[[:space:]]*//' -e '/^$/d' -e 's/\.[[:space:]]*$/./' \
-            | head -1 | cut -c1-72)"
-        case "$_rrole" in
-            "(What is this agent"*|"") _rrole="(no role set)" ;;
+_mh_roster_tmp="$(mktemp -t mh-roster.XXXXXX)" || _mh_roster_tmp=""
+if [ -n "$_mh_roster_tmp" ]; then
+    find "$AGENTS_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort > "$_mh_roster_tmp"
+    while IFS= read -r _rd; do
+        [ -n "$_rd" ] || continue
+        _rn="$(basename "$_rd")"
+        _rd="$AGENTS_DIR/$_rn"
+        [ -d "$_rd" ] || continue
+        case "$_rn" in
+            _archived|.*) continue ;;
         esac
-    else
-        _rrole="(no context.md)"
-    fi
-    if [ "$_rn" = "main" ]; then
-        printf '  %s%-20s%s %s\n' "$CYAN" "$_rn" "$RESET" "$_rrole"
-    else
-        printf '  %-20s %s\n' "$_rn" "$_rrole"
-    fi
-done
+        _mh_roster_any=1
+        _rrole=""
+        if [ -f "$_rd/context.md" ]; then
+            _rrole="$(awk '/^## Role$/{flag=1;next} /^## /{flag=0} flag' "$_rd/context.md" \
+                | sed -e 's/^[[:space:]]*//' -e '/^$/d' -e 's/\.[[:space:]]*$/./' \
+                | head -1 | cut -c1-72)"
+            case "$_rrole" in
+                "(What is this agent"*|"") _rrole="(no role set)" ;;
+            esac
+        else
+            _rrole="(no context.md)"
+        fi
+        if [ "$_rn" = "main" ]; then
+            printf '  %s%-20s%s %s\n' "$CYAN" "$_rn" "$RESET" "$_rrole"
+        else
+            printf '  %-20s %s\n' "$_rn" "$_rrole"
+        fi
+    done < "$_mh_roster_tmp"
+    rm -f "$_mh_roster_tmp"
+fi
 if [ "$_mh_roster_any" -eq 0 ]; then
     printf '  (empty — the installer did not find or create any silos)\n'
 fi

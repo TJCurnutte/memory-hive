@@ -194,7 +194,7 @@ mh_register() {
         # Splice: replace everything between the markers, preserving content
         # above and below. POSIX awk reads the replacement from a file.
         _tmp="$_reg_agents.mhreg.$$"
-        awk -v start="$_start_marker" -v end="$_end_marker" -v blockfile="$_tbl" '
+        if awk -v start="$_start_marker" -v end="$_end_marker" -v blockfile="$_tbl" '
             BEGIN { inblock = 0 }
             {
                 if (inblock == 0 && index($0, start) > 0) {
@@ -209,9 +209,13 @@ mh_register() {
                 }
                 print
             }
-        ' "$_reg_agents" > "$_tmp" 2>/dev/null \
-            && mv "$_tmp" "$_reg_agents" 2>/dev/null \
-            || { rm -f "$_tmp"; rm -f "$_tbl"; return 0; }
+        ' "$_reg_agents" > "$_tmp" 2>/dev/null; then
+            mv "$_tmp" "$_reg_agents" 2>/dev/null \
+                || { rm -f "$_tmp" "$_tbl"; return 0; }
+        else
+            rm -f "$_tmp" "$_tbl"
+            return 0
+        fi
     else
         # File missing or no markers — create or append.
         if [ ! -f "$_reg_agents" ]; then
@@ -226,7 +230,7 @@ mh_register() {
             # Append markers + table at the end; keep existing human content
             # intact so nothing is lost.
             _tmp="$_reg_agents.mhreg.$$"
-            {
+            if {
                 cat "$_reg_agents"
                 # Ensure trailing newline before appending.
                 _last="$(tail -c 1 "$_reg_agents" 2>/dev/null || printf '')"
@@ -237,9 +241,13 @@ mh_register() {
                 printf '\n'
                 cat "$_tbl"
                 printf '\n'
-            } > "$_tmp" 2>/dev/null \
-                && mv "$_tmp" "$_reg_agents" 2>/dev/null \
-                || { rm -f "$_tmp"; rm -f "$_tbl"; return 0; }
+            } > "$_tmp" 2>/dev/null; then
+                mv "$_tmp" "$_reg_agents" 2>/dev/null \
+                    || { rm -f "$_tmp" "$_tbl"; return 0; }
+            else
+                rm -f "$_tmp" "$_tbl"
+                return 0
+            fi
         fi
     fi
     rm -f "$_tbl"
@@ -252,14 +260,16 @@ mh_register() {
         if grep -q '^# Skills Catalog$' "$_reg_skills" 2>/dev/null \
             && grep -q 'Multi-agent orchestration' "$_reg_skills" 2>/dev/null; then
             _tmp="$_reg_skills.mhreg.$$"
-            {
+            if {
                 printf '# Skills Catalog\n\n'
                 printf 'This file is now user-maintained; the per-agent role is in [AGENTS.md](./AGENTS.md).\n\n'
                 printf 'Add skill/category tables below as your roster grows. `memory-hive register` will\n'
                 printf 'not touch this file once you have customized it.\n'
-            } > "$_tmp" 2>/dev/null \
-                && mv "$_tmp" "$_reg_skills" 2>/dev/null \
-                || rm -f "$_tmp"
+            } > "$_tmp" 2>/dev/null; then
+                mv "$_tmp" "$_reg_skills" 2>/dev/null || rm -f "$_tmp"
+            else
+                rm -f "$_tmp"
+            fi
         fi
     fi
 
@@ -498,7 +508,7 @@ mh_citations() {
         && grep -q -F "$_start_marker" "$_reg_cit" 2>/dev/null \
         && grep -q -F "$_end_marker" "$_reg_cit" 2>/dev/null; then
         _tmp="$_reg_cit.mhcit.$$"
-        awk -v start="$_start_marker" -v end="$_end_marker" -v blockfile="$_blk" '
+        if awk -v start="$_start_marker" -v end="$_end_marker" -v blockfile="$_blk" '
             BEGIN { inblock = 0 }
             {
                 if (inblock == 0 && index($0, start) > 0) {
@@ -513,9 +523,11 @@ mh_citations() {
                 }
                 print
             }
-        ' "$_reg_cit" > "$_tmp" 2>/dev/null \
-            && mv "$_tmp" "$_reg_cit" 2>/dev/null \
-            || rm -f "$_tmp"
+        ' "$_reg_cit" > "$_tmp" 2>/dev/null; then
+            mv "$_tmp" "$_reg_cit" 2>/dev/null || rm -f "$_tmp"
+        else
+            rm -f "$_tmp"
+        fi
     else
         if [ ! -f "$_reg_cit" ]; then
             {
@@ -533,7 +545,7 @@ mh_citations() {
             } > "$_reg_cit" 2>/dev/null || rm -f "$_reg_cit"
         else
             _tmp="$_reg_cit.mhcit.$$"
-            {
+            if {
                 cat "$_reg_cit"
                 _last="$(tail -c 1 "$_reg_cit" 2>/dev/null || printf '')"
                 if [ "$_last" != "" ] && [ "$_last" != "
@@ -543,9 +555,11 @@ mh_citations() {
                 printf '\n'
                 cat "$_blk"
                 printf '\n'
-            } > "$_tmp" 2>/dev/null \
-                && mv "$_tmp" "$_reg_cit" 2>/dev/null \
-                || rm -f "$_tmp"
+            } > "$_tmp" 2>/dev/null; then
+                mv "$_tmp" "$_reg_cit" 2>/dev/null || rm -f "$_tmp"
+            else
+                rm -f "$_tmp"
+            fi
         fi
     fi
 
@@ -1755,12 +1769,12 @@ mh_stats() {
     fi
 
     printf '\nBy agent:\n'
-    printf '%s\n' $_agent_tally | sort | uniq -c | sort -rn | while read _c _a; do
+    printf '%s\n' "$_agent_tally" | sort | uniq -c | sort -rn | while read -r _c _a; do
         printf '  %-24s %s\n' "$_a" "$_c"
     done
 
     printf '\nBy kind:\n'
-    printf '%s\n' $_kind_tally | sort | uniq -c | sort -rn | while read _c _k; do
+    printf '%s\n' "$_kind_tally" | sort | uniq -c | sort -rn | while read -r _c _k; do
         printf '  %-24s %s\n' "$_k" "$_c"
     done
 
@@ -1829,9 +1843,9 @@ mh_watch() {
             sleep 5
             _newer=""
             # -newer <file> is POSIX. Collect changed files into a list.
-            _newer="$(find "$HIVE_DIR" -type f -newer "$_sentinel" 2>/dev/null \
+            _newer="$(find "$HIVE_DIR" -type f -newer "$_sentinel" \
                 ! -name '*.upstream' ! -name '*.local' ! -name '.DS_Store' \
-                ! -path '*/.git/*')"
+                ! -path '*/.git/*' 2>/dev/null)"
             touch "$_sentinel"
             [ -z "$_newer" ] && continue
             printf '%s\n' "$_newer" | while IFS= read -r _path; do
@@ -3713,14 +3727,104 @@ mh_diff() {
 # point is to collapse "the test isolation rule" and "test isolation rule"
 # into the same key, not to do real NLP.
 _mh_dedup_stopwords() {
-    printf '%s\n' \
-        a an the and or but if then else for of to in on at by with from \
-        is are was were be been being am do does did done doing has have \
-        had having i you he she it we they me him her us them my your his \
-        its our their this that these those as so not no yes also only \
-        very just than which who whom whose what when where why how \
-        about into onto over under between through during after before \
-        because while although though even still already once here there
+    cat <<'EOF'
+a
+an
+the
+and
+or
+but
+if
+then
+else
+for
+of
+to
+in
+on
+at
+by
+with
+from
+is
+are
+was
+were
+be
+been
+being
+am
+do
+does
+did
+done
+doing
+has
+have
+had
+having
+i
+you
+he
+she
+it
+we
+they
+me
+him
+her
+us
+them
+my
+your
+his
+its
+our
+their
+this
+that
+these
+those
+as
+so
+not
+no
+yes
+also
+only
+very
+just
+than
+which
+who
+whom
+whose
+what
+when
+where
+why
+how
+about
+into
+onto
+over
+under
+between
+through
+during
+after
+before
+because
+while
+although
+though
+even
+still
+already
+once
+here
+there
+EOF
 }
 
 # _mh_dedup_normalize <text> -> prints normalized title (sorted token list,

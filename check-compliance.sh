@@ -138,10 +138,9 @@ if [ -t 1 ]; then
     GREEN="$(printf '\033[32m')"
     YELLOW="$(printf '\033[33m')"
     RED="$(printf '\033[31m')"
-    CYAN="$(printf '\033[36m')"
     RESET="$(printf '\033[0m')"
 else
-    BOLD=""; DIM=""; GREEN=""; YELLOW=""; RED=""; CYAN=""; RESET=""
+    BOLD=""; DIM=""; GREEN=""; YELLOW=""; RED=""; RESET=""
 fi
 
 PASS_MARK="${GREEN}✓${RESET}"
@@ -167,6 +166,13 @@ file_mtime() {
     printf '%s' "$_v"
 }
 
+BASELINE_FILE="$HIVE_DIR/.baseline-installed"
+BASELINE_MTIME=0
+if [ -f "$BASELINE_FILE" ]; then
+    BASELINE_MTIME="$(file_mtime "$BASELINE_FILE")"
+    [ -n "$BASELINE_MTIME" ] || BASELINE_MTIME=0
+fi
+
 # humanize_age <seconds> — turn a positive delta into "3h ago" / "2d ago".
 humanize_age() {
     _s="$1"
@@ -181,6 +187,31 @@ humanize_age() {
     else
         printf '%sw ago' "$(( _s / 604800 ))"
     fi
+}
+
+# is_recent_user_write <path>
+# Returns 0 when a file should count as a recent user/agent write. Installer
+# scaffolding is filtered with .baseline-installed when present. In a source
+# checkout without that marker, tracked clean files are treated as templates.
+is_recent_user_write() {
+    _path="$1"
+    _mt="$(file_mtime "$_path")"
+    [ -n "$_mt" ] || return 1
+    [ "$_mt" -ge "$WINDOW_START" ] || return 1
+
+    if [ "$BASELINE_MTIME" -gt 0 ]; then
+        [ "$_mt" -gt "$BASELINE_MTIME" ]
+        return
+    fi
+
+    if [ -d "$INSTALL_DIR/.git" ] && command -v git >/dev/null 2>&1; then
+        _rel="${_path#"$INSTALL_DIR"/}"
+        [ "$_rel" != "$_path" ] || return 0
+        [ -n "$(git -C "$INSTALL_DIR" status --porcelain -- "$_rel" 2>/dev/null)" ]
+        return
+    fi
+
+    return 0
 }
 
 # ---------------------------------------------------------------------------
@@ -322,9 +353,7 @@ check_agent() {
                 _rel="${_rel#./}"
                 [ -n "$_rel" ] || continue
                 _full="$KNOWLEDGE_DIR/$_rel"
-                _m="$(file_mtime "$_full")"
-                [ -n "$_m" ] || continue
-                if [ "$_m" -ge "$WINDOW_START" ]; then
+                if is_recent_user_write "$_full"; then
                     printf '%s\n' "$_rel"
                 fi
             done > "$_know_tmp" 2>/dev/null
@@ -384,7 +413,7 @@ check_agent() {
         # Template-only heuristic: every non-blank, non-heading, non-prose
         # line is literally a lone "-" (the starter bullets). If so the
         # agent never wrote a durable lesson.
-        _real_bullets="$(grep -E '^- .+' "$_mem" 2>/dev/null | wc -l | tr -d ' ')"
+        _real_bullets="$(grep -E -c '^- .+' "$_mem" 2>/dev/null | tr -d ' ')"
         if [ "${_real_bullets:-0}" = "0" ]; then
             printf '  C5 memory.md         %b only starter template\n' "$WARN_MARK"
             TOTAL_WARNINGS=$(( TOTAL_WARNINGS + 1 ))

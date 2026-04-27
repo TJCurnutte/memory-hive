@@ -3,7 +3,7 @@
 Append-only journal of what the curator did, when, and why.
 Newest entries at the top.
 
-## First boot
+## 2026-04-23
 
 - Silo initialized by the memory-hive installer.
 - Curator role: maintain the shared hive, review raw learnings, promote
