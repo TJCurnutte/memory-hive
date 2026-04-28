@@ -6,6 +6,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- **Hermes crash-recovery companion example**
+  ([`examples/hermes-crash-recovery/`](examples/hermes-crash-recovery/)).
+  Documents a machine-local `SESSION.md` / `ACTIVITY.md` / `PENDING.md` /
+  `DECISIONS.md` safety net for Hermes-style daily-driver agents, plus a
+  pointer from the Hermes platform integration doc.
+
 ## [0.3.1] — 2026-04-25 — `audit pass + Hive Swarm interop`
 
 ### Fixed (audit pass — PRs #21 + #22 + follow-ups)

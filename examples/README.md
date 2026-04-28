@@ -27,6 +27,13 @@ like after ~30 days of real use. Use it to understand the shape and
 density of a mature silo — template files from a fresh install look
 very different. Content is synthetic and generic; nothing personal.
 
+### `hermes-crash-recovery/`
+
+A local crash-recovery companion layout for Hermes-style daily-driver
+agents. Use it as a machine-local safety net for interrupted sessions,
+missing silos, and process recovery, then write durable lessons back to
+Memory Hive at task end.
+
 ## Contributing more examples
 
 Follow the existing shape:

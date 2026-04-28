@@ -18,6 +18,27 @@ agent-curated memory entries are untouched.
 
 Opt out with `MEMORY_HIVE_SKIP_HERMES=1`.
 
+## Crash-recovery companion
+
+For long-running local Hermes setups, pair Memory Hive with a small
+machine-local recovery folder such as `~/.hermes/crash-recovery/`.
+Memory Hive remains the durable memory layer; the recovery folder is only
+for bootstrapping after a crash, recording local process/service state, and
+keeping the restart queue visible before the agent has fully reloaded its
+hive silo.
+
+Recommended files:
+
+```text
+SESSION.md    current session and machine state
+ACTIVITY.md   timestamped recovery activity
+PENDING.md    prioritized restart queue
+DECISIONS.md  recovery decisions and rationale
+```
+
+See [`examples/hermes-crash-recovery/`](../../examples/hermes-crash-recovery/)
+for a copyable layout.
+
 ---
 
 ## Hive Swarm — multi-device compute mesh
