@@ -44,6 +44,11 @@ Every platform has a dedicated doc under
 integration details, and the installer ships all of them into
 `~/.memory-hive/templates/platforms/` so you can read them post-install.
 
+If you're building an API/FSM integration instead of a plain agent wiring,
+follow [`MEMORY_ADAPTER_CONTRACT.md`](MEMORY_ADAPTER_CONTRACT.md) for
+query/ingest/export/import/health behavior and explicit dry-run overwrite
+policies.
+
 ## What the installer does
 
 The installer drops the hive at `~/.memory-hive/` (override with

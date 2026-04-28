@@ -39,6 +39,10 @@ DECISIONS.md  recovery decisions and rationale
 See [`examples/hermes-crash-recovery/`](../../examples/hermes-crash-recovery/)
 for a copyable layout.
 
+For runtime integrations that use Memory Hive as a programmatic memory backend
+(instead of plain file reads), follow the standard adapter surface in
+[`MEMORY_ADAPTER_CONTRACT.md`](../../MEMORY_ADAPTER_CONTRACT.md).
+
 ---
 
 ## Hive Swarm — multi-device compute mesh

@@ -6,13 +6,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- None at the moment.
+
+## [0.3.2] — 2026-04-28 — `memory lifecycle governance`
+
 ### Added
+
+- **Per-turn memory hydration pattern** documented in the architecture and
+  onboarding docs.
+  Agents now read a compact, ranked `hive-bundle` slice on boot instead of
+  replaying every historical file. This improves continuity while keeping
+  context windows small.
+
+- **Lifecycle state model for memory records** with explicit statuses:
+  `active`, `superseded`, and `deprecated`.
+  Conflict/overwrite handling is now documented with timestamp, confidence,
+  and supersession rules to reduce stale-memory resurfacing.
+
+- **Memory adapter contract** published at
+  [`MEMORY_ADAPTER_CONTRACT.md`](MEMORY_ADAPTER_CONTRACT.md), including:
+  required methods (`query`, `ingest`, `snapshot`, `export/import`, `health`),
+  schema expectations, required env, and capability matrix.
+
+- **Migration safety contract** added to `MIGRATION.md` with dry-run flows,
+  import conflict strategies, and secret-by-default safety checks.
 
 - **Hermes crash-recovery companion example**
   ([`examples/hermes-crash-recovery/`](examples/hermes-crash-recovery/)).
   Documents a machine-local `SESSION.md` / `ACTIVITY.md` / `PENDING.md` /
   `DECISIONS.md` safety net for Hermes-style daily-driver agents, plus a
   pointer from the Hermes platform integration doc.
+
+### Changed
+
+- `INTEGRATION.md`, `MIGRATION.md`, `HIVE_ARCHITECTURE.md`, and `README.md`
+  now cross-link the new governance model so onboarding and integration teams
+  use the same model.
 
 ## [0.3.1] — 2026-04-25 — `audit pass + Hive Swarm interop`
 

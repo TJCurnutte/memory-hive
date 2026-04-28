@@ -121,6 +121,12 @@ After every task, the agent writes what they learned:
 
 Format: `learnings/raw/[agent-id]/[YYYY-MM-DD]-[task-summary].md`
 
+Memory entries move through explicit states for continuity control:
+
+- `active` — currently trusted and on the hot path
+- `superseded` — replaced by a newer authoritative alternative
+- `deprecated` — retained for audit, no longer recommended for active context
+
 **`distilled/`** — Curated by curator.
 The curator reviews `raw/` regularly and promotes valuable learnings. Four
 canonical files, plus topical files as the hive grows:
@@ -197,6 +203,8 @@ shipped CLI verbs collapse most of it into one command:
    old without a curator decision
 6. **Log** — Every promotion + every conflict resolution lands in
    `DECISIONS.md` automatically
+7. **Stage state** — stale or conflicting `active` records are moved to
+   `superseded` or `deprecated` after curator confirmation.
 
 `memory-hive curate` runs steps 1–5 in one pass and prints a single
 summary line. Default is dry-run; `--apply` performs promotions for
@@ -215,16 +223,21 @@ Every agent, on every spawn:
 4. Read hive/knowledge/HUMAN_CONTEXT.md
 5. Read hive/learnings/distilled/patterns.md
 6. Read hive/tasks/queue.md
-7. Read own private silo: agents/[id]/log.md
-8. Read own context: agents/[id]/context.md
-9. Check for active task in hive/tasks/active/
-10. Begin work
+7. Build `hive-bundle` for this agent (`memory-hive bundle --for <agent> --max-tokens N`)
+8. Read own private silo: agents/[id]/log.md
+9. Read own context: agents/[id]/context.md
+10. Check for active task in hive/tasks/active/
+11. Begin work
 ```
 
 This gives every agent the curated hive surfaces plus its own personal
 context before starting. It is intentionally not a full replay of the
 archive: raw captures, raw learnings, and other agents' private silos stay
 out of the prompt unless the agent explicitly queries them.
+
+Per-turn context is ranked and bounded so the active working set stays
+small and current. Record state (`active`, `superseded`, `deprecated`) keeps
+continuity auditable without flooding prompt windows.
 
 ---
 

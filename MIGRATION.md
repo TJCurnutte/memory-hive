@@ -10,6 +10,41 @@ For the full wizard behavior see [INTEGRATION.md](INTEGRATION.md).
 
 ---
 
+## Migration safety and conflict policy
+
+If you're moving memories across directories, machines, or toolchains,
+migrate through a two-step process:
+
+1. **Export snapshot** to a static copy (tarball, rsync, or backup folder).
+2. **Dry-run import** and review conflicts.
+
+### Dry-run / apply pattern
+
+Treat every cross-boundary import as `--dry-run` by default:
+
+- If a destination path is new, it is proposed as `apply`.
+- If a destination path exists, classify one of:
+  - `skip` (default): keep existing.
+  - `overwrite`: replace destination.
+  - `error`: fail import.
+- For `overwrite`, add a conflict record in `curator/DECISIONS.md` or local
+  handoff notes before applying.
+
+### No-secrets-by-default posture
+
+Memory migration should not move secrets (API keys, tokens, private PEMs)
+unless required and explicitly approved.
+
+- Never import `.env`, credential files, or full service-identity dumps
+  with raw memory.
+- If secrets are required for a specific environment, carry them via that
+  environment’s normal secret channels (e.g., `.env`, secret store),
+  not through `hive/` files.
+- If a migration script has a "dry run" toggle, keep that defaulted ON
+  until conflict policies are reviewed.
+
+### Post-migration checks
+
 ## From an OpenClaw hive
 
 Scenario: you already have a populated `~/.openclaw/hive/agents/` —

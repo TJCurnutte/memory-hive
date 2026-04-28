@@ -112,10 +112,21 @@ import your existing agents in one step.
 Memory Hive is designed to keep long-running agent memory inspectable
 without turning every prompt into a full archive replay.
 
-On boot, each agent reads a small, fixed set of surfaces: `index.md`,
-the registry, human context, distilled patterns, the task queue, and
-its own silo. It does **not** automatically inject every raw learning,
-every external capture, or another agent's private notes.
+On boot, each agent reads a ranked, bounded `hive-bundle` slice instead of
+replaying everything.
+
+- **Bootstrap** (always read): `index.md`, registry, skills, distilled
+  patterns, task queue, active tasks
+- **Agent personalization**: own silo (`log.md`, `context.md`, `memory.md`)
+- **Working bundle**: latest structured outputs needed for continuity (`memory-hive
+  bundle --for <agent> --max-tokens N`)
+
+The installer writes each framework's boot block to read this first
+surface, then the agent can call `memory-hive bundle` for deeper context
+when needed.
+
+It does **not** automatically inject every raw learning, raw capture,
+or another agent's private notes.
 
 Use the tiers as trust boundaries:
 
@@ -128,8 +139,17 @@ Use the tiers as trust boundaries:
 
 When an agent needs more history, reach for `memory-hive query`,
 `digest`, `tail`, or `bundle --max-tokens N` instead of loading the
-whole hive. The goal is durable memory with a bounded working set:
-fresh enough to be useful, small enough to stay reliable.
+whole hive. `bundle` builds the canonical bounded context with confidence
+gates and confidence-ranked surfaces by default.
+
+Lifecycle rules are explicit:
+
+- Records are normally `active`
+- `superseded` keeps history while marking an authoritative replacement
+- `deprecated` retains evidence but removes it from the hot path
+
+That makes continuity fast and safe: fresh enough to keep work moving,
+small enough to stay reliable.
 
 ---
 
@@ -341,6 +361,13 @@ them back out.
 - Private silos never auto-cleaned (agent owns its own space)
 - Confidence gates prevent low-confidence info from polluting core knowledge
 
+### 8. Memory State Governance
+- Active context is bounded and ranked; not all historical memory is active
+  at once.
+- Stale or conflicting entries stay auditable as `superseded`/`deprecated`
+  instead of disappearing.
+- Migration and import flows are dry-run first, then explicit apply.
+
 ---
 
 ## Installation details
@@ -371,6 +398,8 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup and the safe
 local-test workflow. Areas that welcome help:
 
 - Framework adapters (LangChain, AutoGen, CrewAI, etc.)
+- See [MEMORY_ADAPTER_CONTRACT.md](MEMORY_ADAPTER_CONTRACT.md) before shipping
+  a runtime adapter.
 - Additional role templates
 - Curation automation
 - Memory hygiene tools
