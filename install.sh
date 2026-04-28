@@ -1263,7 +1263,7 @@ _wizard_import_one() {
 # _wizard_fresh_flow: prompt for N, then for each agent name + role.
 _wizard_fresh_flow() {
     printf '\n' >&2
-    printf '%sLet'\''s set up your agents.%s (besides `main`, who is always here)\n' \
+    printf '%sLet'\''s set up your agents.%s (besides '\''main'\'', who is always here)\n' \
         "$BOLD" "$RESET" >&2
     printf '\n' >&2
     printf 'How many agents do you want under Chief of Staff? [0-10, default 3]: ' >&2
@@ -1279,7 +1279,7 @@ _wizard_fresh_flow() {
     if [ "$_count" -gt 10 ]; then _count=10; fi
     if [ "$_count" -lt 0 ]; then _count=0; fi
     if [ "$_count" -eq 0 ]; then
-        printf '  No extra agents — just main. (Add later with `memory-hive add <name>`.)\n' >&2
+        printf '  No extra agents — just main. (Add later with '\''memory-hive add <name>'\'').\n' >&2
         return 0
     fi
 
