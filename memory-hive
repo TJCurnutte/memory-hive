@@ -1220,7 +1220,7 @@ Usage:
       Honest telemetry. Counts REAL file writes in the hive (silo
       logs, memory bullets, raw learnings, curator promotions) by
       agent and by time window. Every count maps to a file on disk
-      you can `ls -la` yourself. No timers, no proxies, no fake
+      you can \`ls -la\` yourself. No timers, no proxies, no fake
       activity.
 
   memory-hive dedup [--per-agent] [--strict] [--threshold N]
