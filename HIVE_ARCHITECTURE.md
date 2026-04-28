@@ -221,7 +221,10 @@ Every agent, on every spawn:
 10. Begin work
 ```
 
-This ensures every agent has full hive context plus its own personal context before starting.
+This gives every agent the curated hive surfaces plus its own personal
+context before starting. It is intentionally not a full replay of the
+archive: raw captures, raw learnings, and other agents' private silos stay
+out of the prompt unless the agent explicitly queries them.
 
 ---
 

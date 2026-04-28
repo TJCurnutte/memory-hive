@@ -107,6 +107,32 @@ import your existing agents in one step.
 
 ---
 
+## What Loads Into Context
+
+Memory Hive is designed to keep long-running agent memory inspectable
+without turning every prompt into a full archive replay.
+
+On boot, each agent reads a small, fixed set of surfaces: `index.md`,
+the registry, human context, distilled patterns, the task queue, and
+its own silo. It does **not** automatically inject every raw learning,
+every external capture, or another agent's private notes.
+
+Use the tiers as trust boundaries:
+
+- `hive/raw/` and `learnings/raw/[agent-id]/` are queues and evidence,
+  not canonical truth.
+- `learnings/distilled/` and `knowledge/` are the promoted surfaces
+  agents should trust by default.
+- `curator/DECISIONS.md` records why something was promoted, deferred,
+  or resolved after a conflict.
+
+When an agent needs more history, reach for `memory-hive query`,
+`digest`, `tail`, or `bundle --max-tokens N` instead of loading the
+whole hive. The goal is durable memory with a bounded working set:
+fresh enough to be useful, small enough to stay reliable.
+
+---
+
 ## The Shape of a Hive
 
 ```
