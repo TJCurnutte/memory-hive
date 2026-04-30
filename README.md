@@ -1,3 +1,10 @@
+
+> Product identity: **HiveMemory**
+>
+> Central ecosystem site: **https://hive.neural-forge.io**
+>
+> Product page: **https://hive.neural-forge.io/hivememory**
+
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
