@@ -1372,7 +1372,7 @@ Usage:
   memory-hive optimize [--dry-run | --apply] [--report <file>]
       Built-in Optimizer loop for Memory Hive. Runs doctor, curate, digest,
       stats, and stale, then prints a short action report. With --report,
-      writes a compact markdown report for Console/Swarm routing signals.
+      writes a compact markdown report for Hive Swarm routing signals.
       Alias: memory-hive optimizer.
 
   memory-hive bundle [--for <agent>] [--max-tokens N] [--out <file>]
@@ -5859,8 +5859,8 @@ $_path"
 #
 # Flags:
 #   --dry-run       default; suggest only
-#   --apply         pass --apply through to curate for promotion-ready clusters
-#   --report FILE   write compact markdown report for Console/Swarm consumers
+#   --apply         create a checkpoint, then pass --apply through to curate
+#   --report FILE   write compact markdown report for Hive Swarm consumers
 #   --signals FILE  alias for --report
 mh_optimize() {
     _mh_require_install
@@ -5893,9 +5893,9 @@ Steps:
   4. stats           honest file-backed counts
   5. stale --count   scriptable raw-learning backlog signal
 
---dry-run is default. --apply passes through to `memory-hive curate --apply`.
---report writes a compact markdown report suitable for Console display or
-Hive Swarm routing signals.
+--dry-run is default. --apply creates a checkpoint before passing through
+to `memory-hive curate --apply`. --report writes a compact markdown report
+suitable for Hive Swarm routing signals.
 OPTIMIZEHELP
                 return 0
                 ;;
@@ -5924,6 +5924,13 @@ OPTIMIZEHELP
     set -e
     cat "$_doctor_out"
     printf '\n'
+
+    if [ "$_apply" -eq 1 ]; then
+        _checkpoint_name="optimizer-$(date '+%Y-%m-%d-%H%M%S' 2>/dev/null || date +%s)"
+        printf -- '--- safety checkpoint ---\n'
+        mh_checkpoint --name "$_checkpoint_name" || _mh_die "Could not create optimizer checkpoint"
+        printf '\n'
+    fi
 
     printf -- '--- 2. curate (%s) ---\n' "$_mode"
     if [ "$_apply" -eq 1 ]; then
@@ -5977,6 +5984,9 @@ OPTIMIZEHELP
             printf -- '- mode: %s\n' "$_mode"
             printf -- '- doctor: %s\n' "$_doctor_status"
             printf -- '- stale_raw_learnings: %s\n' "$_stale_count"
+            if [ "$_apply" -eq 1 ]; then
+                printf -- '- checkpoint: %s\n' "$_checkpoint_name"
+            fi
             printf -- '- curate: %s\n\n' "$_curate_summary"
             printf '## Swarm Signals\n\n'
             printf -- '- memory_health: %s\n' "$_doctor_status"

@@ -339,6 +339,11 @@ changed on disk, and `stale` exposes the backlog. Hive Swarm can consume the
 optional `memory-hive optimize --report <file>` output to decide whether to
 fan out normally, route to a curator/reviewer first, or pause for repair.
 
+The old HiveOptimizer safety rules are part of this loop now: snapshot/checkpoint
+before apply-mode changes, inventory hot spots before pruning, archive noisy
+artifacts before deleting, and keep model-spend/routing audits as optimization
+inputs rather than a separate product surface.
+
 ---
 
 ## Installation details
