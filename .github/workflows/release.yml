@@ -78,9 +78,9 @@ jobs:
             {
               printf '## New release\n\n'
               printf 'Push to `main` published as a GitHub Release.\n\n'
-              printf '- Commit: `%s`\n' "$GITHUB_SHA"
-              printf '- Branch: `%s`\n' "$GITHUB_REF_NAME"
-              printf '- Published: `%s UTC`\n\n' "$(date -u +'%Y-%m-%d %H:%M:%S')"
+              printf -- '- Commit: `%s`\n' "$GITHUB_SHA"
+              printf -- '- Branch: `%s`\n' "$GITHUB_REF_NAME"
+              printf -- '- Published: `%s UTC`\n\n' "$(date -u +'%Y-%m-%d %H:%M:%S')"
               printf '### Commits in this push\n\n'
 
               if [ -n "${BEFORE_SHA:-}" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
