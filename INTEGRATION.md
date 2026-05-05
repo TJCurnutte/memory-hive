@@ -49,11 +49,13 @@ integration details, and the installer ships all of them into
 The installer drops the hive at `~/.memory-hive/` (override with
 `MEMORY_HIVE_DIR=/custom/path`), detects your environment, and adapts.
 
-### The wizard (interactive terminal)
+### The wizard (opt-in interactive terminal)
 
-If the installer has a real tty — a normal shell, or a `curl | sh`
-pipeline that can still reach `/dev/tty` — it launches an interactive
-wizard. Three paths, depending on what's already on disk:
+The default installer path is zero-input so `curl | sh`, CI, and scripted
+installs stay boring. To launch the interactive wizard, set
+`MEMORY_HIVE_WIZARD=1` or run `memory-hive setup` after install.
+
+When enabled, the wizard has three paths, depending on what's already on disk:
 
 1. **Fresh hive, no pre-existing agents elsewhere.** The wizard asks how
    many agents you want beyond the curator, collects a name and optional
