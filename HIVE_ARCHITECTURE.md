@@ -71,12 +71,30 @@ hive/
 
 #### 1. `index.md` — Entry Point
 
-All agents read this first on every spawn. Contains:
+All agents read this first on every spawn and re-read the smallest relevant
+hive slice before substantive prompts/tasks. Contains:
 - Current status of the hive
 - What agents exist and their status
 - Active projects and priorities
 - Any urgent context
 - Recent learnings worth knowing
+
+### Turn-level hydration
+
+Memory Hive is a working-memory feed, not just an install-time banner. For every
+non-trivial, cross-session, or operational turn, agents should pull the smallest
+useful slice of the hive before acting:
+
+- `index.md` for global state
+- `agents/<id>/memory.md` and recent `log.md` entries for private continuity
+- `knowledge/HUMAN_CONTEXT.md` and distilled learnings when preferences or prior
+  patterns matter
+- `tasks/queue.md`, `tasks/active/`, or a targeted `memory-hive query`/`bundle`
+  when the user references earlier work
+
+The pull should be visible in the agent's tool stream when the operator is
+watching. Hidden helper scripts are acceptable for automation, but visible file
+or CLI reads are the safer default for high-trust human-in-the-loop sessions.
 
 #### 2. `registry/` — Agent Roster
 

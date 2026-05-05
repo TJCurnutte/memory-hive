@@ -6,6 +6,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-05-05 — `critical per-turn hive pulls`
+
+### Fixed
+
+- Clarified the managed Memory Hive boot block so agents re-pull the smallest
+  relevant hive slice before every non-trivial, cross-session, or operational
+  prompt/task — not only once at process startup.
+- Documented visible/auditable hive pulls as the default for human-in-the-loop
+  sessions, preventing agents from silently answering from stale prompt context.
+- Updated README, architecture, integration, Hermes, and Codex wiring docs to
+  describe the same pull-memory → work → write-back loop.
+
 ## [0.4.0] — 2026-05-05 — `public README + semver release cleanup`
 
 ### Changed

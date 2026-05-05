@@ -76,13 +76,18 @@ memory-hive bundle --for coder --max-tokens 4000
 
 ## The Memory Hive loop
 
-1. **Boot** — an agent reads `hive/index.md`, shared knowledge, current tasks, and its own private silo.
+1. **Hydrate** — an agent reads `hive/index.md`, shared knowledge, current tasks, and its own private silo on boot and again before substantive work.
 2. **Work** — it uses current project context, curated knowledge, and prior lessons.
 3. **Write back** — it logs task notes and drops reusable observations into `hive/learnings/raw/`.
 4. **Curate** — `main` promotes verified patterns into `hive/learnings/distilled/` and shared knowledge.
-5. **Compound** — the next agent starts smarter than the last one.
+5. **Compound** — the next prompt, task, or agent starts smarter than the last one.
 
-That is the product: **read, work, write back, curate.**
+That is the product: **pull memory, work, write back, curate.**
+
+Critical habit: Memory Hive is not a one-time boot note. For non-trivial,
+cross-session, or operational prompts, agents should visibly re-pull the
+smallest relevant hive slice before acting so operators can audit that the
+shared memory actually informed the answer.
 
 ## The shape of a hive
 

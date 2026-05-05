@@ -6,7 +6,8 @@
 
 Hermes Agent (Nous Research) layers its system prompt as
 `SOUL.md` → `USER.md` → `AGENTS.md` → `MEMORY.md`. The installer writes
-the managed block into `MEMORY.md` so every session loads the hive.
+the managed block into `MEMORY.md` so every session loads the hive and repeats
+a small visible hive pull before substantive prompts/tasks.
 
 Markers: `<!-- memory-hive:start -->` / `<!-- memory-hive:end -->`.
 Hermes caps `MEMORY.md` at ~2,200 characters by default

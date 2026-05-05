@@ -100,7 +100,8 @@ into `~/.claude/CLAUDE.md`:
 ```
 
 Every Claude Code agent reads `CLAUDE.md` on boot, so this tells them
-all to load the hive before responding. The block is **idempotent**:
+to load the hive before responding and to re-pull relevant hive context before
+substantive prompts/tasks. The block is **idempotent**:
 re-running the installer finds the markers and replaces the block in
 place. Anything outside the markers — your own notes, other tools'
 blocks — is never touched. The canonical content lives in

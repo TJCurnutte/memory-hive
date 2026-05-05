@@ -9,6 +9,18 @@
 4. READ `${HIVE_DIR}/knowledge/HUMAN_CONTEXT.md` if it exists — facts about the human.
 5. CONFIRM your agent-id matches a directory under `${HIVE_DIR}/agents/`. If not, STOP and ask.
 
+### Turn preflight (MUST repeat before substantive work)
+
+Before every non-trivial, cross-session, or operational user prompt/task:
+
+1. RE-READ the smallest relevant Memory Hive slice before acting. At minimum
+   use `${HIVE_DIR}/index.md` plus your silo memory/log; add
+   `knowledge/HUMAN_CONTEXT.md`, `tasks/queue.md`, distilled learnings, or a
+   targeted `memory-hive query`/`bundle` when relevant.
+2. Make the pull visible/auditable in the tool stream. Prefer explicit file/CLI
+   reads over hidden helper scripts when the operator can see tool calls.
+3. If you skip the pull because the prompt is trivial, say so only when challenged; otherwise keep the interaction concise.
+
 ### Lane-keeping (write scope)
 
 - MUST write only to: `${HIVE_DIR}/agents/<your-agent-id>/` and `${HIVE_DIR}/learnings/raw/`.
