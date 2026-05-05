@@ -1,10 +1,3 @@
-
-> Product identity: **HiveMemory**
->
-> Central ecosystem site: **https://hive.neural-forge.io**
->
-> Product page: **https://hive.neural-forge.io/hivememory**
-
 <p align="center">
   <picture>
     <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
@@ -22,7 +15,7 @@
   <a href="https://github.com/TJCurnutte/memory-hive/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/TJCurnutte/memory-hive?color=14B8A6&label=release"></a>
   <a href="INTEGRATION.md"><img alt="Platforms: 23" src="https://img.shields.io/badge/platforms-23-F59E0B"></a>
   <img alt="Shell: POSIX" src="https://img.shields.io/badge/shell-POSIX-lightgrey">
-  <a href="https://memoryhive.neural-forge.io"><img alt="Site: memoryhive.neural-forge.io" src="https://img.shields.io/badge/site-memoryhive.neural--forge.io-14B8A6"></a>
+  <a href="https://hive.neural-forge.io"><img alt="Site: hive.neural-forge.io" src="https://img.shields.io/badge/site-hive.neural--forge.io-14B8A6"></a>
 </p>
 
 <p align="center">
@@ -33,130 +26,92 @@
 
 ---
 
-## Quick Start
+## Start in 2 minutes
+
+Memory Hive should feel simple on day one. You only need one install
+command, one way to add an agent, and one way to see the roster.
+
+### 1. Install
 
 ```bash
-curl -fsSL memoryhive.neural-forge.io/install.sh | sh
+curl -fsSL https://hive.neural-forge.io/install.sh | sh
+```
+
+The default install is **zero-input**: no prompts, no account, no
+daemon. It creates `~/.memory-hive`, the reserved `main` curator silo,
+and managed config blocks for detected agent tools.
+
+### 2. Add only the agents you actually use
+
+```bash
+memory-hive add coder --role coder
+memory-hive list
+```
+
+Each agent gets a private silo:
+
+```text
+hive/agents/coder/
+├── log.md      # working notes
+├── context.md  # role and current focus
+└── memory.md   # durable private learnings
+```
+
+### 3. Let the hive compound
+
+Agents read the shared hive and their own silo on boot. After useful work,
+they write a short log and drop reusable lessons into `hive/learnings/raw/`.
+The `main` curator promotes only the useful, verified patterns into shared
+knowledge.
+
+That's the loop: **read, work, write back, curate.**
+
+Want the guided setup instead?
+
+```bash
+curl -fsSL https://hive.neural-forge.io/install.sh | MEMORY_HIVE_WIZARD=1 sh
+# or later:
+memory-hive setup
 ```
 
 Works with **Claude Code, OpenClaw, NanoClaw, Hermes, Cursor, Continue,
 Aider, Gemini CLI, Goose, Open Interpreter, Amazon Q, OpenHands, Cline,
 Roo Code, Kilo Code, Windsurf, Zed, Warp, Sourcegraph Amp, OpenAI Codex,
-OpenCode, Crush, and GitHub Copilot** — auto-detected and wired in one
-step. See [INTEGRATION.md](INTEGRATION.md) for the full platform table
-and opt-out env vars.
-
-**Default is zero-input.** The installer scaffolds the reserved `main`
-curator silo, writes a managed block into every detected agent
-platform's config file (`~/.claude/CLAUDE.md`, `~/.cursor/rules/`,
-`~/.gemini/GEMINI.md`, etc.), and exits. No prompts, no questions.
-
-Want the guided setup? Opt in:
-
-```bash
-# Either set the env var at install time:
-curl -fsSL memoryhive.neural-forge.io/install.sh | MEMORY_HIVE_WIZARD=1 sh
-
-# Or install first, then run the wizard any time:
-sh ~/.memory-hive/memory-hive setup
-```
-
-The wizard asks how many agents you want, their names, and role
-templates. If it finds agents in `~/.claude/agents/` or
-`~/.openclaw/hive/agents/`, it offers to import them.
-
-Add, rename, archive, and edit agents at any time with the `memory-hive`
-CLI:
-
-```bash
-sh ~/.memory-hive/memory-hive add backend-eng --role coder
-sh ~/.memory-hive/memory-hive list
-sh ~/.memory-hive/memory-hive rename backend-eng api-eng
-sh ~/.memory-hive/memory-hive archive api-eng
-sh ~/.memory-hive/memory-hive role api-eng   # opens $EDITOR
-```
-
-Add `~/.memory-hive` to your `PATH` if you want to drop the prefix.
+OpenCode, Crush, and GitHub Copilot**. See [INTEGRATION.md](INTEGRATION.md)
+for the full platform table and opt-out env vars.
 
 ---
 
 ## Day One
 
-A narrative walkthrough of what a fresh install actually feels like:
+A fresh install should look like this:
 
-1. **Run the installer.** One command, no prompts. You get the `main`
-   curator silo and a wired-up `~/.claude/CLAUDE.md` managed block.
-2. **Add the agents you want.** `memory-hive add coder --role coder`
-   and `memory-hive add researcher --role researcher`. Each call
-   scaffolds `log.md`, `context.md` (role seeded from the template),
-   and `memory.md`, and updates the registry automatically.
-3. **Your Claude Code agents load the hive on boot.** The managed
-   block tells every agent to read `~/.memory-hive/hive/index.md` and
-   its own silo before responding.
-4. **List your roster.** `memory-hive list` shows the silos and the
-   one-line role description each was seeded with.
-5. **Tighten a role description.** `memory-hive role coder` opens
-   `hive/agents/coder/context.md` in `$EDITOR`. Rewrite the role to
-   match how you actually work. Save.
-6. **Your agents start logging.** After each non-trivial task, the agent
-   appends to its own `log.md` and, if it learned something generalizable,
-   drops a note in `hive/learnings/raw/`.
-7. **The curator takes over from there.** `main` reviews `learnings/raw/`
-   on whatever cadence you want, promotes the useful bits to
-   `learnings/distilled/`, and keeps the shared hive coherent.
+1. **Run the installer.** One command creates the hive and wires detected
+   agent configs.
+2. **Add your first agent.** `memory-hive add coder --role coder` creates
+   its private silo and updates the registry.
+3. **Check the roster.** `memory-hive list` confirms what exists.
+4. **Do real work.** Your agent starts each session by reading the shared
+   hive and its silo.
+5. **Write back.** Useful task notes go into the agent log; reusable lessons
+   go into raw learnings.
+6. **Curate later.** `main` reviews raw notes and promotes the few things
+   that should become shared truth.
 
-That's the whole loop. The hive learns because every agent writes back
-to it, and the curator keeps the signal strong.
+Most users can stop there for weeks.
 
-Coming from an existing setup (OpenClaw, Claude Code sub-agents, a
-pre-0.1 hive)? See [MIGRATION.md](MIGRATION.md) — the installer can
-import your existing agents in one step.
+<details>
+<summary>Advanced commands when you are ready</summary>
 
----
+- **Daily visibility:** `tail`, `query`, `stats`, `digest`
+- **Health checks:** `doctor`, `lint`, `checkpoint`, `diff`
+- **Curator workflow:** `dedup`, `confidence`, `promote`, `conflicts`, `stale`, `curate`
+- **Agent lifecycle:** `rename`, `archive`, `role`, `register`, `apply`, `seed`
 
-## What Loads Into Context
+Run `memory-hive help` for the full reference. These commands are useful,
+but they are not required to understand the product.
 
-Memory Hive is designed to keep long-running agent memory inspectable
-without turning every prompt into a full archive replay.
-
-On boot, each agent reads a ranked, bounded `hive-bundle` slice instead of
-replaying everything.
-
-- **Bootstrap** (always read): `index.md`, registry, skills, distilled
-  patterns, task queue, active tasks
-- **Agent personalization**: own silo (`log.md`, `context.md`, `memory.md`)
-- **Working bundle**: latest structured outputs needed for continuity (`memory-hive
-  bundle --for <agent> --max-tokens N`)
-
-The installer writes each framework's boot block to read this first
-surface, then the agent can call `memory-hive bundle` for deeper context
-when needed.
-
-It does **not** automatically inject every raw learning, raw capture,
-or another agent's private notes.
-
-Use the tiers as trust boundaries:
-
-- `hive/raw/` and `learnings/raw/[agent-id]/` are queues and evidence,
-  not canonical truth.
-- `learnings/distilled/` and `knowledge/` are the promoted surfaces
-  agents should trust by default.
-- `curator/DECISIONS.md` records why something was promoted, deferred,
-  or resolved after a conflict.
-
-When an agent needs more history, reach for `memory-hive query`,
-`digest`, `tail`, or `bundle --max-tokens N` instead of loading the
-whole hive. `bundle` builds the canonical bounded context with confidence
-gates and confidence-ranked surfaces by default.
-
-Lifecycle rules are explicit:
-
-- Records are normally `active`
-- `superseded` keeps history while marking an authoritative replacement
-- `deprecated` retains evidence but removes it from the hot path
-
-That makes continuity fast and safe: fresh enough to keep work moving,
-small enough to stay reliable.
+</details>
 
 ---
 
@@ -263,7 +218,10 @@ conflict-resolution rules, see [HIVE_ARCHITECTURE.md](HIVE_ARCHITECTURE.md).
 
 ---
 
-## CLI Verbs
+## CLI Reference
+
+<details>
+<summary>Full command reference</summary>
 
 `memory-hive <verb>` is the single entry point. Run `memory-hive help` for
 the full reference. The verbs cluster into three categories:
@@ -311,6 +269,8 @@ hive without `--force`.
 
 Every verb is pure shell, ships a CI smoke test, and reads from the
 existing two-layer architecture without changing it.
+
+</details>
 
 ---
 
@@ -368,13 +328,6 @@ them back out.
 - Private silos never auto-cleaned (agent owns its own space)
 - Confidence gates prevent low-confidence info from polluting core knowledge
 
-### 8. Memory State Governance
-- Active context is bounded and ranked; not all historical memory is active
-  at once.
-- Stale or conflicting entries stay auditable as `superseded`/`deprecated`
-  instead of disappearing.
-- Migration and import flows are dry-run first, then explicit apply.
-
 ---
 
 ## Installation details
@@ -405,8 +358,6 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for dev setup and the safe
 local-test workflow. Areas that welcome help:
 
 - Framework adapters (LangChain, AutoGen, CrewAI, etc.)
-- See [MEMORY_ADAPTER_CONTRACT.md](MEMORY_ADAPTER_CONTRACT.md) before shipping
-  a runtime adapter.
 - Additional role templates
 - Curation automation
 - Memory hygiene tools
@@ -435,7 +386,7 @@ their specialties.
 
 ## Links
 
-- **Live site:** <https://memoryhive.neural-forge.io>
+- **Live site:** <https://hive.neural-forge.io>
 - **Repo:** <https://github.com/TJCurnutte/memory-hive>
 - **Releases:** <https://github.com/TJCurnutte/memory-hive/releases> — version history with everything that shipped per release.
 - **Changelog:** [CHANGELOG.md](CHANGELOG.md) — Keep-a-Changelog format, mirrored on the Releases page.

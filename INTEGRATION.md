@@ -1,7 +1,7 @@
 # Integration
 
 How Memory Hive wires itself into your existing agent environment after
-`curl -fsSL memoryhive.neural-forge.io/install.sh | sh`.
+`curl -fsSL https://hive.neural-forge.io/install.sh | sh`.
 
 ## Supported platforms
 
@@ -43,11 +43,6 @@ Every platform has a dedicated doc under
 [`templates/platforms/<id>.md`](templates/platforms/) with the exact
 integration details, and the installer ships all of them into
 `~/.memory-hive/templates/platforms/` so you can read them post-install.
-
-If you're building an API/FSM integration instead of a plain agent wiring,
-follow [`MEMORY_ADAPTER_CONTRACT.md`](MEMORY_ADAPTER_CONTRACT.md) for
-query/ingest/export/import/health behavior and explicit dry-run overwrite
-policies.
 
 ## What the installer does
 

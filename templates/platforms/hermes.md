@@ -69,5 +69,4 @@ Memory Hive is the memory layer (what agents remember). Hive Swarm
 is the compute layer (how/where agents run). They're orthogonal —
 either works without the other, and they compose cleanly. Both ship
 as part of the [neural-forge.io](https://neural-forge.io) family —
-[memoryhive.neural-forge.io](https://memoryhive.neural-forge.io) and
-[hiveswarm.neural-forge.io](https://hiveswarm.neural-forge.io).
+[hive.neural-forge.io](https://hive.neural-forge.io) with Memory Hive first and Swarm as an extension.
