@@ -15,7 +15,7 @@ Append-only; never touches existing content.
 
 ```bash
 # required
-export DISCORD_BOT_TOKEN=your-bot-token-here
+export DISCORD_BOT_TOKEN=FAKE_DO_NOT_USE_DISCORD_BOT_TOKEN
 export DISCORD_CHANNEL_IDS=1234567890,2345678901
 
 # optional

@@ -14,7 +14,7 @@ trusted gateway.
 Usage:
     export MEMORY_HIVE_DIR=~/.memory-hive        # optional
     export WEBHOOK_PORT=8787                      # optional, default 8787
-    export WEBHOOK_TOKEN=<optional-shared-secret> # optional; if set, required as ?token=... on requests
+    export WEBHOOK_TOKEN=FAKE_DO_NOT_USE_WEBHOOK_TOKEN # optional; if set, required as ?token=... on requests
 
     python3 webhook_ingester.py
 
