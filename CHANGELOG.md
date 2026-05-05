@@ -6,9 +6,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-05-05 — `public README + semver release cleanup`
+
+### Changed
+
+- Replaced the GitHub README header with the canonical transparent Hive mark from `assets/hive-mark.png`.
+- Restored public releases to readable semver tags such as `v0.4.0` instead of generated commit-hash release cards.
 - Repositioned Memory Hive as the public home for the Hive memory layer: local-first Markdown memory, private agent silos, shared curated knowledge, and one POSIX CLI.
 - Reworked the README around product clarity, quick start, demo data, the memory loop, supported tools, and practical command paths.
-- Added push-to-main GitHub Release automation so every new push appears as a `release-YYYYMMDD-HHMMSS-<sha>` release, while versioned tags still publish changelog-backed releases.
 - Absorbed the old HiveOptimizer safety workflow into Memory Hive: checkpoint before apply-mode optimization, inventory before pruning, archive before delete, and routing/model-spend audits as inputs to the optimizer loop.
 - Folded Optimizer into Memory Hive as `memory-hive optimize` / `optimizer`, a built-in health + curation + digest + stats loop with optional built-in routing report output.
 - Documented Optimizer as an internal maintenance workflow rather than a separate product surface.

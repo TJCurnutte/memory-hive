@@ -1,18 +1,12 @@
 # Release workflow.
 #
 # Behavior:
-#   - Versioned tag pushes (`v*.*.*`) publish traditional changelog-backed releases.
-#   - Every push to `main` publishes a lightweight "new release" entry with
-#     a generated `release-YYYYMMDD-HHMMSS-<sha>` tag.
-#
-# The push-to-main path makes GitHub Releases the public shipping log without
-# requiring a human to cut a version tag for every small repo update.
+#   - Versioned tag pushes (`v*.*.*`) publish changelog-backed releases.
+#   - Plain pushes to `main` run CI only; release cards stay semver-readable.
 name: Release
 
 on:
   push:
-    branches:
-      - main
     tags:
       - "v*.*.*"
 
@@ -36,60 +30,34 @@ jobs:
       - name: Build release notes
         id: notes
         shell: bash
-        env:
-          BEFORE_SHA: ${{ github.event.before }}
         run: |
           set -eu
 
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+          TITLE="${TAG}"
           NOTES_FILE="$RUNNER_TEMP/release-notes.md"
 
-          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            TAG="${GITHUB_REF_NAME}"
-            VERSION="${TAG#v}"
-            TITLE="${TAG}"
-
-            # Pull the [<version>] block out of CHANGELOG.md (everything between
-            # `## [<version>]` and the next `## [` heading, exclusive).
-            if grep -q "^## \[${VERSION}\]" CHANGELOG.md; then
-              awk -v v="${VERSION}" '
-                $0 ~ "^## \\["v"\\]" { found=1; next }
-                found && /^## \[/ { exit }
-                found { print }
-              ' CHANGELOG.md > "$NOTES_FILE"
-            else
-              printf 'No CHANGELOG.md entry for [%s]; using auto notes only.\n' "$VERSION" > "$NOTES_FILE"
-            fi
-
-            # Append auto-generated commit log since the previous version tag.
-            PREV_TAG="$(git tag --sort=-v:refname | grep '^v' | grep -v "^${TAG}$" | head -n 1 || true)"
-            if [ -n "$PREV_TAG" ]; then
-              {
-                printf '\n\n---\n\n### Commits since %s\n\n' "$PREV_TAG"
-                git log --pretty=format:'- %s (%h)' "$PREV_TAG..$TAG"
-                printf '\n'
-              } >> "$NOTES_FILE"
-            fi
+          # Pull the [<version>] block out of CHANGELOG.md (everything between
+          # `## [<version>]` and the next `## [` heading, exclusive).
+          if grep -q "^## \[${VERSION}\]" CHANGELOG.md; then
+            awk -v v="${VERSION}" '
+              $0 ~ "^## \\["v"\\]" { found=1; next }
+              found && /^## \[/ { exit }
+              found { print }
+            ' CHANGELOG.md > "$NOTES_FILE"
           else
-            SHORT_SHA="$(git rev-parse --short=12 "$GITHUB_SHA")"
-            STAMP="$(date -u +'%Y%m%d-%H%M%S')"
-            TAG="release-${STAMP}-${SHORT_SHA}"
-            TITLE="New release — ${SHORT_SHA}"
+            printf 'No CHANGELOG.md entry for [%s]; using auto notes only.\n' "$VERSION" > "$NOTES_FILE"
+          fi
 
+          # Append auto-generated commit log since the previous version tag.
+          PREV_TAG="$(git tag --sort=-v:refname | grep '^v' | grep -v "^${TAG}$" | head -n 1 || true)"
+          if [ -n "$PREV_TAG" ]; then
             {
-              printf '## New release\n\n'
-              printf 'Push to `main` published as a GitHub Release.\n\n'
-              printf -- '- Commit: `%s`\n' "$GITHUB_SHA"
-              printf -- '- Branch: `%s`\n' "$GITHUB_REF_NAME"
-              printf -- '- Published: `%s UTC`\n\n' "$(date -u +'%Y-%m-%d %H:%M:%S')"
-              printf '### Commits in this push\n\n'
-
-              if [ -n "${BEFORE_SHA:-}" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
-                git log --pretty=format:'- %s (%h)' "${BEFORE_SHA}..${GITHUB_SHA}" || git log --pretty=format:'- %s (%h)' -1 "$GITHUB_SHA"
-              else
-                git log --pretty=format:'- %s (%h)' -1 "$GITHUB_SHA"
-              fi
+              printf '\n\n---\n\n### Commits since %s\n\n' "$PREV_TAG"
+              git log --pretty=format:'- %s (%h)' "$PREV_TAG..$TAG"
               printf '\n'
-            } > "$NOTES_FILE"
+            } >> "$NOTES_FILE"
           fi
 
           {
@@ -97,23 +65,6 @@ jobs:
             printf 'title=%s\n' "$TITLE"
             printf 'notes_file=%s\n' "$NOTES_FILE"
           } >> "$GITHUB_OUTPUT"
-
-      - name: Create generated tag for push release
-        if: github.ref_type == 'branch'
-        shell: bash
-        run: |
-          set -eu
-          TAG="${{ steps.notes.outputs.tag }}"
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-
-          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
-            printf 'Tag %s already exists on origin; leaving it untouched.\n' "$TAG"
-          else
-            git tag -a "$TAG" "$GITHUB_SHA" -m "${{ steps.notes.outputs.title }}"
-            git push origin "refs/tags/${TAG}"
-          fi
 
       - name: Create or update GitHub Release
         env:

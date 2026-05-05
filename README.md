@@ -1,9 +1,8 @@
 <p align="center">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="assets/logo-dark.svg">
-    <img alt="Memory Hive" src="assets/logo-light.svg" width="420">
-  </picture>
+  <img alt="Memory Hive logo" src="assets/hive-mark.png" width="148">
 </p>
+
+<h1 align="center">Memory Hive</h1>
 
 <p align="center">
   <em>Local-first shared memory for AI agents: private silos, a curated hive, and one POSIX shell CLI.</em>
@@ -46,7 +45,7 @@ Everything is local Markdown under `~/.memory-hive`. No account. No daemon. No d
 | **Shared hive knowledge** | Agents contribute raw learnings; `main` curates durable truth into shared knowledge. |
 | **Drop-in tool wiring** | Installer detects Claude Code, Cursor, Codex, Hermes, Aider, Gemini CLI, Goose, and more. |
 | **Operator CLI** | `tail`, `digest`, `query`, `stats`, `doctor`, `curate`, `optimize`, and `bundle`. |
-| **Release-grade history** | Every push to `main` appears on GitHub Releases as a new shipped change. |
+| **Semver release history** | Versioned GitHub Releases stay readable: `v0.4.0`, `v0.3.2`, and so on. |
 
 ## Start in 2 minutes
 
@@ -164,13 +163,13 @@ Run `memory-hive help` for exact flags and examples.
 
 For advanced multi-agent controllers, `--report <file>` emits a compact routing signal. There is no separate memory product to install or synchronize.
 
-## New pushes show up as releases
+## Versioned releases
 
-Memory Hive uses GitHub Releases as the public shipping log.
+Memory Hive uses conventional GitHub Releases for public shipping notes.
 
-- versioned tags like `v0.3.2` still create traditional changelog-backed releases
-- every push to `main` also creates a release tag like `release-YYYYMMDD-HHMMSS-<sha>`
-- each push release includes the commit SHA and commit subjects shipped in that push
+- versioned tags like `v0.4.0` create changelog-backed releases
+- release titles stay readable instead of generated commit-hash cards
+- changelog entries remain the source of truth for what shipped
 
 Latest changes: <https://github.com/TJCurnutte/memory-hive/releases>
 
