@@ -45,28 +45,28 @@ For runtime integrations that use Memory Hive as a programmatic memory backend
 
 ---
 
-## Hive Swarm — multi-device compute mesh
+## Swarm routing — built into Memory Hive
 
-If you're running multiple devices in a personal compute mesh via
-[Hive Swarm](https://github.com/TJCurnutte/hive-swarm) (hardware-aware
-swarm controller, GPU routing, carbon-aware scheduling — works with
-Hermes Agent, OpenClaw, NanoClaw, or any agent runtime), Memory Hive
-interoperates cleanly:
+Do not treat Hive Swarm as a separate required product or repository. The
+canonical GitHub home for Hive work is
+[Memory Hive](https://github.com/TJCurnutte/memory-hive); swarm routing is a
+Memory Hive capability that helps decide how/where agents run.
+
+When running multiple devices in a personal compute mesh:
 
 - **Mount the same `~/.memory-hive/hive/` on every node in the mesh**
   — via NFS, Syncthing, or a shared volume. Peer-spawned agents read
   the same shared brain regardless of which machine ran them.
-- **Each node keeps its own local silo namespace.** A common
-  convention is `agents/<hostname>-<role>/` so the laptop-coder and
-  desktop-coder don't collide. Use `memory-hive add laptop-coder
-  --role coder` etc.
-- **`memory-hive bundle --for <agent>`** assembles a
-  prompt-injection-ready context blob the swarm controller can ship
-  to a remote worker, so a GPU node spawned by the swarm sees the
-  same canonical truth as your local planner.
+- **Each node keeps its own local silo namespace.** A common convention is
+  `agents/<hostname>-<role>/` so laptop-coder and desktop-coder do not collide.
+  Use `memory-hive add laptop-coder --role coder` etc.
+- **`memory-hive bundle --for <agent>`** assembles a prompt-injection-ready
+  context blob a controller can ship to a remote worker, so a GPU node sees the
+  same canonical truth as the local planner.
+- **`memory-hive optimize --report <file>`** emits compact health/routing
+  signals that help decide whether to fan out, pause for repair, or route first
+  to a curator/reviewer lane.
 
-Memory Hive is the memory layer (what agents remember). Hive Swarm
-is the compute layer (how/where agents run). They're orthogonal —
-either works without the other, and they compose cleanly. Both ship
-as part of the [neural-forge.io](https://neural-forge.io) family —
-[hive.neural-forge.io](https://hive.neural-forge.io) with Memory Hive first and Swarm as an extension.
+Memory Hive is the memory, optimizer, and swarm-signal layer. Separate
+Hive-branded repos should fold back into Memory Hive instead of becoming new
+product surfaces.

@@ -159,7 +159,7 @@ sh ~/.memory-hive/memory-hive optimize --report ~/.memory-hive/hive/optimizer/SW
 The command composes existing file-backed checks: `doctor`, `curate`,
 `digest --week`, `stats`, and `stale --count`. In `--apply` mode it creates a
 checkpoint before curation changes. The optional report is compact markdown for
-Hive Swarm routing decisions.
+built-in swarm-routing decisions.
 
 ## What's in a silo
 

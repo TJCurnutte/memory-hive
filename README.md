@@ -335,7 +335,7 @@ them back out.
 Optimizer is the maintenance loop inside Memory Hive. It composes existing
 verbs instead of inventing a new datastore: `doctor` checks health, `curate`
 triages raw learnings, `digest` explains recent activity, `stats` proves what
-changed on disk, and `stale` exposes the backlog. Hive Swarm can consume the
+changed on disk, and `stale` exposes the backlog. Swarm routing can consume the
 optional `memory-hive optimize --report <file>` output to decide whether to
 fan out normally, route to a curator/reviewer first, or pause for repair.
 

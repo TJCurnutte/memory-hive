@@ -6,8 +6,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+- Confirmed `https://github.com/TJCurnutte/memory-hive` as the canonical Hive GitHub repo; other Hive product repos should fold into it and be deleted/archived.
 - Absorbed the old HiveOptimizer safety workflow into Memory Hive: checkpoint before apply-mode optimization, inventory before pruning, archive before delete, and routing/model-spend audits as inputs to the optimizer loop.
-- Folded Optimizer into Memory Hive as `memory-hive optimize` / `optimizer`, a built-in health + curation + digest + stats loop with optional Hive Swarm report output.
+- Folded Optimizer into Memory Hive as `memory-hive optimize` / `optimizer`, a built-in health + curation + digest + stats loop with optional built-in swarm-routing report output.
 - Documented Optimizer as an internal maintenance workflow rather than a separate product surface.
 
 ## [0.3.2] — 2026-04-28 — `memory lifecycle governance`
