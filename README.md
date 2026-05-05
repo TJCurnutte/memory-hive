@@ -105,6 +105,7 @@ Most users can stop there for weeks.
 
 - **Daily visibility:** `tail`, `query`, `stats`, `digest`
 - **Health checks:** `doctor`, `lint`, `checkpoint`, `diff`
+- **Built-in optimizer:** `optimize` / `optimizer` for one-pass health + curation + swarm signals
 - **Curator workflow:** `dedup`, `confidence`, `promote`, `conflicts`, `stale`, `curate`
 - **Agent lifecycle:** `rename`, `archive`, `role`, `register`, `apply`, `seed`
 
@@ -251,6 +252,7 @@ hive without `--force`.
 | `diff [--since <checkpoint\|date>]` | What changed since a reference point |
 | `checkpoint [--name <name>] \| --list` | Save a reference marker for later diffs |
 | `bundle [--for <agent>] [--max-tokens N]` | Concatenate canonical hive surfaces into one prompt-injection-ready blob |
+| `optimize [--dry-run|--apply] [--report <file>]` | Built-in hygiene loop: doctor + curate + digest + stats + stale backlog signals |
 
 **Curator workflow** — close the loop from raw → distilled:
 
@@ -266,6 +268,7 @@ hive without `--force`.
 | `conflicts [--agent <name>] [--strict] [--write]` | Surface raw learnings that contradict each other |
 | `reflect <agent> [--days N] [--write]` | Agent self-reflection: distill recent log activity into memory.md themes |
 | `curate [--dry-run \| --apply]` | Autonomous one-pass curator: chains dedup → confidence → promote → lint → stale |
+| `optimize [--dry-run \| --apply] [--report <file>]` | Memory Hive Optimizer: wraps health, curation, digest, stats, and Swarm-safe routing signals |
 
 Every verb is pure shell, ships a CI smoke test, and reads from the
 existing two-layer architecture without changing it.
@@ -327,6 +330,14 @@ them back out.
 - Active tasks >14 days old → auto-escalate
 - Private silos never auto-cleaned (agent owns its own space)
 - Confidence gates prevent low-confidence info from polluting core knowledge
+
+### 8. Built-in Optimizer, Not Another Product
+Optimizer is the maintenance loop inside Memory Hive. It composes existing
+verbs instead of inventing a new datastore: `doctor` checks health, `curate`
+triages raw learnings, `digest` explains recent activity, `stats` proves what
+changed on disk, and `stale` exposes the backlog. Hive Swarm can consume the
+optional `memory-hive optimize --report <file>` output to decide whether to
+fan out normally, route to a curator/reviewer first, or pause for repair.
 
 ---
 

@@ -210,6 +210,12 @@ shipped CLI verbs collapse most of it into one command:
 summary line. Default is dry-run; `--apply` performs promotions for
 clusters at the high-confidence threshold.
 
+`memory-hive optimize` is the built-in Optimizer pass around this loop. It
+runs `doctor`, `curate`, `digest --week`, `stats`, and `stale --count`, then
+prints one operator report. Use `memory-hive optimize --report
+hive/optimizer/SWARM_SIGNALS.md` when Hive Swarm or Console needs a compact
+health/routing signal without scraping full command output.
+
 ---
 
 ## Boot Sequence
@@ -373,6 +379,7 @@ curator still decides what to actually promote.
 | Confidence gating | Low can't reach knowledge/ |
 | Private silos | Never auto-cleaned (agent owns) |
 | Review cadence | Curator reviews daily |
+| Built-in optimizer | `memory-hive optimize` chains health + curation + digest + stats; optional reports feed Console/Swarm signals. |
 
 ---
 

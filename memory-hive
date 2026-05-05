@@ -1369,6 +1369,12 @@ Usage:
       newest-mtime cluster member. Every action is printed even under
       --apply so the curator stays in the loop.
 
+  memory-hive optimize [--dry-run | --apply] [--report <file>]
+      Built-in Optimizer loop for Memory Hive. Runs doctor, curate, digest,
+      stats, and stale, then prints a short action report. With --report,
+      writes a compact markdown report for Console/Swarm routing signals.
+      Alias: memory-hive optimizer.
+
   memory-hive bundle [--for <agent>] [--max-tokens N] [--out <file>]
       Concatenate the canonical hive surfaces into a single
       prompt-injection-ready markdown bundle. Closes the gap between
@@ -1740,8 +1746,10 @@ mh_stats() {
         [ "$_mt" -ge "$_week_ago" ] && _week=$((_week + 1))
         _who="${_cls%%:*}"
         _kind="${_cls##*:}"
-        _agent_tally="$_agent_tally $_who"
-        _kind_tally="$_kind_tally $_kind"
+        _agent_tally="$_agent_tally
+$_who"
+        _kind_tally="$_kind_tally
+$_kind"
         [ -z "$_latest_row" ] && _latest_row="$_mt|$_cls|$_f"
     done < /tmp/mh-stats.$$
     rm -f /tmp/mh-stats.$$
@@ -1769,12 +1777,12 @@ mh_stats() {
     fi
 
     printf '\nBy agent:\n'
-    printf '%s\n' "$_agent_tally" | sort | uniq -c | sort -rn | while read -r _c _a; do
+    printf '%s\n' "$_agent_tally" | awk 'NF' | sort | uniq -c | sort -rn | while read -r _c _a; do
         printf '  %-24s %s\n' "$_a" "$_c"
     done
 
     printf '\nBy kind:\n'
-    printf '%s\n' "$_kind_tally" | sort | uniq -c | sort -rn | while read -r _c _k; do
+    printf '%s\n' "$_kind_tally" | awk 'NF' | sort | uniq -c | sort -rn | while read -r _c _k; do
         printf '  %-24s %s\n' "$_k" "$_c"
     done
 
@@ -5839,6 +5847,161 @@ $_path"
 }
 
 
+# mh_optimize — built-in Memory Hive Optimizer loop.
+#
+# Optimizer is not a separate product surface in the CLI. It is the practical
+# hygiene pass that composes existing verbs into one short operator report:
+#   doctor  -> install and stale health
+#   curate  -> dedup/confidence/lint/stale curation pass
+#   digest  -> recent human-readable activity
+#   stats   -> honest file-backed write counts
+#   stale   -> scriptable backlog count
+#
+# Flags:
+#   --dry-run       default; suggest only
+#   --apply         pass --apply through to curate for promotion-ready clusters
+#   --report FILE   write compact markdown report for Console/Swarm consumers
+#   --signals FILE  alias for --report
+mh_optimize() {
+    _mh_require_install
+
+    _apply=0
+    _report=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --dry-run) _apply=0 ;;
+            --apply)   _apply=1 ;;
+            --report|--signals)
+                shift
+                [ $# -gt 0 ] || _mh_die "--report requires a file"
+                _report="$1"
+                ;;
+            --report=*|--signals=*) _report="${1#*=}" ;;
+            -h|--help)
+                cat <<'OPTIMIZEHELP'
+Usage: memory-hive optimize [--dry-run | --apply] [--report <file>]
+       memory-hive optimizer [--dry-run | --apply] [--report <file>]
+
+Built-in Optimizer loop for Memory Hive. This is the maintenance brain,
+not a separate product: it chains existing health + curation verbs and
+prints one operator-friendly action report.
+
+Steps:
+  1. doctor          install/platform/registry/stale health
+  2. curate          dedup -> confidence -> promotions -> lint -> stale
+  3. digest --week   recent human-readable activity
+  4. stats           honest file-backed counts
+  5. stale --count   scriptable raw-learning backlog signal
+
+--dry-run is default. --apply passes through to `memory-hive curate --apply`.
+--report writes a compact markdown report suitable for Console display or
+Hive Swarm routing signals.
+OPTIMIZEHELP
+                return 0
+                ;;
+            *) _mh_die "Unknown flag: $1 (try memory-hive optimize --help)" ;;
+        esac
+        shift
+    done
+
+    _mode="dry-run"
+    [ "$_apply" -eq 1 ] && _mode="apply"
+    _tmpdir="$(mktemp -d 2>/dev/null || mktemp -d -t mh-optimize)" \
+        || _mh_die "Could not create temp dir"
+    _doctor_out="$_tmpdir/doctor.out"
+    _curate_out="$_tmpdir/curate.out"
+    _digest_out="$_tmpdir/digest.out"
+    _stats_out="$_tmpdir/stats.out"
+    _stale_out="$_tmpdir/stale.out"
+
+    printf '\n=== memory-hive optimize (%s) ===\n' "$_mode"
+    printf '%s\n\n' '------------------------------'
+
+    printf -- '--- 1. doctor (health) ---\n'
+    set +e
+    mh_doctor > "$_doctor_out" 2>&1
+    _doctor_rc=$?
+    set -e
+    cat "$_doctor_out"
+    printf '\n'
+
+    printf -- '--- 2. curate (%s) ---\n' "$_mode"
+    if [ "$_apply" -eq 1 ]; then
+        mh_curate --apply > "$_curate_out" 2>&1 || :
+    else
+        mh_curate --dry-run > "$_curate_out" 2>&1 || :
+    fi
+    cat "$_curate_out"
+    printf '\n'
+
+    printf -- '--- 3. digest --week (recent activity) ---\n'
+    mh_digest --week > "$_digest_out" 2>&1 || :
+    cat "$_digest_out"
+    printf '\n'
+
+    printf -- '--- 4. stats (file-backed counts) ---\n'
+    mh_stats > "$_stats_out" 2>&1 || :
+    cat "$_stats_out"
+    printf '\n'
+
+    printf -- '--- 5. stale backlog signal ---\n'
+    mh_stale --count > "$_stale_out" 2>&1 || printf '0\n' > "$_stale_out"
+    _stale_count="$(tr -dc '0-9' < "$_stale_out")"
+    [ -n "$_stale_count" ] || _stale_count=0
+    printf 'stale_raw_learnings=%s\n' "$_stale_count"
+    printf '\n'
+
+    _curate_summary="$(awk '/^[0-9]+ clusters need attention,/ {line=$0} END {print line}' "$_curate_out" 2>/dev/null)"
+    [ -n "$_curate_summary" ] || _curate_summary="curate summary unavailable"
+    _doctor_status="ok"
+    [ "$_doctor_rc" -ne 0 ] && _doctor_status="attention"
+
+    printf -- '--- optimizer summary ---\n'
+    printf 'doctor=%s\n' "$_doctor_status"
+    printf 'curate=%s\n' "$_curate_summary"
+    printf 'stale_raw_learnings=%s\n' "$_stale_count"
+    if [ "$_stale_count" -gt 0 ] 2>/dev/null; then
+        printf 'next: memory-hive stale | head, then memory-hive promote <raw-file> or memory-hive curate --apply\n'
+    elif [ "$_doctor_rc" -ne 0 ]; then
+        printf 'next: inspect doctor warnings above, then rerun memory-hive optimize\n'
+    else
+        printf 'next: hive is healthy; use memory-hive digest --today for the next operator check\n'
+    fi
+
+    if [ -n "$_report" ]; then
+        _report_dir="$(dirname "$_report")"
+        mkdir -p "$_report_dir"
+        {
+            printf '# Memory Hive Optimizer Report\n\n'
+            printf -- '- generated: %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+            printf -- '- mode: %s\n' "$_mode"
+            printf -- '- doctor: %s\n' "$_doctor_status"
+            printf -- '- stale_raw_learnings: %s\n' "$_stale_count"
+            printf -- '- curate: %s\n\n' "$_curate_summary"
+            printf '## Swarm Signals\n\n'
+            printf -- '- memory_health: %s\n' "$_doctor_status"
+            printf -- '- stale_backlog: %s\n' "$_stale_count"
+            printf -- '- routing_hint: '
+            if [ "$_stale_count" -gt 0 ] 2>/dev/null; then
+                printf 'prefer curator/reviewer lane before adding more raw learnings\n'
+            elif [ "$_doctor_rc" -ne 0 ]; then
+                printf 'repair hive health before large swarm fanout\n'
+            else
+                printf 'safe for normal swarm fanout\n'
+            fi
+            printf '\n## Curate Summary\n\n%s\n\n' "$_curate_summary"
+            printf '## Doctor Output\n\n```text\n'
+            cat "$_doctor_out"
+            printf '\n```\n'
+        } > "$_report"
+        printf 'report=%s\n' "$_report"
+    fi
+
+    rm -rf "$_tmpdir"
+    return 0
+}
+
+
 # mh_bundle — concatenate canonical hive surfaces into a single
 # prompt-injection-ready markdown blob. Default goes to stdout; --out
 # writes to a file. --for <agent> appends that agent's silo (context +
@@ -6439,6 +6602,7 @@ case "$_verb" in
     lint)     mh_lint "$@" ;;
     digest)   mh_digest "$@" ;;
     curate)   mh_curate "$@" ;;
+    optimize|optimizer) mh_optimize "$@" ;;
     bundle)   mh_bundle "$@" ;;
     reflect)  mh_reflect "$@" ;;
     seed)     mh_seed "$@" ;;

@@ -6,7 +6,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- None at the moment.
+- Folded Optimizer into Memory Hive as `memory-hive optimize` / `optimizer`, a built-in health + curation + digest + stats loop with optional Swarm/Console report output.
+- Documented Optimizer as an internal maintenance workflow rather than a separate product surface.
 
 ## [0.3.2] — 2026-04-28 — `memory lifecycle governance`
 

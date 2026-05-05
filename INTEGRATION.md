@@ -140,10 +140,25 @@ sh ~/.memory-hive/memory-hive list
 sh ~/.memory-hive/memory-hive rename backend-eng api-eng
 sh ~/.memory-hive/memory-hive archive api-eng
 sh ~/.memory-hive/memory-hive role api-eng   # opens $EDITOR on context.md
+sh ~/.memory-hive/memory-hive optimize      # built-in hygiene + curation report
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for the dev workflow and
 [MIGRATION.md](MIGRATION.md) for upgrade paths from older setups.
+
+## Built-in Optimizer loop
+
+Optimizer is folded into Memory Hive as a command, not installed as another
+product. Run:
+
+```bash
+sh ~/.memory-hive/memory-hive optimize
+sh ~/.memory-hive/memory-hive optimize --report ~/.memory-hive/hive/optimizer/SWARM_SIGNALS.md
+```
+
+The command composes existing file-backed checks: `doctor`, `curate`,
+`digest --week`, `stats`, and `stale --count`. The optional report is compact
+markdown for Console dashboards or Hive Swarm routing decisions.
 
 ## What's in a silo
 
