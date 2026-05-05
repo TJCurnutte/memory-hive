@@ -6,9 +6,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
-- Confirmed `https://github.com/TJCurnutte/memory-hive` as the canonical Hive GitHub repo; other Hive product repos should fold into it and be deleted/archived.
+- Repositioned Memory Hive as the public home for the Hive memory layer: local-first Markdown memory, private agent silos, shared curated knowledge, and one POSIX CLI.
+- Reworked the README around product clarity, quick start, demo data, the memory loop, supported tools, and practical command paths.
+- Added push-to-main GitHub Release automation so every new push appears as a `release-YYYYMMDD-HHMMSS-<sha>` release, while versioned tags still publish changelog-backed releases.
 - Absorbed the old HiveOptimizer safety workflow into Memory Hive: checkpoint before apply-mode optimization, inventory before pruning, archive before delete, and routing/model-spend audits as inputs to the optimizer loop.
-- Folded Optimizer into Memory Hive as `memory-hive optimize` / `optimizer`, a built-in health + curation + digest + stats loop with optional built-in swarm-routing report output.
+- Folded Optimizer into Memory Hive as `memory-hive optimize` / `optimizer`, a built-in health + curation + digest + stats loop with optional built-in routing report output.
 - Documented Optimizer as an internal maintenance workflow rather than a separate product surface.
 
 ## [0.3.2] — 2026-04-28 — `memory lifecycle governance`
@@ -86,13 +88,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ### Added
 
 - **Hive Swarm interop note** in `templates/platforms/hermes.md`. The
-  hardware-aware swarm controller (compute layer, sister to Memory
-  Hive's memory layer) now ships separately at
-  [github.com/TJCurnutte/hive-swarm](https://github.com/TJCurnutte/hive-swarm)
-  / [hiveswarm.neural-forge.io](https://hiveswarm.neural-forge.io).
-  Documents how to mount the hive across a multi-machine mesh, namespace
-  silos by hostname, and use `memory-hive bundle --for <agent>` to ship
-  context to remote workers.
+  hardware-aware swarm controller is treated as a compute layer adjacent to
+  Memory Hive's memory layer. The docs explain how to mount the hive across
+  a multi-machine mesh, namespace silos by hostname, and use
+  `memory-hive bundle --for <agent>` to ship context to remote workers.
 
 ## [0.3.0] — 2026-04-25 — `autonomous curator + onboarding`
 

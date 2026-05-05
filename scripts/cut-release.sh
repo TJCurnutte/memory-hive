@@ -1,5 +1,9 @@
 #!/bin/sh
-# cut-release.sh — bump version, tag, push. The Release workflow does the rest.
+# cut-release.sh — cut a manual versioned release.
+#
+# Every push to main now also creates a generated GitHub Release via
+# .github/workflows/release.yml. Use this script only when you want a
+# human-named version tag like v0.3.3 with CHANGELOG-backed notes.
 #
 # Usage:
 #   scripts/cut-release.sh 0.3.0
