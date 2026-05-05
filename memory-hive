@@ -6609,6 +6609,7 @@ case "$_verb" in
     dedup)    mh_dedup "$@" ;;
     conflicts) mh_conflicts "$@" ;;
     query|search) mh_query "$@" ;;
+    recall)   python3 "$(dirname "$0")/memory_hive_recall.py" "$@" ;;
     lint)     mh_lint "$@" ;;
     digest)   mh_digest "$@" ;;
     curate)   mh_curate "$@" ;;
