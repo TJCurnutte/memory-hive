@@ -199,7 +199,7 @@ fi
 # Install the helper scripts into the install dir so users can run them
 # locally without a curl round-trip. These are tools (not user content) and
 # we always keep them current with upstream.
-for helper in create-agent.sh update.sh install.sh check-compliance.sh memory-hive; do
+for helper in create-agent.sh update.sh install.sh check-compliance.sh memory-hive memory_hive_recall.py; do
     _src="$TMP_DIR/memory-hive/$helper"
     [ -f "$_src" ] || continue
     cp "$_src" "$INSTALL_DIR/$helper"

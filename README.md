@@ -45,17 +45,21 @@ Everything is local Markdown under `~/.memory-hive`. No account. No daemon. No d
 | **Shared hive knowledge** | Agents contribute raw learnings; `main` curates durable truth into shared knowledge. |
 | **Drop-in tool wiring** | Installer detects Claude Code, Cursor, Codex, Hermes, Aider, Gemini CLI, Goose, and more. |
 | **Operator CLI** | `tail`, `digest`, `query`, `stats`, `doctor`, `curate`, `optimize`, and `bundle`. |
-| **Semver release history** | Versioned GitHub Releases stay readable: `v0.4.0`, `v0.3.2`, and so on. |
+| **HyperRecall / TokenFS** | v1.1 speed layer: local SQLite/FTS5 recall index, stable HiveCodes, cited bundles, cache, stale detection, and skill routing. |
+| **Semver release history** | Versioned GitHub Releases stay readable: `v1.1.0`, `v0.4.1`, and so on. |
 
 ## Start in 2 minutes
 
 ```bash
 curl -fsSL https://hive.neural-forge.io/install.sh | sh
+memory-hive doctor          # verifies install path + detected agent blocks on screen
+memory-hive recall build --json
+memory-hive recall doctor --json
 memory-hive add coder --role coder
 memory-hive list
 ```
 
-The default install is **zero-input**: no prompts, no account, no daemon. It creates `~/.memory-hive`, the reserved `main` curator silo, and managed config blocks for detected agent tools.
+The default install is **zero-input**: no prompts, no account, no daemon. It creates `~/.memory-hive`, the reserved `main` curator silo, installs the helper CLI, and writes managed config blocks for detected agent tools. Re-running the installer preserves local hive data; upstream content only overwrites shared files when you explicitly run update/sync mode.
 
 Want a guided setup instead?
 
@@ -142,6 +146,10 @@ See [INTEGRATION.md](INTEGRATION.md) for the full 23-platform table, managed-blo
 | `memory-hive tail -n 20` | see the most recent hive writes |
 | `memory-hive digest --week` | summarize recent activity |
 | `memory-hive query <term>` | search every text surface in the hive |
+| `memory-hive recall build --json` | build the v1.1 HyperRecall SQLite/FTS5 speed index |
+| `memory-hive recall query "task context" --json` | retrieve ranked snippets with source citations and HiveCodes |
+| `memory-hive recall bundle "task context" --for-agent coder` | emit a bounded cited recall bundle for agent preflight |
+| `memory-hive recall doctor --json` | verify index freshness, FTS5, stale files, and source fingerprint |
 | `memory-hive promote <raw-file>` | turn one raw learning into a curated pattern |
 | `memory-hive confidence` | find repeated observations ready for promotion |
 | `memory-hive curate --dry-run` | preview the curation queue |
@@ -154,7 +162,7 @@ See [INTEGRATION.md](INTEGRATION.md) for the full 23-platform table, managed-blo
 
 **Lifecycle** — `add`, `list`, `archive`, `role`, `rename`, `register`, `setup`, `apply`, `doctor`, `seed`.
 
-**Observability** — `tail`, `watch`, `stats`, `digest`, `query`, `diff`, `checkpoint`, `bundle`, `optimize`.
+**Observability** — `tail`, `watch`, `stats`, `digest`, `query`, `diff`, `checkpoint`, `bundle`, `optimize`, `recall` / `hyper`.
 
 **Curator workflow** — `dedup`, `confidence`, `promote`, `stale`, `lint`, `tag`, `tags`, `citations`, `conflicts`, `reflect`, `curate`, `optimize`.
 

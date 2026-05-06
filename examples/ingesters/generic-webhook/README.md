@@ -10,7 +10,7 @@ jobs, internal tools, a `curl` from your editor.
 ```bash
 export MEMORY_HIVE_DIR=~/.memory-hive       # optional
 export WEBHOOK_PORT=8787                     # optional, default 8787
-export WEBHOOK_TOKEN=somesharedsecret        # optional — required as ?token=... if set
+export WEBHOOK_TOKEN=FAKE_DO_NOT_USE_WEBHOOK_TOKEN  # optional — required as ?token=... if set
 
 python3 webhook_ingester.py
 # [webhook] listening on http://127.0.0.1:8787  writing to ~/.memory-hive/hive/raw

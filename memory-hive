@@ -1324,6 +1324,17 @@ Usage:
       grouped by file, ANSI-highlighted on a tty, exits 1 if no
       matches. Run \`memory-hive query --help\` for full flag docs.
 
+  memory-hive recall|hyper build|update|query|bundle|stats|doctor|gc|bench|skills
+      Built-in Memory Hive HyperRecall index. Source of truth stays
+      markdown; the derived SQLite cache lives at hive/.hivecode/index.sqlite
+      and can be rebuilt at any time.
+      Examples:
+        memory-hive recall build --json
+        memory-hive recall query "operator context" --limit 5 --json
+        memory-hive recall bundle "task context" --for-agent hermes --max-tokens 1200
+        memory-hive recall stats --json
+        memory-hive recall doctor --json
+
   memory-hive lint [--fix] [--strict] [<path>]
       Validate every raw learning file's frontmatter + content against
       the documented schema (HIVE_ARCHITECTURE.md). Reports issues with
@@ -6609,6 +6620,7 @@ case "$_verb" in
     dedup)    mh_dedup "$@" ;;
     conflicts) mh_conflicts "$@" ;;
     query|search) mh_query "$@" ;;
+    recall|hyper) if [ -d "$HIVE_DIR" ]; then MEMORY_HIVE_DIR="$HIVE_DIR" python3 "$(dirname "$0")/memory_hive_recall.py" "$@"; else MEMORY_HIVE_DIR="$INSTALL_DIR" python3 "$(dirname "$0")/memory_hive_recall.py" "$@"; fi ;;
     lint)     mh_lint "$@" ;;
     digest)   mh_digest "$@" ;;
     curate)   mh_curate "$@" ;;
