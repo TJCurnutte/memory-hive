@@ -474,13 +474,24 @@ def _redact(text: str) -> str:
     return SECRET_RE.sub("[REDACTED]", text)
 
 
+def _backend_status(hive_root: str | os.PathLike[str], use_fts: bool = True) -> tuple[str, str]:
+    status = index_status(hive_root)
+    if not use_fts:
+        return "lexical", "forced"
+    if status.fts5 == "available":
+        return "fts5", "none"
+    return "lexical", "fts5-unavailable"
+
+
 def query(hive_root: str | os.PathLike[str], text: str, *, limit: int = 5, for_agent: str | None = None, use_fts: bool = True) -> list[QueryResult]:
     rows = _query_rows(hive_root, text, limit=limit, for_agent=for_agent)
     terms = [w.lower() for w in WORD_RE.findall(text)]
+    backend, _ = _backend_status(hive_root, use_fts=use_fts)
+    reason = "fts5-term-match" if backend == "fts5" else "lexical-term-match"
     out: list[QueryResult] = []
     for row in rows:
         score = _score(row["text"], row["heading_path"], row["rel_path"], terms)
-        out.append(QueryResult(int(row["chunk_id"]), row["code"], score, "term-match", _citation(row), _redact(row["text"])))
+        out.append(QueryResult(int(row["chunk_id"]), row["code"], score, reason, _citation(row), _redact(row["text"])))
     return out
 
 
@@ -496,13 +507,16 @@ def resolve_code(hive_root: str | os.PathLike[str], code: str) -> ResolveResult:
     return ResolveResult(int(row["chunk_id"]), code, _citation(row), _redact(current.decode("utf-8", errors="replace")), "STALE" if stale else "OK", "Rebuild the HiveCode index before using this citation." if stale else "Citation is current.", stale)
 
 
-def query_json(hive_root: str | os.PathLike[str], text: str, *, limit: int = 5, for_agent: str | None = None) -> dict[str, object]:
+def query_json(hive_root: str | os.PathLike[str], text: str, *, limit: int = 5, for_agent: str | None = None, use_fts: bool = True) -> dict[str, object]:
+    backend, fallback = _backend_status(hive_root, use_fts=use_fts)
     return {
         "query": text,
+        "backend": backend,
+        "fallback": fallback,
         "index": asdict(index_status(hive_root)),
         "results": [
             {"code": r.code, "score": r.score, "reason": r.reason, "citation": asdict(r.citation), "snippet": r.snippet}
-            for r in query(hive_root, text, limit=limit, for_agent=for_agent)
+            for r in query(hive_root, text, limit=limit, for_agent=for_agent, use_fts=use_fts)
         ],
     }
 
@@ -531,6 +545,20 @@ def bundle(hive_root: str | os.PathLike[str], text: str, *, max_tokens: int = 12
     return BundleResult(out, _estimated_tokens(out), kept)
 
 
+def bundle_json(hive_root: str | os.PathLike[str], text: str, *, max_tokens: int = 1200, for_agent: str | None = None) -> dict[str, object]:
+    built = bundle(hive_root, text, max_tokens=max_tokens, for_agent=for_agent)
+    return {
+        "query": text,
+        "estimated_tokens": built.estimated_tokens,
+        "max_tokens": max_tokens,
+        "text": built.text,
+        "results": [
+            {"code": r.code, "score": r.score, "reason": r.reason, "citation": asdict(r.citation), "snippet": r.snippet}
+            for r in built.results
+        ],
+    }
+
+
 def _hive_from_args(ns: argparse.Namespace) -> Path:
     return Path(ns.hive or os.environ.get("MEMORY_HIVE_DIR") or ".")
 
@@ -553,6 +581,7 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--hive")
     b.add_argument("--max-tokens", type=int, default=1200)
     b.add_argument("--for-agent")
+    b.add_argument("--json", action="store_true")
     ns = parser.parse_args(argv)
     hive = _hive_from_args(ns)
     try:
@@ -566,7 +595,10 @@ def main(argv: list[str] | None = None) -> int:
         elif ns.cmd == "query":
             payload = query_json(hive, ns.query, limit=ns.limit, for_agent=ns.for_agent)
         elif ns.cmd == "bundle":
-            print(bundle(hive, ns.query, max_tokens=ns.max_tokens, for_agent=ns.for_agent).text)
+            if ns.json:
+                print(json.dumps(bundle_json(hive, ns.query, max_tokens=ns.max_tokens, for_agent=ns.for_agent), sort_keys=True))
+            else:
+                print(bundle(hive, ns.query, max_tokens=ns.max_tokens, for_agent=ns.for_agent).text)
             return 0
         else:
             parser.error("unknown command")

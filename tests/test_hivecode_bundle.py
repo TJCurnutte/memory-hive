@@ -34,7 +34,7 @@ class HiveCodeBundleTests(unittest.TestCase):
 
     def test_json_output_is_valid_and_stable_keys(self):
         payload = self.recall.query_json(self.hive, "zephyr-honeycomb", limit=1)
-        self.assertEqual(set(payload.keys()), {"query", "results", "index"})
+        self.assertEqual(set(payload.keys()), {"query", "results", "index", "backend", "fallback"})
         result = payload["results"][0]
         self.assertEqual(
             set(result.keys()),
