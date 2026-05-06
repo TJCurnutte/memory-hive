@@ -948,12 +948,14 @@ fi
 #     and for each one: name + role template.
 #   - Re-install (non-main silos already present): ask keep/add/fresh/select.
 #
-# Default behavior: NO wizard. The installer runs silently, scaffolds the
-# reserved `main` silo, and exits. Users who want the interactive setup
-# flow opt in with MEMORY_HIVE_WIZARD=1 (or `memory-hive setup` after
-# install, which re-invokes this script with the flag set).
+# Default behavior: first-run setup wizard when the installer has a real tty.
+# `curl ... | sh` gets a guided setup automatically on a clean hive, while
+# reinstalls with existing agents stay non-interactive unless the user asks for
+# `MEMORY_HIVE_WIZARD=1` or runs `memory-hive setup`.
 #
-# This keeps `curl | sh` a one-shot, no-input-required install.
+# Set MEMORY_HIVE_WIZARD=0 to force silent install.
+
+WIZARD_MODE="${MEMORY_HIVE_WIZARD:-auto}"
 
 # Decide where the wizard reads from (only relevant when WIZARD is enabled):
 #   - stdin is a tty                          → read from stdin directly
@@ -965,18 +967,22 @@ fi
 #
 # $WIZARD_TTY ends up: "stdin", "fd3", or "" (no wizard).
 WIZARD_TTY=""
-if [ "${MEMORY_HIVE_WIZARD:-0}" = "1" ]; then
-    if [ -t 0 ]; then
-        WIZARD_TTY="stdin"
-    elif [ -t 1 ] && [ -r /dev/tty ] && { exec 3</dev/tty; } 2>/dev/null; then
-        WIZARD_TTY="fd3"
-    elif [ -p /dev/stdin ] 2>/dev/null || [ -f /dev/stdin ] 2>/dev/null; then
-        # Piped (pipe) or redirected (regular file) stdin — e.g. heredoc.
-        # Reads return EOF cleanly if the stream is empty, so the wizard
-        # exits gracefully for `< /dev/null` in CI.
-        WIZARD_TTY="stdin"
-    fi
-fi
+case "$WIZARD_MODE" in
+    0|false|FALSE|no|NO|off|OFF)
+        :
+        ;;
+    *)
+        if [ -t 0 ]; then
+            WIZARD_TTY="stdin"
+        elif [ -t 1 ] && [ -r /dev/tty ] && { exec 3</dev/tty; } 2>/dev/null; then
+            WIZARD_TTY="fd3"
+        elif [ "$WIZARD_MODE" != "auto" ] && { [ -p /dev/stdin ] 2>/dev/null || [ -f /dev/stdin ] 2>/dev/null; }; then
+            # Explicit wizard with piped/redirected stdin — e.g. heredoc tests.
+            # Reads return EOF cleanly if the stream is empty.
+            WIZARD_TTY="stdin"
+        fi
+        ;;
+esac
 
 # _wizard_read <varname> [default]
 # Read a line from the wizard tty into the named variable. Honors $default if
@@ -1542,11 +1548,18 @@ _wizard_import_flow() {
 }
 
 WIZARD_RAN=0
+WIZARD_AUTO_SKIPPED=0
 if [ -n "$WIZARD_TTY" ]; then
     _existing_nonmain="$(_list_non_main_agents)"
     if [ -n "$_existing_nonmain" ]; then
-        _wizard_reconcile_flow "$_existing_nonmain"
-        WIZARD_RAN=1
+        if [ "$WIZARD_MODE" = "auto" ]; then
+            # Reinstall/update path: don't drop the user into reconciliation by
+            # surprise. They can run `memory-hive setup` when they want it.
+            WIZARD_AUTO_SKIPPED=1
+        else
+            _wizard_reconcile_flow "$_existing_nonmain"
+            WIZARD_RAN=1
+        fi
     else
         _importable="$(_list_importable_agents)"
         if [ -n "$_importable" ]; then
@@ -1690,34 +1703,62 @@ else
     printf '  Check compliance: sh %s/check-compliance.sh\n' "$_install_display"
 fi
 
-# Always list the current roster at the end. Readers know exactly what
-# they have now (beyond "Silos created: a b c..."). Reads on-disk silos
-# directly — no dependency on `memory-hive register` having been called.
+if [ "$COMMAND_SHIM_STATUS" = "installed-on-path" ] || [ "$COMMAND_SHIM_STATUS" = "already-on-path" ]; then
+    _cli_prefix="memory-hive"
+else
+    _cli_prefix="sh $_install_display/memory-hive"
+fi
+
+# Compact roster summary. Long swarms should not flood the install banner;
+# `memory-hive list` remains the full roster view.
 printf '\n%sYour roster:%s\n' "$BOLD" "$RESET"
-_mh_roster_any=0
-# Sort so output is deterministic across runs and filesystems.
 _mh_roster_tmp="$(mktemp -t mh-roster.XXXXXX)" || _mh_roster_tmp=""
+_mh_roster_total=0
+_mh_roster_with_role=0
+_mh_roster_no_role=0
+_mh_roster_incomplete=0
+_mh_roster_preview=""
 if [ -n "$_mh_roster_tmp" ]; then
     find "$AGENTS_DIR" -mindepth 1 -maxdepth 1 -type d 2>/dev/null | sort > "$_mh_roster_tmp"
     while IFS= read -r _rd; do
         [ -n "$_rd" ] || continue
         _rn="$(basename "$_rd")"
-        _rd="$AGENTS_DIR/$_rn"
-        [ -d "$_rd" ] || continue
         case "$_rn" in
             _archived|.*) continue ;;
         esac
-        _mh_roster_any=1
+        _mh_roster_total=$((_mh_roster_total + 1))
+        if [ "$_mh_roster_total" -le 8 ]; then
+            if [ -z "$_mh_roster_preview" ]; then _mh_roster_preview="$_rn"; else _mh_roster_preview="$_mh_roster_preview, $_rn"; fi
+        fi
+        _rd="$AGENTS_DIR/$_rn"
+        if [ ! -f "$_rd/log.md" ] || [ ! -f "$_rd/context.md" ] || [ ! -f "$_rd/memory.md" ]; then
+            _mh_roster_incomplete=$((_mh_roster_incomplete + 1))
+            continue
+        fi
+        _rrole="$(awk '/^## Role$/{flag=1;next} /^## /{flag=0} flag' "$_rd/context.md" \
+            | sed -e 's/^[[:space:]]*//' -e '/^$/d' -e 's/\.[[:space:]]*$/./' \
+            | head -1 | cut -c1-72)"
+        case "$_rrole" in
+            "(What is this agent"*|"") _mh_roster_no_role=$((_mh_roster_no_role + 1)) ;;
+            *) _mh_roster_with_role=$((_mh_roster_with_role + 1)) ;;
+        esac
+    done < "$_mh_roster_tmp"
+fi
+if [ "$_mh_roster_total" -eq 0 ]; then
+    printf '  (empty — the installer did not find or create any silos)\n'
+elif [ "$_mh_roster_total" -le 12 ]; then
+    while IFS= read -r _rd; do
+        [ -n "$_rd" ] || continue
+        _rn="$(basename "$_rd")"
+        case "$_rn" in _archived|.*) continue ;; esac
         _rrole=""
         if [ -f "$_rd/context.md" ]; then
             _rrole="$(awk '/^## Role$/{flag=1;next} /^## /{flag=0} flag' "$_rd/context.md" \
                 | sed -e 's/^[[:space:]]*//' -e '/^$/d' -e 's/\.[[:space:]]*$/./' \
                 | head -1 | cut -c1-72)"
-            case "$_rrole" in
-                "(What is this agent"*|"") _rrole="(no role set)" ;;
-            esac
+            case "$_rrole" in "(What is this agent"*|"") _rrole="(no role set)" ;; esac
         else
-            _rrole="(no context.md)"
+            _rrole="(incomplete silo)"
         fi
         if [ "$_rn" = "main" ]; then
             printf '  %s%-20s%s %s\n' "$CYAN" "$_rn" "$RESET" "$_rrole"
@@ -1725,20 +1766,20 @@ if [ -n "$_mh_roster_tmp" ]; then
             printf '  %-20s %s\n' "$_rn" "$_rrole"
         fi
     done < "$_mh_roster_tmp"
-    rm -f "$_mh_roster_tmp"
+else
+    _more=$((_mh_roster_total - 8))
+    printf '  %s agents total: %s with roles, %s without roles, %s incomplete.\n' \
+        "$_mh_roster_total" "$_mh_roster_with_role" "$_mh_roster_no_role" "$_mh_roster_incomplete"
+    printf '  Preview: %s' "$_mh_roster_preview"
+    [ "$_more" -gt 0 ] && printf ', +%s more' "$_more"
+    printf '\n'
+    printf '  Full roster: %s list\n' "$_cli_prefix"
 fi
-if [ "$_mh_roster_any" -eq 0 ]; then
-    printf '  (empty — the installer did not find or create any silos)\n'
-fi
+[ -n "$_mh_roster_tmp" ] && rm -f "$_mh_roster_tmp"
 
 # Always show the CLI + "add more agents" hint. In the default zero-input
 # install this is the only way the user learns how to populate their roster.
 printf '\n'
-if [ "$COMMAND_SHIM_STATUS" = "installed-on-path" ] || [ "$COMMAND_SHIM_STATUS" = "already-on-path" ]; then
-    _cli_prefix="memory-hive"
-else
-    _cli_prefix="sh $_install_display/memory-hive"
-fi
 if [ "$WIZARD_RAN" -eq 0 ]; then
     printf 'Next steps:\n'
     printf '  %s add <name> --role coder   # add an agent\n' "$_cli_prefix"

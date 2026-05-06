@@ -62,6 +62,52 @@ class InstallPathTests(unittest.TestCase):
             self.assertIn("Command ready: memory-hive", install_out)
             self.assertNotIn("Tip: add", install_out)
 
+    def test_installer_compacts_long_roster_in_success_banner(self):
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            home = root / "home"
+            path_bin = root / "bin"
+            install_dir = home / ".memory-hive"
+            agents_dir = install_dir / "hive" / "agents"
+            home.mkdir()
+            path_bin.mkdir()
+            for idx in range(1, 21):
+                agent_dir = agents_dir / f"agent-{idx:02d}"
+                agent_dir.mkdir(parents=True)
+                (agent_dir / "log.md").write_text("# Log\n", encoding="utf-8")
+                (agent_dir / "memory.md").write_text("# Memory\n", encoding="utf-8")
+                (agent_dir / "context.md").write_text("# Context\n\n## Role\n\nWrites code.\n", encoding="utf-8")
+
+            output = root / "install.out"
+            env = os.environ.copy()
+            env.update(
+                {
+                    "HOME": str(home),
+                    "PATH": f"{path_bin}:/usr/bin:/bin",
+                    "MEMORY_HIVE_DIR": str(install_dir),
+                    "MEMORY_HIVE_REPO": str(REPO_ROOT),
+                    "MEMORY_HIVE_ONLY": "none",
+                    "MEMORY_HIVE_WIZARD": "0",
+                }
+            )
+            proc = subprocess.run(
+                ["/bin/sh", str(INSTALL_SH)],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=env,
+                timeout=60,
+            )
+            output.write_text(proc.stdout + proc.stderr, encoding="utf-8")
+            if proc.returncode != 0:
+                raise AssertionError(output.read_text(encoding="utf-8"))
+
+            install_out = output.read_text(encoding="utf-8")
+            self.assertIn("agents total", install_out)
+            self.assertIn("Full roster: memory-hive list", install_out)
+            self.assertIn("Preview:", install_out)
+            self.assertNotIn("agent-20             Writes code", install_out)
+
 
 if __name__ == "__main__":
     unittest.main()
