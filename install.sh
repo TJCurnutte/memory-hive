@@ -206,6 +206,77 @@ for helper in create-agent.sh update.sh install.sh check-compliance.sh memory-hi
     chmod +x "$INSTALL_DIR/$helper" 2>/dev/null || true
 done
 
+# Install a bare `memory-hive` command into the user's existing PATH when
+# possible. This is deliberately done in addition to installing
+# $INSTALL_DIR/memory-hive: a piped installer (`curl ... | sh`) cannot mutate the
+# parent shell's PATH for the very next pasted command, so the only way
+# `memory-hive doctor` works immediately is to place a shim in a directory that
+# is already on PATH.
+COMMAND_SHIM_PATH=""
+COMMAND_SHIM_STATUS="not-installed"
+COMMAND_SHIM_NOTE=""
+_install_memory_hive_command_shim() {
+    _target="$INSTALL_DIR/memory-hive"
+    [ -x "$_target" ] || return 0
+
+    # Already available? Leave it alone, but record the path for the banner.
+    _existing="$(command -v memory-hive 2>/dev/null || true)"
+    if [ -n "$_existing" ]; then
+        COMMAND_SHIM_PATH="$_existing"
+        COMMAND_SHIM_STATUS="already-on-path"
+        return 0
+    fi
+
+    # First pass: use an existing writable directory that is already on PATH.
+    _old_ifs="$IFS"
+    IFS=:
+    for _dir in $PATH; do
+        IFS="$_old_ifs"
+        [ -n "$_dir" ] || _dir="."
+        [ -d "$_dir" ] || { IFS=:; continue; }
+        [ -w "$_dir" ] || { IFS=:; continue; }
+        case "$_dir" in
+            /bin|/sbin|/usr/bin|/usr/sbin|/System/*|/Library/Apple/*) IFS=:; continue ;;
+        esac
+        _shim="$_dir/memory-hive"
+        if [ -e "$_shim" ]; then
+            IFS=:
+            continue
+        fi
+        _target_q="'$(printf '%s' "$_target" | sed "s/'/'\\\\''/g")'"
+        if ln -s "$_target" "$_shim" 2>/dev/null || { printf '#!/bin/sh\nexec %s "$@"\n' "$_target_q" > "$_shim" 2>/dev/null && chmod +x "$_shim" 2>/dev/null; }; then
+            COMMAND_SHIM_PATH="$_shim"
+            COMMAND_SHIM_STATUS="installed-on-path"
+            IFS="$_old_ifs"
+            return 0
+        fi
+        IFS=:
+    done
+    IFS="$_old_ifs"
+
+    # Fallback: create ~/.local/bin/memory-hive and persist PATH for future
+    # shells. This cannot affect the already-running parent shell, but it keeps
+    # the next terminal session zero-troubleshoot.
+    _local_bin="$HOME/.local/bin"
+    if mkdir -p "$_local_bin" 2>/dev/null; then
+        _shim="$_local_bin/memory-hive"
+        _target_q="'$(printf '%s' "$_target" | sed "s/'/'\\\\''/g")'"
+        if [ ! -e "$_shim" ] && (ln -s "$_target" "$_shim" 2>/dev/null || { printf '#!/bin/sh\nexec %s "$@"\n' "$_target_q" > "$_shim" 2>/dev/null && chmod +x "$_shim" 2>/dev/null; }); then
+            COMMAND_SHIM_PATH="$_shim"
+            COMMAND_SHIM_STATUS="installed-profile-path"
+            COMMAND_SHIM_NOTE="Restart your terminal, then run: memory-hive doctor"
+            for _profile in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.profile"; do
+                [ -f "$_profile" ] || continue
+                if ! grep -q 'HOME/.local/bin' "$_profile" 2>/dev/null && ! grep -q '\.local/bin' "$_profile" 2>/dev/null; then
+                    printf '\n# Memory Hive CLI\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$_profile" 2>/dev/null || true
+                    break
+                fi
+            done
+        fi
+    fi
+}
+_install_memory_hive_command_shim
+
 # Install role templates so the wizard and CLI can seed context.md from them.
 if [ -d "$TMP_DIR/memory-hive/templates/roles" ]; then
     mkdir -p "$INSTALL_DIR/templates/roles"
@@ -1582,6 +1653,21 @@ elif [ -n "$EXISTING_SILOS" ]; then
 fi
 
 printf '  Shared hive:  %s/\n' "$_hive_display"
+case "$COMMAND_SHIM_STATUS" in
+    installed-on-path)
+        printf '  Command ready: memory-hive (%s)\n' "$(display_path "$COMMAND_SHIM_PATH")"
+        ;;
+    already-on-path)
+        printf '  Command ready: memory-hive (%s)\n' "$(display_path "$COMMAND_SHIM_PATH")"
+        ;;
+    installed-profile-path)
+        printf '  Command installed for new shells: memory-hive (%s)\n' "$(display_path "$COMMAND_SHIM_PATH")"
+        [ -n "$COMMAND_SHIM_NOTE" ] && printf '  Note: %s\n' "$COMMAND_SHIM_NOTE"
+        ;;
+    *)
+        printf '  Command fallback: sh %s/memory-hive\n' "$_install_display"
+        ;;
+esac
 
 printf '\n'
 
@@ -1648,12 +1734,21 @@ fi
 # Always show the CLI + "add more agents" hint. In the default zero-input
 # install this is the only way the user learns how to populate their roster.
 printf '\n'
+if [ "$COMMAND_SHIM_STATUS" = "installed-on-path" ] || [ "$COMMAND_SHIM_STATUS" = "already-on-path" ]; then
+    _cli_prefix="memory-hive"
+else
+    _cli_prefix="sh $_install_display/memory-hive"
+fi
 if [ "$WIZARD_RAN" -eq 0 ]; then
     printf 'Next steps:\n'
-    printf '  sh %s/memory-hive add <name> --role coder   # add an agent\n' "$_install_display"
-    printf '  sh %s/memory-hive list                       # see what you have\n' "$_install_display"
-    printf '  sh %s/memory-hive setup                      # guided setup (optional)\n' "$_install_display"
+    printf '  %s add <name> --role coder   # add an agent\n' "$_cli_prefix"
+    printf '  %s list                       # see what you have\n' "$_cli_prefix"
+    printf '  %s setup                      # guided setup (optional)\n' "$_cli_prefix"
 else
-    printf 'CLI: sh %s/memory-hive (add|list|role|rename|archive|setup|doctor|register)\n' "$_install_display"
+    printf 'CLI: %s (add|list|role|rename|archive|setup|doctor|register)\n' "$_cli_prefix"
 fi
-printf 'Tip: add %s to your PATH to drop the "sh ...memory-hive" prefix.\n' "$_install_display"
+if [ "$COMMAND_SHIM_STATUS" = "installed-profile-path" ]; then
+    printf 'Tip: open a new terminal to use `memory-hive` directly.\n'
+elif [ "$COMMAND_SHIM_STATUS" = "not-installed" ]; then
+    printf 'Tip: add %s to your PATH to drop the "sh ...memory-hive" prefix.\n' "$_install_display"
+fi
