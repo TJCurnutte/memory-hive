@@ -36,7 +36,7 @@ class HiveCodeLoop06UxTests(unittest.TestCase):
     def test_recall_bundle_json_cli_reports_budget_and_citations(self):
         proc = run_cli(["recall", "bundle", "recall evidence", "--hive", str(self.hive), "--for-agent", "hermes", "--max-tokens", "120", "--json"], hive=self.hive, check=True)
         payload = load_json_output(proc)
-        self.assertEqual(set(payload.keys()), {"query", "estimated_tokens", "max_tokens", "text", "results"})
+        self.assertEqual(set(payload.keys()), {"query", "estimated_tokens", "max_tokens", "source_fingerprint", "cache_hit", "text", "results"})
         self.assertLessEqual(payload["estimated_tokens"], 120)
         self.assertIn("hc:v1:", payload["text"])
         self.assertIn("citation", payload["results"][0])

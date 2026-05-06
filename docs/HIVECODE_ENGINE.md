@@ -2,7 +2,7 @@
 
 Status: loop-02 design freeze for the `feat/recall-engine-codes` branch.
 
-HiveCode is an optional, derived recall index for Memory Hive. It must make per-turn Hive pulls fast and bounded without replacing the Markdown hive as source of truth.
+HiveCode / HyperRecall is the built-in v1.1 recall index for Memory Hive. It must make per-turn Hive pulls fast and bounded without replacing the Markdown hive as source of truth.
 
 ## Design goals
 

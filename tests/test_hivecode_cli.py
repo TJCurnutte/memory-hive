@@ -30,7 +30,7 @@ class HiveCodeCliTests(unittest.TestCase):
         run_cli(["recall", "build", "--hive", str(self.hive), "--json"], hive=self.hive, check=True)
         proc = run_cli(["recall", "doctor", "--hive", str(self.hive), "--json"], hive=self.hive, check=True)
         payload = load_json_output(proc)
-        self.assertEqual(set(payload.keys()), {"ok", "schema_version", "fts5", "files_indexed", "stale_files"})
+        self.assertEqual(set(payload.keys()), {"ok", "schema_version", "fts5", "files_indexed", "stale_files", "missing_files", "source_fingerprint"})
         self.assertTrue(payload["ok"])
         self.assertIsInstance(payload["fts5"], bool)
 
@@ -42,6 +42,12 @@ class HiveCodeCliTests(unittest.TestCase):
         self.assertGreater(payload["chunks"], payload["files"])
         self.assertGreater(payload["codes"], 0)
         self.assertGreater(payload["db_bytes"], 0)
+
+    def test_recall_build_without_hive_flag_uses_installed_hive_dir(self):
+        proc = run_cli(["recall", "build", "--json"], hive=self.hive, check=True)
+        payload = load_json_output(proc)
+        self.assertEqual(payload["index_path"], str(self.hive / ".hivecode" / "index.sqlite"))
+        self.assertTrue((self.hive / ".hivecode" / "index.sqlite").exists())
 
     def test_recall_query_missing_index_exits_nonzero_with_useful_error(self):
         proc = run_cli(["recall", "query", "zephyr-honeycomb", "--hive", str(self.hive)], hive=self.hive)

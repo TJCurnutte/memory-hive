@@ -7,6 +7,7 @@ index and visible HiveCodes are derived, rebuildable citation accelerators.
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 import argparse
 import hashlib
@@ -21,7 +22,7 @@ from typing import Iterable
 
 DATE_RE = re.compile(r"(20\d{2})[-/](\d{2})[-/](\d{2})")
 WORD_RE = re.compile(r"[A-Za-z][A-Za-z0-9_-]{2,}")
-SECRET_RE = re.compile(r"sk-[A-Za-z0-9]{12,}|FAKE_DO_NOT_USE_[A-Za-z0-9_-]+")
+SECRET_RE = re.compile(r"sk-[A-Za-z0-9]{12,}|FAKE_DO_NOT_USE_[A-Za-z0-9_-]+|[A-Za-z0-9_-]{24,}\.[A-Za-z0-9_-]{6,}\.[A-Za-z0-9_-]{20,}")
 
 
 @dataclass(frozen=True)
@@ -323,12 +324,20 @@ def _db_path(hive_root: Path) -> Path:
 
 def _init_db(con: sqlite3.Connection) -> str:
     con.executescript("""
+    PRAGMA journal_mode=WAL;
+    PRAGMA synchronous=NORMAL;
+    PRAGMA temp_store=MEMORY;
+    PRAGMA mmap_size=268435456;
     DROP TABLE IF EXISTS chunks_fts;
+    DROP TABLE IF EXISTS skill_fts;
     DROP TABLE IF EXISTS files;
     DROP TABLE IF EXISTS chunks;
     DROP TABLE IF EXISTS codes;
     DROP TABLE IF EXISTS tokens;
     DROP TABLE IF EXISTS sketches;
+    DROP TABLE IF EXISTS skills;
+    DROP TABLE IF EXISTS bundle_cache;
+    DROP TABLE IF EXISTS access_log;
     DROP TABLE IF EXISTS meta;
     CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
     CREATE TABLE files (id INTEGER PRIMARY KEY, rel_path TEXT UNIQUE NOT NULL, kind TEXT NOT NULL, agent TEXT NOT NULL, sha256 TEXT NOT NULL, size INTEGER NOT NULL, mtime_ns INTEGER NOT NULL, indexed_at INTEGER NOT NULL);
@@ -336,9 +345,18 @@ def _init_db(con: sqlite3.Connection) -> str:
     CREATE TABLE codes (chunk_id INTEGER PRIMARY KEY, code TEXT UNIQUE NOT NULL, checksum TEXT NOT NULL, FOREIGN KEY(chunk_id) REFERENCES chunks(id));
     CREATE TABLE tokens (chunk_id INTEGER NOT NULL, token TEXT NOT NULL, weight REAL NOT NULL);
     CREATE TABLE sketches (chunk_id INTEGER PRIMARY KEY, simhash64 TEXT NOT NULL);
+    CREATE TABLE skills (id INTEGER PRIMARY KEY, name TEXT NOT NULL, rel_path TEXT NOT NULL, description TEXT NOT NULL, tags TEXT NOT NULL, text TEXT NOT NULL, sha256 TEXT NOT NULL);
+    CREATE TABLE bundle_cache (cache_key TEXT PRIMARY KEY, created_at TEXT NOT NULL, source_fingerprint TEXT NOT NULL, query TEXT NOT NULL, agent TEXT, max_tokens INTEGER NOT NULL, payload_json TEXT NOT NULL);
+    CREATE TABLE access_log (ts TEXT NOT NULL, query_hash TEXT NOT NULL, chunk_id INTEGER NOT NULL, action TEXT NOT NULL, agent TEXT, task_kind TEXT);
+    CREATE INDEX idx_files_rel_path ON files(rel_path);
+    CREATE INDEX idx_files_hash ON files(sha256);
+    CREATE INDEX idx_chunks_file ON chunks(file_id);
+    CREATE INDEX idx_codes_code ON codes(code);
+    CREATE INDEX idx_tokens_token ON tokens(token);
     """)
     try:
         con.execute("CREATE VIRTUAL TABLE chunks_fts USING fts5(text, heading_path, rel_path)")
+        con.execute("CREATE VIRTUAL TABLE skill_fts USING fts5(name, description, tags, text, rel_path)")
         return "available"
     except sqlite3.OperationalError:
         return "unavailable"
@@ -431,9 +449,66 @@ def stats(hive_root: str | os.PathLike[str]) -> dict[str, int]:
     return {"files": status.file_count, "chunks": status.chunk_count, "tokens": token_count, "codes": status.code_count, "db_bytes": status.db_bytes}
 
 
+def _indexed_file_rows(hive_root: str | os.PathLike[str]) -> list[sqlite3.Row]:
+    with _connect_existing(hive_root) as con:
+        return con.execute("SELECT rel_path, sha256, size, mtime_ns FROM files ORDER BY rel_path").fetchall()
+
+
+def source_fingerprint(hive_root: str | os.PathLike[str]) -> str:
+    parts = []
+    for row in _indexed_file_rows(hive_root):
+        parts.append(f"{row['rel_path']}:{row['sha256']}:{row['size']}:{row['mtime_ns']}")
+    return _sha256("\n".join(parts).encode("utf-8"))
+
+
 def doctor(hive_root: str | os.PathLike[str]) -> dict[str, object]:
-    status = index_status(hive_root)
-    return {"ok": True, "schema_version": status.schema_version, "fts5": status.fts5 == "available", "files_indexed": status.file_count, "stale_files": []}
+    root = Path(hive_root).resolve()
+    status = index_status(root)
+    stale: list[str] = []
+    missing: list[str] = []
+    for row in _indexed_file_rows(root):
+        path = root / row["rel_path"]
+        if not path.exists():
+            stale.append(row["rel_path"])
+            missing.append(row["rel_path"])
+            continue
+        data = path.read_bytes()
+        if _sha256(data) != row["sha256"] or path.stat().st_mtime_ns != int(row["mtime_ns"]):
+            stale.append(row["rel_path"])
+    return {"ok": len(stale) == 0, "schema_version": status.schema_version, "fts5": status.fts5 == "available", "files_indexed": status.file_count, "stale_files": stale, "missing_files": missing, "source_fingerprint": source_fingerprint(root)}
+
+
+def update_index(hive_root: str | os.PathLike[str]) -> dict[str, int | str]:
+    root = Path(hive_root).resolve()
+    existing = {row["rel_path"]: row for row in _indexed_file_rows(root)}
+    current: dict[str, tuple[str, int, int]] = {}
+    for path in iter_markdown_files(root):
+        rel_path = _rel(path, root)
+        data = path.read_bytes()
+        st = path.stat()
+        current[rel_path] = (_sha256(data), len(data), int(st.st_mtime_ns))
+    changed = 0
+    skipped = 0
+    for rel_path, meta in current.items():
+        row = existing.get(rel_path)
+        if row and row["sha256"] == meta[0] and int(row["size"]) == meta[1] and int(row["mtime_ns"]) == meta[2]:
+            skipped += 1
+        else:
+            changed += 1
+    deleted = len(set(existing) - set(current))
+    if changed or deleted:
+        build_index(root, force=True)
+    return {"ok": 1, "changed_files": changed, "skipped_files": skipped, "deleted_files": deleted, "source_fingerprint": source_fingerprint(root)}
+
+
+def gc_index(hive_root: str | os.PathLike[str]) -> dict[str, int]:
+    root = Path(hive_root).resolve()
+    stale = doctor(root)["stale_files"]
+    removed = 0
+    if stale:
+        removed = len(stale)
+        build_index(root, force=True)
+    return {"removed_files": removed}
 
 
 def _citation(row: sqlite3.Row) -> Citation:
@@ -451,12 +526,36 @@ def _score(text: str, heading: str, rel_path: str, q_terms: list[str]) -> float:
     return score
 
 
-def _query_rows(hive_root: str | os.PathLike[str], text: str, *, limit: int, for_agent: str | None = None) -> list[sqlite3.Row]:
+def _fts_query_text(text: str) -> str:
+    terms = [w.lower() for w in WORD_RE.findall(text)]
+    # Quote tokens so hyphenated user phrases split into safe FTS terms instead
+    # of being parsed as column/filter syntax.
+    return " OR ".join(f'"{t}"' for t in terms) if terms else text.replace('"', ' ')
+
+
+def _query_rows(hive_root: str | os.PathLike[str], text: str, *, limit: int, for_agent: str | None = None, use_fts: bool = True) -> list[sqlite3.Row]:
     terms = [w.lower() for w in WORD_RE.findall(text)]
     with _connect_existing(hive_root) as con:
+        status = str(con.execute("SELECT value FROM meta WHERE key='fts5'").fetchone()[0])
+        if use_fts and status == "available" and terms:
+            sql = """SELECT ch.id AS chunk_id, co.code, ch.text, ch.heading_path, ch.start_line, ch.end_line, ch.start_byte, ch.end_byte, f.rel_path, f.kind, f.agent, bm25(chunks_fts) AS bm25_score
+                     FROM chunks_fts
+                     JOIN chunks ch ON ch.id = chunks_fts.rowid
+                     JOIN files f ON f.id=ch.file_id
+                     JOIN codes co ON co.chunk_id=ch.id
+                     WHERE chunks_fts MATCH ?"""
+            params: list[object] = [_fts_query_text(text)]
+            if for_agent:
+                sql += " AND f.agent = ?"
+                params.append(for_agent)
+            sql += " ORDER BY bm25_score ASC, f.rel_path ASC, ch.start_line ASC LIMIT ?"
+            params.append(limit)
+            rows = con.execute(sql, params).fetchall()
+            if rows:
+                return rows
         sql = """SELECT ch.id AS chunk_id, co.code, ch.text, ch.heading_path, ch.start_line, ch.end_line, ch.start_byte, ch.end_byte, f.rel_path, f.kind, f.agent
                  FROM chunks ch JOIN files f ON f.id=ch.file_id JOIN codes co ON co.chunk_id=ch.id"""
-        params: list[object] = []
+        params = []
         if for_agent:
             sql += " WHERE f.agent = ?"
             params.append(for_agent)
@@ -484,7 +583,7 @@ def _backend_status(hive_root: str | os.PathLike[str], use_fts: bool = True) -> 
 
 
 def query(hive_root: str | os.PathLike[str], text: str, *, limit: int = 5, for_agent: str | None = None, use_fts: bool = True) -> list[QueryResult]:
-    rows = _query_rows(hive_root, text, limit=limit, for_agent=for_agent)
+    rows = _query_rows(hive_root, text, limit=limit, for_agent=for_agent, use_fts=use_fts)
     terms = [w.lower() for w in WORD_RE.findall(text)]
     backend, _ = _backend_status(hive_root, use_fts=use_fts)
     reason = "fts5-term-match" if backend == "fts5" else "lexical-term-match"
@@ -545,19 +644,111 @@ def bundle(hive_root: str | os.PathLike[str], text: str, *, max_tokens: int = 12
     return BundleResult(out, _estimated_tokens(out), kept)
 
 
-def bundle_json(hive_root: str | os.PathLike[str], text: str, *, max_tokens: int = 1200, for_agent: str | None = None) -> dict[str, object]:
-    built = bundle(hive_root, text, max_tokens=max_tokens, for_agent=for_agent)
-    return {
+def bundle_json(hive_root: str | os.PathLike[str], text: str, *, max_tokens: int = 1200, for_agent: str | None = None, cache: bool = False) -> dict[str, object]:
+    root = Path(hive_root).resolve()
+    fp = source_fingerprint(root)
+    cache_key = _sha256(f"{text}\0{for_agent or ''}\0{max_tokens}\0{fp}".encode("utf-8"))
+    if cache:
+        with _connect_existing(root) as con:
+            row = con.execute("SELECT payload_json FROM bundle_cache WHERE cache_key=? AND source_fingerprint=?", (cache_key, fp)).fetchone()
+            if row:
+                payload = json.loads(row["payload_json"])
+                payload["cache_hit"] = True
+                return payload
+    built = bundle(root, text, max_tokens=max_tokens, for_agent=for_agent)
+    payload = {
         "query": text,
         "estimated_tokens": built.estimated_tokens,
         "max_tokens": max_tokens,
+        "source_fingerprint": fp,
+        "cache_hit": False,
         "text": built.text,
         "results": [
             {"code": r.code, "score": r.score, "reason": r.reason, "citation": asdict(r.citation), "snippet": r.snippet}
             for r in built.results
         ],
     }
+    if cache:
+        with _connect_existing(root) as con:
+            con.execute("INSERT OR REPLACE INTO bundle_cache(cache_key, created_at, source_fingerprint, query, agent, max_tokens, payload_json) VALUES(?, ?, ?, ?, ?, ?, ?)", (cache_key, datetime.now(timezone.utc).isoformat(), fp, text, for_agent, max_tokens, json.dumps(payload, sort_keys=True)))
+            con.commit()
+    return payload
 
+
+
+
+def _parse_skill_frontmatter(text: str) -> dict[str, str]:
+    meta: dict[str, str] = {}
+    if text.startswith("---\n"):
+        end = text.find("\n---", 4)
+        if end != -1:
+            for line in text[4:end].splitlines():
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    meta[k.strip()] = v.strip().strip('"')
+    return meta
+
+
+def build_skill_index(hive_root: str | os.PathLike[str], *, skills_root: str | os.PathLike[str] | None = None) -> dict[str, int]:
+    root = Path(hive_root).resolve()
+    skills = Path(skills_root or os.environ.get("HERMES_SKILLS_DIR") or (Path.home() / ".hermes" / "skills")).resolve()
+    with _connect_existing(root) as con:
+        con.execute("DELETE FROM skills")
+        try:
+            con.execute("DELETE FROM skill_fts")
+        except sqlite3.OperationalError:
+            pass
+        count = 0
+        if skills.exists():
+            for path in sorted(skills.rglob("SKILL.md")):
+                text = path.read_text(encoding="utf-8")
+                meta = _parse_skill_frontmatter(text)
+                name = meta.get("name") or path.parent.name
+                desc = meta.get("description", "")
+                tags = meta.get("tags", "")
+                rel = path.relative_to(skills).as_posix()
+                sha = _sha256(text.encode("utf-8"))
+                cur = con.execute("INSERT INTO skills(name, rel_path, description, tags, text, sha256) VALUES(?, ?, ?, ?, ?, ?)", (name, rel, desc, tags, text, sha))
+                try:
+                    con.execute("INSERT INTO skill_fts(rowid, name, description, tags, text, rel_path) VALUES(?, ?, ?, ?, ?, ?)", (int(cur.lastrowid), name, desc, tags, text, rel))
+                except sqlite3.OperationalError:
+                    pass
+                count += 1
+        con.commit()
+    return {"skills": count}
+
+
+def query_skills(hive_root: str | os.PathLike[str], text: str, *, limit: int = 5) -> list[dict[str, object]]:
+    terms = [w.lower() for w in WORD_RE.findall(text)]
+    with _connect_existing(hive_root) as con:
+        rows = []
+        try:
+            rows = con.execute("""SELECT s.name, s.rel_path, s.description, s.tags, s.text, bm25(skill_fts) AS bm25_score
+                                  FROM skill_fts JOIN skills s ON s.id=skill_fts.rowid
+                                  WHERE skill_fts MATCH ? ORDER BY bm25_score ASC LIMIT ?""", (_fts_query_text(text), limit)).fetchall()
+        except sqlite3.OperationalError:
+            pass
+        if not rows:
+            rows = con.execute("SELECT name, rel_path, description, tags, text FROM skills").fetchall()
+    ranked = []
+    for row in rows:
+        hay = " ".join(str(row[k]) for k in row.keys() if k in {"name", "rel_path", "description", "tags", "text"}).lower()
+        score = sum(hay.count(t) * 3 for t in terms)
+        if row["name"].lower() in hay:
+            score += 1
+        if score > 0 or "bm25_score" in row.keys():
+            ranked.append((score, row))
+    ranked.sort(key=lambda x: (-x[0], x[1]["name"]))
+    return [{"name": r["name"], "rel_path": r["rel_path"], "description": r["description"], "score": float(score)} for score, r in ranked[:limit]]
+
+
+def bench(hive_root: str | os.PathLike[str]) -> dict[str, object]:
+    root = Path(hive_root).resolve()
+    if not _db_path(root).exists():
+        build_index(root, force=True)
+    t0 = time.perf_counter(); q = query(root, "memory recall", limit=5); query_ms = (time.perf_counter() - t0) * 1000
+    t0 = time.perf_counter(); b = bundle(root, "memory recall", max_tokens=400); bundle_ms = (time.perf_counter() - t0) * 1000
+    return {"ok": True, "query_ms": round(query_ms, 3), "bundle_ms": round(bundle_ms, 3), "results": len(q), "bundle_tokens": b.estimated_tokens, **stats(root)}
 
 def _hive_from_args(ns: argparse.Namespace) -> Path:
     return Path(ns.hive or os.environ.get("MEMORY_HIVE_DIR") or ".")
@@ -566,7 +757,7 @@ def _hive_from_args(ns: argparse.Namespace) -> Path:
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="memory_hive_recall")
     sub = parser.add_subparsers(dest="cmd", required=True)
-    for name in ("build", "doctor", "stats"):
+    for name in ("build", "update", "doctor", "stats", "gc", "bench"):
         p = sub.add_parser(name)
         p.add_argument("--hive")
         p.add_argument("--json", action="store_true")
@@ -582,24 +773,45 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--max-tokens", type=int, default=1200)
     b.add_argument("--for-agent")
     b.add_argument("--json", action="store_true")
+    b.add_argument("--cache", action="store_true")
+    sk = sub.add_parser("skills")
+    sk.add_argument("action", choices=["build", "query"])
+    sk.add_argument("query", nargs="?")
+    sk.add_argument("--hive")
+    sk.add_argument("--skills-root")
+    sk.add_argument("--limit", type=int, default=5)
+    sk.add_argument("--json", action="store_true")
     ns = parser.parse_args(argv)
     hive = _hive_from_args(ns)
     try:
         if ns.cmd == "build":
             built = build_index(hive, force=True)
             payload = {"ok": True, "index_path": str(hive / ".hivecode" / "index.sqlite"), "files": len(built.files), "chunks": len(built.chunks), "codes": len(built.codes)}
+        elif ns.cmd == "update":
+            payload = update_index(hive)
         elif ns.cmd == "doctor":
             payload = doctor(hive)
         elif ns.cmd == "stats":
             payload = stats(hive)
+        elif ns.cmd == "gc":
+            payload = gc_index(hive)
+        elif ns.cmd == "bench":
+            payload = bench(hive)
         elif ns.cmd == "query":
             payload = query_json(hive, ns.query, limit=ns.limit, for_agent=ns.for_agent)
         elif ns.cmd == "bundle":
             if ns.json:
-                print(json.dumps(bundle_json(hive, ns.query, max_tokens=ns.max_tokens, for_agent=ns.for_agent), sort_keys=True))
+                print(json.dumps(bundle_json(hive, ns.query, max_tokens=ns.max_tokens, for_agent=ns.for_agent, cache=ns.cache), sort_keys=True))
             else:
                 print(bundle(hive, ns.query, max_tokens=ns.max_tokens, for_agent=ns.for_agent).text)
             return 0
+        elif ns.cmd == "skills":
+            if ns.action == "build":
+                payload = build_skill_index(hive, skills_root=ns.skills_root)
+            else:
+                if not ns.query:
+                    parser.error("skills query requires query text")
+                payload = {"query": ns.query, "results": query_skills(hive, ns.query, limit=ns.limit)}
         else:
             parser.error("unknown command")
         print(json.dumps(payload, sort_keys=True) if getattr(ns, "json", False) else payload)

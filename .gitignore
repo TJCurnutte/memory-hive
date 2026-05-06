@@ -1,0 +1,8 @@
+# Generated Memory Hive recall indexes
+.hivecode/
+hive/.hivecode/
+
+# Python/test caches
+__pycache__/
+*.pyc
+.pytest_cache/

@@ -6,6 +6,20 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.0] — 2026-05-06 — `HyperRecall TokenFS speed layer`
+
+### Added
+
+- Added the v1.1 HyperRecall / TokenFS recall engine as a built-in Memory Hive capability through `memory-hive recall`, with `hyper` as an alias.
+- Added a local-first SQLite/FTS5 HiveCode index with stable citation codes, source line spans, stale-file detection, incremental update, GC, bundle cache, benchmark output, and skill-index routing.
+- Added `memory_hive_recall.py` to the installed helper set so the speed layer works from the normal `memory-hive` terminal command after install/update.
+- Added the deep plan PDF at `docs/Memory-Hive-HyperRecall-TokenFS-Plan.pdf`.
+
+### Changed
+
+- README onboarding now includes visible verification steps: `memory-hive doctor`, `memory-hive recall build --json`, and `memory-hive recall doctor --json`.
+- README and help text now describe detected agent-platform verification on screen and clarify that installs preserve local hive data unless update/sync mode is explicitly used.
+
 ## [0.4.1] — 2026-05-05 — `critical per-turn hive pulls`
 
 ### Fixed
