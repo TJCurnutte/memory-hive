@@ -46,6 +46,7 @@ Everything is local Markdown under `~/.memory-hive`. No account. No daemon. No d
 | **Drop-in tool wiring** | Installer detects Claude Code, Cursor, Codex, Hermes, Aider, Gemini CLI, Goose, and more. |
 | **Operator CLI** | `tail`, `digest`, `query`, `stats`, `doctor`, `curate`, `optimize`, and `bundle`. |
 | **HyperRecall / TokenFS** | v1.1 speed layer: local SQLite/FTS5 recall index, stable HiveCodes, cited bundles, cache, stale detection, and skill routing. |
+| **Prompt Optimizer addon** | Planned Memory Hive addon that compiles rough operator prompts into Hive-backed internal work orders before execution. |
 | **Semver release history** | Versioned GitHub Releases stay readable: `v1.1.0`, `v0.4.1`, and so on. |
 
 ## Start in 2 minutes
@@ -176,6 +177,23 @@ Run `memory-hive help` for exact flags and examples.
 
 For advanced multi-agent controllers, `--report <file>` emits a compact routing signal. There is no separate memory product to install or synchronize.
 
+## Prompt Optimizer addon
+
+Prompt Optimizer is a planned Memory Hive addon, not a separate product. It uses the hive, private silos, distilled learnings, session artifacts, and HyperRecall bundles to compile rough operator prompts into compact internal work orders before an agent starts work.
+
+The addon contract is:
+
+```bash
+memory-hive prompt classify "<raw prompt>" --json
+memory-hive prompt optimize "<raw prompt>" --json
+memory-hive prompt questions "<raw prompt>" --count 3 --json
+memory-hive prompt bundle "<raw prompt>" --for-agent <agent>
+```
+
+The workflow stays simple: classify the prompt, pull the smallest useful hive slice, produce an executable work order, verify the result, and write back useful lessons. If the prompt is still genuinely ambiguous after context inspection, the addon returns exactly three clarification questions.
+
+See [docs/PROMPT_OPTIMIZER.md](docs/PROMPT_OPTIMIZER.md) for the command contract, JSON shape, and implementation checklist.
+
 ## Versioned releases
 
 Memory Hive uses conventional GitHub Releases for public shipping notes.
@@ -217,6 +235,7 @@ See [INTEGRATION.md](INTEGRATION.md) for platform-specific flags.
 
 - [HIVE_ARCHITECTURE.md](HIVE_ARCHITECTURE.md) — directory layout, curation loop, confidence gates, conflict handling
 - [INTEGRATION.md](INTEGRATION.md) — supported platforms, managed blocks, opt-out flags
+- [docs/PROMPT_OPTIMIZER.md](docs/PROMPT_OPTIMIZER.md) — Prompt Optimizer addon contract for compiling raw prompts into Hive-backed work orders
 - [MIGRATION.md](MIGRATION.md) — safe migration and import strategy
 - [MEMORY_ADAPTER_CONTRACT.md](MEMORY_ADAPTER_CONTRACT.md) — adapter expectations for other memory backends
 - [CONTRIBUTING.md](CONTRIBUTING.md) — local development and test workflow

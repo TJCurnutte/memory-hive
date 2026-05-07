@@ -6,6 +6,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.1.1] — 2026-05-07 — `Prompt Optimizer addon contract`
+
+### Added
+
+- Added the Prompt Optimizer addon spec at `docs/PROMPT_OPTIMIZER.md`, defining the Memory Hive-owned route from raw operator prompt → context pull → internal work order → verification → write-back.
+- Added the planned `memory-hive prompt classify|optimize|questions|bundle` command contract, including the JSON work-order shape and the exact three-question clarification rule.
+- Added README positioning for Prompt Optimizer as a Memory Hive addon layered on top of silos, shared hive context, distilled learnings, and HyperRecall bundles.
+
+### Changed
+
+- README now lists Prompt Optimizer in the capability table and project docs without presenting it as a separate product surface.
+
 ## [1.1.0] — 2026-05-06 — `HyperRecall TokenFS speed layer`
 
 ### Added
