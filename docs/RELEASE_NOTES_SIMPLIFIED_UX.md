@@ -1,6 +1,6 @@
 # Release notes — simplified install-once UX
 
-Status: draft for the next Memory Hive release.
+Status: shipped in Memory Hive v1.2.0.
 
 ## Headline
 

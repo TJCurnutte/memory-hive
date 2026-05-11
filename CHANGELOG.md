@@ -6,6 +6,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-05-11 — `Install-once status/update UX`
+
 ### Added
 
 - Added a simplified day-one command surface: bare `memory-hive` now opens the one-screen status receipt instead of dumping the full command catalog.

@@ -280,7 +280,7 @@ See [INTEGRATION.md](INTEGRATION.md) for platform-specific flags.
 - [MEMORY_ADAPTER_CONTRACT.md](MEMORY_ADAPTER_CONTRACT.md) — adapter expectations for other memory backends
 - [CONTRIBUTING.md](CONTRIBUTING.md) — local development and test workflow
 - [CHANGELOG.md](CHANGELOG.md) — release history
-- [docs/RELEASE_NOTES_SIMPLIFIED_UX.md](docs/RELEASE_NOTES_SIMPLIFIED_UX.md) — draft release notes for the install-once/status/update UX simplification
+- [docs/RELEASE_NOTES_SIMPLIFIED_UX.md](docs/RELEASE_NOTES_SIMPLIFIED_UX.md) — v1.2.0 release notes for the install-once/status/update UX simplification
 
 ## Contributing
 
