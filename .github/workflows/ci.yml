@@ -441,8 +441,8 @@ jobs:
           set -e
           [ "$rc" -ne 0 ] || { echo "Bad --since format should error"; exit 1; }
 
-          # help text mentions tail.
-          sh "$INSTALL_DIR/memory-hive" help | grep -q "memory-hive tail" || \
+          # advanced help text mentions tail.
+          sh "$INSTALL_DIR/memory-hive" help --advanced | grep -q "memory-hive tail" || \
             { echo "help missing tail entry"; exit 1; }
 
           echo "Tail CLI smoke OK"
@@ -519,8 +519,8 @@ jobs:
           grep -q "2026-04-25-no-fm.md" /tmp/mh-conf.out
           grep -q "Summary: 1 cluster" /tmp/mh-conf.out
 
-          # Help also references the verb.
-          sh "$INSTALL_DIR/memory-hive" help | grep -q "memory-hive confidence"
+          # Advanced help also references the verb.
+          sh "$INSTALL_DIR/memory-hive" help --advanced | grep -q "memory-hive confidence"
           echo "Confidence smoke OK"
 
       - name: Tagging smoke — tag + tags verbs
@@ -883,8 +883,8 @@ jobs:
           sh "$INSTALL_DIR/memory-hive" conflicts --agent nobody > /tmp/mh-conflicts-a2.out 2>&1
           grep -q "No conflicts found" /tmp/mh-conflicts-a2.out
 
-          # 5. Top-level help mentions the new verb.
-          sh "$INSTALL_DIR/memory-hive" help | grep -q "memory-hive conflicts"
+          # 5. Advanced help mentions the new verb.
+          sh "$INSTALL_DIR/memory-hive" help --advanced | grep -q "memory-hive conflicts"
 
           # 6. Raw files untouched.
           test "$(find "$INSTALL_DIR/hive/learnings/raw" -name '*.md' | wc -l | tr -d ' ')" = "2"
@@ -969,8 +969,8 @@ jobs:
           [ "$rc" -eq 1 ] || { echo "expected exit 1 on bad --kind, got $rc"; exit 1; }
           grep -q "Unknown --kind"                 /tmp/q7.out
 
-          # 8. Top-level help mentions the new verb.
-          sh "$INSTALL_DIR/memory-hive" help | grep -q "memory-hive query"
+          # 8. Advanced help mentions the new verb.
+          sh "$INSTALL_DIR/memory-hive" help --advanced | grep -q "memory-hive query"
           echo "Query smoke OK"
 
 
@@ -1088,8 +1088,8 @@ jobs:
           sh "$INSTALL_DIR/memory-hive" digest > /tmp/mh-dig-empty.out 2>&1
           grep -q "Nothing changed in this window" /tmp/mh-dig-empty.out
 
-          # Help mentions the digest verb.
-          sh "$INSTALL_DIR/memory-hive" help > /tmp/mh-help.out
+          # Advanced help mentions the digest verb.
+          sh "$INSTALL_DIR/memory-hive" help --advanced > /tmp/mh-help.out
           grep -q "memory-hive digest" /tmp/mh-help.out
 
           # Sleep so the log mtime is strictly newer than the install
@@ -1144,8 +1144,8 @@ jobs:
           export MEMORY_HIVE_REPO="$(pwd)"
           sh install.sh < /dev/null > /dev/null
 
-          # Help text references the verb.
-          sh "$INSTALL_DIR/memory-hive" help | grep -q "memory-hive curate" || \
+          # Advanced help text references the verb.
+          sh "$INSTALL_DIR/memory-hive" help --advanced | grep -q "memory-hive curate" || \
               { echo "help missing curate entry"; exit 1; }
 
           # Sleep so seeded files have mtimes strictly after the install
@@ -1386,7 +1386,7 @@ jobs:
               { echo "FAIL: error message did not mention ghost"; cat /tmp/mh-bundle-bad.out; exit 1; }
 
           # 6) Help mentions the verb.
-          sh "$INSTALL_DIR/memory-hive" help | grep -q "memory-hive bundle" || \
+          sh "$INSTALL_DIR/memory-hive" help --advanced | grep -q "memory-hive bundle" || \
               { echo "FAIL: help missing bundle entry"; exit 1; }
 
           echo "Bundle smoke OK"
@@ -1512,8 +1512,8 @@ jobs:
           set -e
           [ "$rc" -ne 0 ] || { echo "FAIL: bad --days should error"; exit 1; }
 
-          # 8) Top-level help mentions the new verb.
-          sh "$INSTALL_DIR/memory-hive" help | grep -q "memory-hive reflect" || \
+          # 8) Advanced help mentions the new verb.
+          sh "$INSTALL_DIR/memory-hive" help --advanced | grep -q "memory-hive reflect" || \
               { echo "FAIL: help missing reflect entry"; exit 1; }
 
           echo "Reflect smoke OK"
@@ -1738,7 +1738,7 @@ jobs:
 
           # 8. Help text must mention seed.
           sh install.sh < /dev/null > /dev/null
-          sh "$D/memory-hive" help | grep -q 'memory-hive seed' || \
+          sh "$D/memory-hive" help --advanced | grep -q 'memory-hive seed' || \
               { echo "FAIL: help missing 'seed'"; exit 1; }
 
           echo "Seed smoke OK"

@@ -264,7 +264,7 @@ _install_memory_hive_command_shim() {
         if [ ! -e "$_shim" ] && (ln -s "$_target" "$_shim" 2>/dev/null || { printf '#!/bin/sh\nexec %s "$@"\n' "$_target_q" > "$_shim" 2>/dev/null && chmod +x "$_shim" 2>/dev/null; }); then
             COMMAND_SHIM_PATH="$_shim"
             COMMAND_SHIM_STATUS="installed-profile-path"
-            COMMAND_SHIM_NOTE="Restart your terminal, then run: memory-hive doctor"
+            COMMAND_SHIM_NOTE="Restart your terminal, then run: memory-hive status"
             for _profile in "$HOME/.zshrc" "$HOME/.bashrc" "$HOME/.profile"; do
                 [ -f "$_profile" ] || continue
                 if ! grep -q 'HOME/.local/bin' "$_profile" 2>/dev/null && ! grep -q '\.local/bin' "$_profile" 2>/dev/null; then
@@ -1583,6 +1583,11 @@ fi
 if [ -x "$INSTALL_DIR/memory-hive" ]; then
     MEMORY_HIVE_DIR="$INSTALL_DIR" sh "$INSTALL_DIR/memory-hive" register \
         >/dev/null 2>&1 || true
+    # Install/update should feel complete after one command. Run the quiet
+    # maintenance wrapper best-effort so registry/citations and the recall
+    # speed index are ready without asking the user to run internal commands.
+    MEMORY_HIVE_DIR="$INSTALL_DIR" sh "$INSTALL_DIR/memory-hive" maintain --quiet \
+        >/dev/null 2>&1 || true
 fi
 
 # =============================================================================
@@ -1777,16 +1782,15 @@ else
 fi
 [ -n "$_mh_roster_tmp" ] && rm -f "$_mh_roster_tmp"
 
-# Always show the CLI + "add more agents" hint. In the default zero-input
-# install this is the only way the user learns how to populate their roster.
+# Keep next steps small: install once, then update periodically.
 printf '\n'
 if [ "$WIZARD_RAN" -eq 0 ]; then
     printf 'Next steps:\n'
-    printf '  %s add <name> --role coder   # add an agent\n' "$_cli_prefix"
-    printf '  %s list                       # see what you have\n' "$_cli_prefix"
-    printf '  %s setup                      # guided setup (optional)\n' "$_cli_prefix"
+    printf '  %s status                    # one-screen receipt\n' "$_cli_prefix"
+    printf '  %s add <name> --role coder   # optional: add another agent\n' "$_cli_prefix"
+    printf '  %s update                    # later: refresh + maintain\n' "$_cli_prefix"
 else
-    printf 'CLI: %s (add|list|role|rename|archive|setup|doctor|register)\n' "$_cli_prefix"
+    printf 'CLI: %s (status|update|add|search|recall|help --advanced)\n' "$_cli_prefix"
 fi
 if [ "$COMMAND_SHIM_STATUS" = "installed-profile-path" ]; then
     printf 'Tip: open a new terminal to use `memory-hive` directly.\n'

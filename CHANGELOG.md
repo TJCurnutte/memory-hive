@@ -6,6 +6,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.2.0] — 2026-05-11 — `Install-once status/update UX`
+
+### Added
+
+- Added a simplified day-one command surface: bare `memory-hive` now opens the one-screen status receipt instead of dumping the full command catalog.
+- Added `memory-hive status` as the explicit health receipt for install path, hive path, active silo count, recall helper/index state, stale raw-learning count, and last maintenance timestamp.
+- Added `memory-hive maintain` as the local periodic maintenance wrapper. It refreshes registry/citations, builds or updates the HyperRecall index, runs the built-in Optimizer pass, and records `.last-maintained`.
+- Added `memory-hive update` as the normal public refresh command. It delegates to the safe updater, preserves agent silos, refreshes shared/tool files, and lets install/update run quiet maintenance afterward.
+- Added user-facing `memory-hive recall "query text"` so recall can be used directly without asking users to learn `recall query` or manually build the index first.
+- Added draft release notes at `docs/RELEASE_NOTES_SIMPLIFIED_UX.md` covering headline, motivation, user-visible changes, compatibility, migration notes, issue #25, and verification targets.
+
+### Changed
+
+- The installer now runs `memory-hive maintain --quiet` best-effort after registering silos, so first install/update leaves registry/citations and the recall speed index ready without extra copy-paste commands.
+- `memory-hive help` is now intentionally small and points normal users to `status`, `update`, optional `add`, `search`, and direct `recall`. The full command catalog moved behind `memory-hive help --advanced`.
+- README onboarding now presents Memory Hive as install-once plus periodic update/maintenance, not a pile of separate health, recall, lint, digest, stale, and curator commands.
+- README command tables now separate the daily public surface from advanced/debug/curator verbs, with a new "What runs automatically now" section explaining which plumbing is still available behind the wrapper.
+- `update.sh` usage now names `memory-hive update` as the preferred public path while preserving the direct script and curl forms for automation.
+
+### Fixed
+
+- Fixed the PATH-shim HyperRecall helper bug reported in issue #25. Recall no longer resolves `memory_hive_recall.py` from `$(dirname "$0")`, because `$0` may point at `~/.local/bin` or another shim directory. It now resolves helpers from the detected install directory first, with repo-checkout fallback for tests/dev.
+- Recall queries and bundles now build/update the HyperRecall index automatically when the index is missing or stale enough for the update path, reducing fresh-install failures and removing the need for `memory-hive recall build --json` during onboarding.
+
 ## [1.1.1] — 2026-05-07 — `Prompt Optimizer addon contract`
 
 ### Added

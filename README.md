@@ -18,15 +18,15 @@
 </p>
 
 <p align="center">
-  <strong>Memory Hive is the public home for the Hive memory layer.</strong><br>
-  It gives every agent a private workspace, one shared source of truth, and a curation loop so each task makes the next one smarter.
+  <strong>Install once. Let agents read and write. Update periodically.</strong><br>
+  Memory Hive keeps agent memory as local files with private silos, a shared curated hive, and receipts you can inspect.
 </p>
 
 ---
 
 ## What Memory Hive is
 
-Memory Hive is a file-backed memory layer for AI agents. It is not an agent runtime, vector database, hosted service, or replacement for your editor/CLI.
+Memory Hive is a file-backed memory layer for AI agents. It is not an agent runtime, hosted service, vector database, or replacement for your editor/CLI.
 
 It gives the tools you already use a durable place to remember:
 
@@ -35,84 +35,115 @@ It gives the tools you already use a durable place to remember:
 - reusable lessons that should compound across the whole team
 - curator decisions about what is trusted, stale, duplicated, or in conflict
 
-Everything is local Markdown under `~/.memory-hive`. No account. No daemon. No database. No hidden cloud state.
+Everything starts as local Markdown under `~/.memory-hive`. The optional HyperRecall speed layer is a rebuildable SQLite index beside those files. Markdown stays the source of truth.
 
-## What you get
-
-| Capability | What it does |
-|---|---|
-| **Private agent silos** | Each agent gets `log.md`, `context.md`, and `memory.md` under `hive/agents/<agent>/`. |
-| **Shared hive knowledge** | Agents contribute raw learnings; `main` curates durable truth into shared knowledge. |
-| **Drop-in tool wiring** | Installer detects Claude Code, Cursor, Codex, Hermes, Aider, Gemini CLI, Goose, and more. |
-| **Operator CLI** | `tail`, `digest`, `query`, `stats`, `doctor`, `curate`, `optimize`, and `bundle`. |
-| **HyperRecall / TokenFS** | v1.1 speed layer: local SQLite/FTS5 recall index, stable HiveCodes, cited bundles, cache, stale detection, and skill routing. |
-| **Prompt Optimizer addon** | Planned Memory Hive addon that compiles rough operator prompts into Hive-backed internal work orders before execution. |
-| **Semver release history** | Versioned GitHub Releases stay readable: `v1.1.0`, `v0.4.1`, and so on. |
-
-## Start in 2 minutes
+## Start in one command
 
 ```bash
 curl -fsSL https://hive.neural-forge.io/install.sh | sh
-memory-hive doctor          # verifies install path + detected agent blocks on screen
-memory-hive recall build --json
-memory-hive recall doctor --json
+```
+
+That first run does the work users previously had to stitch together by hand:
+
+- creates `~/.memory-hive`
+- creates the reserved `main` curator silo
+- installs the `memory-hive` command or a PATH shim when possible
+- wires managed Memory Hive blocks into detected agent tools
+- refreshes the roster/registry
+- builds or updates the HyperRecall index quietly
+- runs the maintenance wrapper quietly
+- prints one receipt with the install path, wired platforms, roster, and next commands
+
+After install, the normal check is just:
+
+```bash
+memory-hive
+# same as:
+memory-hive status
+```
+
+Optional: add an agent silo when you want one.
+
+```bash
 memory-hive add coder --role coder
-memory-hive list
 ```
 
-The default install is **zero-input**: no prompts, no account, no daemon. It creates `~/.memory-hive`, the reserved `main` curator silo, installs the helper CLI, and writes managed config blocks for detected agent tools. Re-running the installer preserves local hive data; upstream content only overwrites shared files when you explicitly run update/sync mode.
-
-Want a guided setup instead?
+Periodic refresh is one command:
 
 ```bash
-curl -fsSL https://hive.neural-forge.io/install.sh | MEMORY_HIVE_WIZARD=1 sh
-# or later:
-memory-hive setup
+memory-hive update
 ```
 
-Want to see value before wiring your real agents?
+`update` pulls the latest Memory Hive tool files, preserves local agent silos, refreshes shared managed content, rebuilds/updates the recall index, and runs maintenance. You should not need to run `doctor`, `recall build`, `lint`, `digest`, or `stale` during normal use.
+
+## The daily command surface
+
+| Command | Use it when you want to... |
+|---|---|
+| `memory-hive` | see the one-screen status receipt |
+| `memory-hive status` | same receipt, explicit form |
+| `memory-hive update` | refresh Memory Hive and run periodic maintenance |
+| `memory-hive add <agent> --role coder` | add another private agent silo |
+| `memory-hive search "term"` | search local hive Markdown |
+| `memory-hive recall "task context"` | retrieve cited context; the index is built/updated automatically |
+| `memory-hive help --advanced` | inspect curator/debug/internal commands |
+
+That is the intended public UX. The rest of the verbs still exist for scripts, CI, power users, and the curator lane, but they are no longer part of day-one onboarding.
+
+## What runs automatically now
+
+Memory Hive keeps the plumbing available without making it the user journey.
+
+| Internal operation | When it runs |
+|---|---|
+| Install health checks | during install and `memory-hive status` |
+| Roster/registry refresh | during install, add/archive/rename, and maintenance |
+| Citation registry refresh | during maintenance |
+| HyperRecall build/update | during install, maintenance, and first recall query if missing |
+| Curation health pass | during maintenance through the built-in Optimizer wrapper |
+| Stale/raw-learning signal | included in status and maintenance summaries |
+
+The commands are still there when you need receipts:
 
 ```bash
-memory-hive seed --scenario default
-memory-hive digest --week
-memory-hive confidence
-memory-hive bundle --for coder --max-tokens 4000
+memory-hive help --advanced
 ```
 
 ## The Memory Hive loop
 
-1. **Hydrate** — an agent reads `hive/index.md`, shared knowledge, current tasks, and its own private silo on boot and again before substantive work.
+1. **Hydrate** — an agent reads shared hive context and its own private silo before substantive work.
 2. **Work** — it uses current project context, curated knowledge, and prior lessons.
 3. **Write back** — it logs task notes and drops reusable observations into `hive/learnings/raw/`.
 4. **Curate** — `main` promotes verified patterns into `hive/learnings/distilled/` and shared knowledge.
 5. **Compound** — the next prompt, task, or agent starts smarter than the last one.
 
-That is the product: **pull memory, work, write back, curate.**
+The product is the habit: **pull memory, work, write back, curate.**
 
-Critical habit: Memory Hive is not a one-time boot note. For non-trivial,
-cross-session, or operational prompts, agents should visibly re-pull the
-smallest relevant hive slice before acting so operators can audit that the
-shared memory actually informed the answer.
+Critical habit for agent operators: Memory Hive is not a one-time boot note. For non-trivial, cross-session, or operational prompts, agents should visibly re-pull the smallest relevant hive slice before acting so operators can audit that memory informed the work.
 
 ## The shape of a hive
 
 ```text
 ~/.memory-hive/
+├── memory-hive                 # CLI entry point
+├── memory_hive_recall.py       # helper-backed recall engine
+├── update.sh                   # safe periodic updater
 └── hive/
-    ├── index.md                  # boot entrypoint: read this first
-    ├── registry/                 # roster, citations, skill catalog
-    ├── knowledge/                # curator-owned shared truth
+    ├── index.md                # boot entrypoint: read this first
+    ├── registry/               # roster, citations, skill catalog
+    ├── knowledge/              # curator-owned shared truth
     ├── learnings/
-    │   ├── raw/                  # agent-submitted observations
-    │   └── distilled/            # curator-promoted patterns
-    ├── tasks/                    # shared queue / coordination
-    ├── curator/                  # conflicts, decisions, drafts
+    │   ├── raw/                # agent-submitted observations
+    │   └── distilled/          # curator-promoted patterns
+    ├── tasks/                  # shared queue / coordination
+    ├── curator/                # conflicts, decisions, drafts
+    ├── .hivecode/              # rebuildable HyperRecall SQLite index
     └── agents/
-        ├── main/                 # reserved curator silo
+        ├── main/               # reserved curator silo
         │   ├── log.md
         │   ├── context.md
         │   └── memory.md
-        └── coder/                # any agents you define
+        └── coder/              # any agents you define
             ├── log.md
             ├── context.md
             └── memory.md
@@ -131,57 +162,63 @@ Private silos prevent agents from trampling each other's context. The shared hiv
 
 For the full governance model, see [HIVE_ARCHITECTURE.md](HIVE_ARCHITECTURE.md).
 
+## Capabilities
+
+| Capability | What it does |
+|---|---|
+| **Private agent silos** | Each agent gets `log.md`, `context.md`, and `memory.md` under `hive/agents/<agent>/`. |
+| **Shared hive knowledge** | Agents contribute raw learnings; `main` curates durable truth into shared knowledge. |
+| **Drop-in tool wiring** | Installer detects Claude Code, Cursor, Codex, Hermes, Aider, Gemini CLI, Goose, and more. |
+| **Install-once CLI** | Day-one UX is `install`, `status`, optional `add`, `search`, `recall`, and periodic `update`. |
+| **Maintenance wrapper** | `memory-hive maintain` runs registry/citation refresh, recall index maintenance, and the Optimizer pass. |
+| **HyperRecall / TokenFS** | Local SQLite/FTS5 recall index, stable HiveCodes, cited bundles, cache, stale detection, and skill routing. |
+| **Prompt Optimizer addon** | Planned Memory Hive addon that compiles rough operator prompts into Hive-backed internal work orders before execution. |
+| **Semver release history** | Versioned GitHub Releases stay readable: `v1.1.0`, `v0.4.1`, and so on. |
+
 ## Supported tools
 
 Memory Hive works with Claude Code, OpenClaw, NanoClaw, Hermes, Cursor, Continue, Aider, Gemini CLI, Goose, Open Interpreter, Amazon Q, OpenHands, Cline, Roo Code, Kilo Code, Windsurf, Zed, Warp, Sourcegraph Amp, OpenAI Codex, OpenCode, Crush, and GitHub Copilot.
 
-See [INTEGRATION.md](INTEGRATION.md) for the full 23-platform table, managed-block format, and opt-out flags.
+See [INTEGRATION.md](INTEGRATION.md) for the full platform table, managed-block format, and opt-out flags.
 
-## Commands you will actually use
+## Advanced commands
 
-| Command | Use it when you want to... |
-|---|---|
-| `memory-hive add coder --role coder` | create a new agent silo from a role template |
-| `memory-hive list` | see the active roster |
-| `memory-hive doctor` | verify the install and managed blocks |
-| `memory-hive tail -n 20` | see the most recent hive writes |
-| `memory-hive digest --week` | summarize recent activity |
-| `memory-hive query <term>` | search every text surface in the hive |
-| `memory-hive recall build --json` | build the v1.1 HyperRecall SQLite/FTS5 speed index |
-| `memory-hive recall query "task context" --json` | retrieve ranked snippets with source citations and HiveCodes |
-| `memory-hive recall bundle "task context" --for-agent coder` | emit a bounded cited recall bundle for agent preflight |
-| `memory-hive recall doctor --json` | verify index freshness, FTS5, stale files, and source fingerprint |
-| `memory-hive promote <raw-file>` | turn one raw learning into a curated pattern |
-| `memory-hive confidence` | find repeated observations ready for promotion |
-| `memory-hive curate --dry-run` | preview the curation queue |
-| `memory-hive optimize --report report.md` | run the built-in maintenance pass |
-| `memory-hive bundle --for coder` | produce a prompt-ready context bundle |
-| `memory-hive seed --scenario default` | populate demo data in a fresh hive |
+Normal users should not need these during onboarding. They remain available for operators, CI, and curator workflows.
 
 <details>
-<summary>Full command families</summary>
+<summary>Show advanced command families</summary>
 
-**Lifecycle** — `add`, `list`, `archive`, `role`, `rename`, `register`, `setup`, `apply`, `doctor`, `seed`.
+**Lifecycle** — `list`, `setup`, `role`, `rename`, `archive`, `register`, `apply`.
 
-**Observability** — `tail`, `watch`, `stats`, `digest`, `query`, `diff`, `checkpoint`, `bundle`, `optimize`, `recall` / `hyper`.
+**Health and maintenance** — `doctor`, `maintain`, `optimize`, `checkpoint`, `diff`.
 
-**Curator workflow** — `dedup`, `confidence`, `promote`, `stale`, `lint`, `tag`, `tags`, `citations`, `conflicts`, `reflect`, `curate`, `optimize`.
+**Inspection** — `tail`, `watch`, `stats`, `digest`, `query`, `bundle`.
 
-Run `memory-hive help` for exact flags and examples.
+**HyperRecall** — `recall query`, `recall bundle`, `recall build`, `recall update`, `recall doctor`, `recall stats`, `hyper`.
+
+**Curator workflow** — `curate`, `promote`, `confidence`, `dedup`, `conflicts`, `stale`, `lint`, `tag`, `tags`, `citations`, `reflect`, `seed`.
+
+Run:
+
+```bash
+memory-hive help --advanced
+```
 
 </details>
 
 ## Built-in maintenance, not another product
 
-`memory-hive optimize` is the maintenance pass inside Memory Hive. It composes existing commands — `doctor`, `curate`, `digest`, `stats`, and `stale` — into one operator report.
+`memory-hive maintain` is the local maintenance wrapper. It refreshes registry/citation surfaces, builds or updates the recall index, runs the Optimizer pass, and records the last maintenance timestamp.
 
-For advanced multi-agent controllers, `--report <file>` emits a compact routing signal. There is no separate memory product to install or synchronize.
+`memory-hive update` is the normal public entry point for periodic care. It refreshes tool files from upstream, preserves private agent silos, and then runs maintenance. Use `maintain` directly only when you want an offline/local pass without pulling new files.
+
+`memory-hive optimize` still exists as the advanced maintenance brain: `doctor` → `curate` → `digest --week` → `stats` → `stale --count`, with optional report output for swarm controllers.
 
 ## Prompt Optimizer addon
 
 Prompt Optimizer is a planned Memory Hive addon, not a separate product. It uses the hive, private silos, distilled learnings, session artifacts, and HyperRecall bundles to compile rough operator prompts into compact internal work orders before an agent starts work.
 
-The addon contract is:
+The addon contract remains advanced/planned:
 
 ```bash
 memory-hive prompt classify "<raw prompt>" --json
@@ -198,7 +235,7 @@ See [docs/PROMPT_OPTIMIZER.md](docs/PROMPT_OPTIMIZER.md) for the command contrac
 
 Memory Hive uses conventional GitHub Releases for public shipping notes.
 
-- versioned tags like `v0.4.0` create changelog-backed releases
+- versioned tags like `v1.1.0` create changelog-backed releases
 - release titles stay readable instead of generated commit-hash cards
 - changelog entries remain the source of truth for what shipped
 
@@ -212,12 +249,13 @@ The installer is intentionally boring shell:
 curl -fsSL https://hive.neural-forge.io/install.sh | sh
 ```
 
-Re-running it is safe. Existing agent data is reconciled, not deleted. Removed agents are archived under `hive/agents/_archived/<date>/`.
+Re-running it is safe. Existing agent data is preserved. Shared files are refreshed only through the update/sync path. Agent silos under `hive/agents/` are never overwritten by upstream content.
 
 Key environment flags:
 
-- `MEMORY_HIVE_DIR=/path/to/hive` — install somewhere other than `~/.memory-hive`
+- `MEMORY_HIVE_DIR=/path/to/install` — install somewhere other than `~/.memory-hive`
 - `MEMORY_HIVE_WIZARD=1` — opt into the interactive wizard
+- `MEMORY_HIVE_ONLY=hermes,cursor` — wire only selected detected platforms
 - `MEMORY_HIVE_SKIP_<PLATFORM>=1` — skip a platform integration during install
 
 See [INTEGRATION.md](INTEGRATION.md) for platform-specific flags.
@@ -227,19 +265,22 @@ See [INTEGRATION.md](INTEGRATION.md) for platform-specific flags.
 1. **Local first** — Markdown on disk beats invisible state.
 2. **Private by default** — each agent owns its own silo.
 3. **Curated shared truth** — raw observations are cheap; promotion is deliberate.
-4. **Non-destructive reconciliation** — archive before delete, checkpoint before apply.
-5. **Shell-native portability** — POSIX shell, no runtime server, no npm package required.
-6. **Every task compounds** — useful lessons survive beyond the current chat window.
+4. **Non-destructive reconciliation** — preserve silos, archive before delete, checkpoint before apply.
+5. **Small public surface** — normal use should be install, status, optional add, search/recall, update.
+6. **Shell-native portability** — POSIX shell, no runtime server, no npm package required.
+7. **Every task compounds** — useful lessons survive beyond the current chat window.
 
 ## Project docs
 
 - [HIVE_ARCHITECTURE.md](HIVE_ARCHITECTURE.md) — directory layout, curation loop, confidence gates, conflict handling
 - [INTEGRATION.md](INTEGRATION.md) — supported platforms, managed blocks, opt-out flags
+- [docs/HIVECODE_ENGINE.md](docs/HIVECODE_ENGINE.md) — HyperRecall / HiveCode engine details
 - [docs/PROMPT_OPTIMIZER.md](docs/PROMPT_OPTIMIZER.md) — Prompt Optimizer addon contract for compiling raw prompts into Hive-backed work orders
 - [MIGRATION.md](MIGRATION.md) — safe migration and import strategy
 - [MEMORY_ADAPTER_CONTRACT.md](MEMORY_ADAPTER_CONTRACT.md) — adapter expectations for other memory backends
 - [CONTRIBUTING.md](CONTRIBUTING.md) — local development and test workflow
 - [CHANGELOG.md](CHANGELOG.md) — release history
+- [docs/RELEASE_NOTES_SIMPLIFIED_UX.md](docs/RELEASE_NOTES_SIMPLIFIED_UX.md) — v1.2.0 release notes for the install-once/status/update UX simplification
 
 ## Contributing
 
@@ -264,5 +305,5 @@ Start with [CONTRIBUTING.md](CONTRIBUTING.md), then open an issue or PR.
 ---
 
 <p align="center">
-  <strong>The hive learns. Every task. Every agent. Every time.</strong>
+  <strong>Silos remember. Hive compounds. One install, periodic care.</strong>
 </p>
