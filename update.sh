@@ -13,6 +13,7 @@
 # agent private memory, and pulls in whatever the maintainer has changed.
 #
 # Usage:
+#   memory-hive update
 #   sh ~/.memory-hive/update.sh
 #   curl -fsSL memoryhive.neural-forge.io/update.sh | sh
 #

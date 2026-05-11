@@ -41,13 +41,19 @@ class HiveCodeLoop06UxTests(unittest.TestCase):
         self.assertIn("hc:v1:", payload["text"])
         self.assertIn("citation", payload["results"][0])
 
-    def test_top_level_help_documents_recall_commands(self):
+    def test_default_help_stays_small_and_advanced_help_documents_recall_commands(self):
         proc = run_cli(["help"], hive=self.hive, check=True)
         help_text = proc.stdout
-        self.assertIn("memory-hive recall build", help_text)
-        self.assertIn("memory-hive recall query", help_text)
-        self.assertIn("memory-hive recall bundle", help_text)
-        self.assertIn("hive/.hivecode/index.sqlite", help_text)
+        self.assertIn("memory-hive update", help_text)
+        self.assertIn("memory-hive recall \"query text\"", help_text)
+        self.assertIn("memory-hive help --advanced", help_text)
+        self.assertNotIn("memory-hive recall build", help_text)
+
+        advanced = run_cli(["help", "--advanced"], hive=self.hive, check=True).stdout
+        self.assertIn("memory-hive recall build", advanced)
+        self.assertIn("memory-hive recall query", advanced)
+        self.assertIn("memory-hive recall bundle", advanced)
+        self.assertIn("hive/.hivecode/index.sqlite", advanced)
 
 
 if __name__ == "__main__":

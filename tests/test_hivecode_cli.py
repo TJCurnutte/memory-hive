@@ -49,11 +49,17 @@ class HiveCodeCliTests(unittest.TestCase):
         self.assertEqual(payload["index_path"], str(self.hive / ".hivecode" / "index.sqlite"))
         self.assertTrue((self.hive / ".hivecode" / "index.sqlite").exists())
 
-    def test_recall_query_missing_index_exits_nonzero_with_useful_error(self):
-        proc = run_cli(["recall", "query", "zephyr-honeycomb", "--hive", str(self.hive)], hive=self.hive)
-        self.assertNotEqual(proc.returncode, 0)
-        self.assertIn("recall build", (proc.stderr + proc.stdout).lower())
-        self.assertFalse((self.hive / ".hivecode" / "index.sqlite").exists())
+    def test_recall_query_missing_index_auto_builds_for_day_one_use(self):
+        proc = run_cli(["recall", "query", "zephyr-honeycomb", "--hive", str(self.hive), "--json"], hive=self.hive, check=True)
+        payload = load_json_output(proc)
+        self.assertEqual(payload["query"], "zephyr-honeycomb")
+        self.assertTrue((self.hive / ".hivecode" / "index.sqlite").exists())
+
+    def test_recall_direct_query_sugar_uses_query_subcommand(self):
+        proc = run_cli(["recall", "zephyr-honeycomb", "--hive", str(self.hive), "--json"], hive=self.hive, check=True)
+        payload = load_json_output(proc)
+        self.assertEqual(payload["query"], "zephyr-honeycomb")
+        self.assertTrue((self.hive / ".hivecode" / "index.sqlite").exists())
 
 
 if __name__ == "__main__":

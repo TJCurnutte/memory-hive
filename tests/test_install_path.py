@@ -37,7 +37,9 @@ class InstallPathTests(unittest.TestCase):
                 "export MEMORY_HIVE_ONLY=none\n"
                 f"sh {INSTALL_SH} > {output}\n"
                 "command -v memory-hive\n"
-                "memory-hive list\n",
+                "memory-hive\n"
+                "memory-hive list\n"
+                "memory-hive recall query 'Memory Hive' --limit 1 --json\n",
                 encoding="utf-8",
             )
 
@@ -57,7 +59,9 @@ class InstallPathTests(unittest.TestCase):
                 )
 
             self.assertIn(str(path_bin / "memory-hive"), proc.stdout)
+            self.assertIn("Memory Hive status", proc.stdout)
             self.assertIn("main", proc.stdout)
+            self.assertIn('"query": "Memory Hive"', proc.stdout)
             install_out = output.read_text(encoding="utf-8")
             self.assertIn("Command ready: memory-hive", install_out)
             self.assertNotIn("Tip: add", install_out)

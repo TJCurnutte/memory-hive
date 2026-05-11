@@ -2,15 +2,11 @@
 # memory-hive — single entry point CLI for managing your hive's agents.
 #
 # Usage:
+#   memory-hive                 # status receipt
+#   memory-hive update          # refresh + maintain
 #   memory-hive add <name> [--role <template|path>]
-#   memory-hive list
-#   memory-hive archive <name>
-#   memory-hive role <name>
-#   memory-hive rename <old> <new>
-#   memory-hive register
-#   memory-hive doctor
-#   memory-hive promote <raw-file> [--into <name>] [--title <text>] [--dry-run]
-#   memory-hive help
+#   memory-hive search <term>
+#   memory-hive help [--advanced]
 #
 # <template> is one of: coder, reviewer, researcher, writer, planner
 # <path> is a path to a markdown file; its contents become the role text.
@@ -45,6 +41,114 @@ _mh_require_install() {
     if [ ! -d "$HIVE_DIR" ]; then
         _mh_die "Memory Hive is not installed at $INSTALL_DIR. Run the installer first."
     fi
+}
+
+# _mh_effective_hive_dir -> prints the actual hive root.
+# Normal installs use $INSTALL_DIR/hive. Some tests and direct integrations set
+# MEMORY_HIVE_DIR to the hive root itself; support that for recall/status paths.
+_mh_effective_hive_dir() {
+    if [ -d "$HIVE_DIR" ]; then
+        printf '%s' "$HIVE_DIR"
+        return 0
+    fi
+    if [ -f "$INSTALL_DIR/index.md" ] || [ -d "$INSTALL_DIR/agents" ]; then
+        printf '%s' "$INSTALL_DIR"
+        return 0
+    fi
+    printf '%s' "$HIVE_DIR"
+}
+
+_mh_effective_agents_dir() {
+    _eh="$(_mh_effective_hive_dir)"
+    printf '%s/agents' "$_eh"
+}
+
+# _mh_recall_helper -> prints the installed helper path.
+# Do NOT resolve this relative to dirname($0): when memory-hive is invoked via a
+# PATH shim/symlink, $0 points at ~/.local/bin or another shim directory while
+# helper files live in $INSTALL_DIR.
+_mh_recall_helper() {
+    if [ -f "$INSTALL_DIR/memory_hive_recall.py" ]; then
+        printf '%s' "$INSTALL_DIR/memory_hive_recall.py"
+        return 0
+    fi
+    if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/memory_hive_recall.py" ]; then
+        printf '%s' "$SCRIPT_DIR/memory_hive_recall.py"
+        return 0
+    fi
+    return 1
+}
+
+_mh_recall_arg_hive() {
+    _fallback="$1"
+    shift
+    _out="$_fallback"
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --hive)
+                shift
+                [ $# -gt 0 ] && _out="$1"
+                ;;
+            --hive=*) _out="${1#--hive=}" ;;
+        esac
+        shift || break
+    done
+    printf '%s' "$_out"
+}
+
+_mh_recall_prepare_index() {
+    _helper="$1"
+    _hive="$2"
+    _cmd="$3"
+    case "$_cmd" in
+        build|update|doctor|stats|gc|bench|skills) return 0 ;;
+    esac
+    [ -d "$_hive" ] || return 0
+    if [ -f "$_hive/.hivecode/index.sqlite" ]; then
+        MEMORY_HIVE_DIR="$_hive" python3 "$_helper" update --hive "$_hive" --json >/dev/null 2>&1 || true
+    else
+        MEMORY_HIVE_DIR="$_hive" python3 "$_helper" build --hive "$_hive" --json >/dev/null 2>&1 || return 1
+    fi
+    return 0
+}
+
+# Public recall wrapper. Advanced subcommands still work, but the day-one path
+# can be as simple as: memory-hive recall "operator context".
+mh_recall() {
+    _helper="$(_mh_recall_helper)" || _mh_die "memory_hive_recall.py helper missing under $INSTALL_DIR"
+    _default_hive="$(_mh_effective_hive_dir)"
+
+    if [ $# -eq 0 ]; then
+        cat <<'RECALLHELP'
+Usage:
+  memory-hive recall "query text"             # search with automatic index maintenance
+  memory-hive recall bundle "query text"      # prompt-ready cited bundle
+
+Advanced/debug:
+  memory-hive recall build|update|doctor|stats|gc|bench [--json]
+  memory-hive hyper ...                       # alias for recall
+RECALLHELP
+        return 0
+    fi
+
+    _cmd="query"
+    case "$1" in
+        build|update|doctor|stats|gc|bench|query|bundle|skills)
+            _cmd="$1"
+            shift
+            ;;
+        -h|--help)
+            MEMORY_HIVE_DIR="$_default_hive" python3 "$_helper" --help
+            return $?
+            ;;
+        *)
+            _cmd="query"
+            ;;
+    esac
+
+    _hive="$(_mh_recall_arg_hive "$_default_hive" "$@")"
+    _mh_recall_prepare_index "$_helper" "$_hive" "$_cmd" || _mh_die "Could not build HyperRecall index at $_hive/.hivecode/index.sqlite"
+    MEMORY_HIVE_DIR="$_hive" python3 "$_helper" "$_cmd" "$@"
 }
 
 # _mh_sanitize_name <raw> -> prints sanitized name to stdout.
@@ -1167,266 +1271,287 @@ EOF
 
 # --- verbs -------------------------------------------------------------------
 
+
+# --- simplified operator surface --------------------------------------------
+
+_mh_count_agent_silos_in() {
+    _adir="$1"
+    _count=0
+    if [ -d "$_adir" ]; then
+        for _p in "$_adir"/*; do
+            [ -d "$_p" ] || continue
+            _n="$(basename "$_p")"
+            case "$_n" in _archived|.*) continue ;; esac
+            _count=$((_count + 1))
+        done
+    fi
+    printf '%s' "$_count"
+}
+
+_mh_count_markdown_files() {
+    _dir="$1"
+    if [ -d "$_dir" ]; then
+        find "$_dir" -type f -name '*.md' 2>/dev/null | wc -l | tr -d ' '
+    else
+        printf '0'
+    fi
+}
+
+mh_status() {
+    _hive="$(_mh_effective_hive_dir)"
+    _agents="$_hive/agents"
+    if [ ! -d "$_hive" ]; then
+        _mh_die "Memory Hive is not installed at $INSTALL_DIR. Run the installer first."
+    fi
+
+    _agent_count="$(_mh_count_agent_silos_in "$_agents")"
+    _raw_count="$(_mh_count_markdown_files "$_hive/learnings/raw")"
+    _distilled_count="$(_mh_count_markdown_files "$_hive/learnings/distilled")"
+    _stale_count="0"
+    if [ -d "$HIVE_DIR" ]; then
+        _stale_count="$(mh_stale --count 2>/dev/null | tr -dc '0-9' || printf '0')"
+        [ -n "$_stale_count" ] || _stale_count=0
+    fi
+
+    _index_state="missing"
+    if [ -f "$_hive/.hivecode/index.sqlite" ]; then
+        _index_state="ready"
+    fi
+    _helper_state="missing"
+    if _mh_recall_helper >/dev/null 2>&1; then
+        _helper_state="ready"
+    fi
+
+    _doctor_status="not-run"
+    if [ -d "$HIVE_DIR" ]; then
+        _doctor_tmp="$(mktemp -t mh-status-doctor.XXXXXX)"
+        set +e
+        mh_doctor > "$_doctor_tmp" 2>&1
+        _doctor_rc=$?
+        set -e
+        rm -f "$_doctor_tmp"
+        if [ "$_doctor_rc" -eq 0 ]; then
+            _doctor_status="ok"
+        else
+            _doctor_status="attention"
+        fi
+    fi
+
+    _last="never"
+    if [ -f "$_hive/.last-maintained" ]; then
+        _last="$(sed -n '1p' "$_hive/.last-maintained" 2>/dev/null)"
+        [ -n "$_last" ] || _last="unknown"
+    fi
+
+    printf 'Memory Hive status\n'
+    printf 'Install: %s\n' "$INSTALL_DIR"
+    printf 'Hive:    %s\n' "$_hive"
+    printf 'Agents:  %s active silo(s)\n' "$_agent_count"
+    printf 'Recall:  index=%s helper=%s\n' "$_index_state" "$_helper_state"
+    printf 'Health:  %s\n' "$_doctor_status"
+    printf 'Memory:  %s raw learning(s), %s distilled file(s), %s stale raw item(s)\n' \
+        "$_raw_count" "$_distilled_count" "$_stale_count"
+    printf 'Last maintenance: %s\n' "$_last"
+    printf '\n'
+    printf 'Normal commands:\n'
+    printf '  memory-hive update             # refresh Memory Hive and run maintenance\n'
+    printf '  memory-hive add <name> --role coder\n'
+    printf '  memory-hive search "term"\n'
+    printf '  memory-hive help --advanced    # show internal/debug commands\n'
+}
+
+mh_maintain() {
+    _mh_require_install
+    _quiet=0
+    _apply=0
+    _report=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --quiet|-q) _quiet=1 ;;
+            --dry-run) _apply=0 ;;
+            --apply) _apply=1 ;;
+            --report|--signals)
+                shift
+                [ $# -gt 0 ] || _mh_die "--report requires a file"
+                _report="$1"
+                ;;
+            --report=*|--signals=*) _report="${1#*=}" ;;
+            -h|--help)
+                cat <<'MAINTAINHELP'
+Usage: memory-hive maintain [--quiet] [--dry-run|--apply] [--report <file>]
+
+Runs the periodic maintenance wrapper: refresh registry/citations, update or
+build the HyperRecall index, run the Optimizer health pass, and record the last
+maintenance timestamp. Normal users usually run `memory-hive update`; this verb
+is the local/offline maintenance path.
+MAINTAINHELP
+                return 0
+                ;;
+            *) _mh_die "Unknown flag: $1 (try memory-hive maintain --help)" ;;
+        esac
+        shift
+    done
+
+    _tmpdir="$(mktemp -d 2>/dev/null || mktemp -d -t mh-maintain)" || _mh_die "Could not create temp dir"
+    _registry_rc=0
+    _recall_rc=0
+    _optimizer_rc=0
+    _recall_action="skipped"
+
+    mh_register >/dev/null 2>"$_tmpdir/register.err" || _registry_rc=$?
+    mh_citations >/dev/null 2>"$_tmpdir/citations.err" || true
+
+    if _helper="$(_mh_recall_helper 2>/dev/null)"; then
+        if [ -f "$HIVE_DIR/.hivecode/index.sqlite" ]; then
+            _recall_action="updated"
+            set +e
+            MEMORY_HIVE_DIR="$HIVE_DIR" python3 "$_helper" update --hive "$HIVE_DIR" --json > "$_tmpdir/recall.json" 2>"$_tmpdir/recall.err"
+            _recall_rc=$?
+            set -e
+        else
+            _recall_action="built"
+            set +e
+            MEMORY_HIVE_DIR="$HIVE_DIR" python3 "$_helper" build --hive "$HIVE_DIR" --json > "$_tmpdir/recall.json" 2>"$_tmpdir/recall.err"
+            _recall_rc=$?
+            set -e
+        fi
+    else
+        _recall_rc=1
+        _recall_action="helper-missing"
+    fi
+
+    _opt_args="--dry-run"
+    [ "$_apply" -eq 1 ] && _opt_args="--apply"
+    if [ -n "$_report" ]; then
+        set +e
+        mh_optimize $_opt_args --report "$_report" > "$_tmpdir/optimize.out" 2>"$_tmpdir/optimize.err"
+        _optimizer_rc=$?
+        set -e
+    else
+        set +e
+        mh_optimize $_opt_args > "$_tmpdir/optimize.out" 2>"$_tmpdir/optimize.err"
+        _optimizer_rc=$?
+        set -e
+    fi
+
+    _stamp="$(date '+%Y-%m-%d %H:%M:%S %Z' 2>/dev/null || date)"
+    printf '%s\n' "$_stamp" > "$HIVE_DIR/.last-maintained" 2>/dev/null || true
+
+    _health="ok"
+    if [ "$_registry_rc" -ne 0 ] || [ "$_recall_rc" -ne 0 ] || [ "$_optimizer_rc" -ne 0 ]; then
+        _health="attention"
+    fi
+
+    if [ "$_quiet" -eq 0 ]; then
+        printf 'Memory Hive maintenance\n'
+        printf 'registry=%s\n' "$([ "$_registry_rc" -eq 0 ] && printf ok || printf attention)"
+        printf 'recall=%s' "$_recall_action"
+        [ "$_recall_rc" -eq 0 ] && printf ' (ok)\n' || printf ' (attention)\n'
+        printf 'optimizer=%s\n' "$([ "$_optimizer_rc" -eq 0 ] && printf ok || printf attention)"
+        [ -n "$_report" ] && printf 'report=%s\n' "$_report"
+        printf 'last_maintenance=%s\n' "$_stamp"
+        printf 'health=%s\n' "$_health"
+        if [ "$_health" = "attention" ]; then
+            printf 'details=%s\n' "$_tmpdir"
+            return 1
+        fi
+    fi
+
+    if [ "$_health" = "attention" ]; then
+        return 1
+    fi
+    rm -rf "$_tmpdir"
+    return 0
+}
+
+mh_update() {
+    if [ -f "$INSTALL_DIR/update.sh" ]; then
+        MEMORY_HIVE_DIR="$INSTALL_DIR" sh "$INSTALL_DIR/update.sh"
+        return $?
+    fi
+    _mh_die "update.sh missing at $INSTALL_DIR/update.sh. Re-run: curl -fsSL https://hive.neural-forge.io/install.sh | sh"
+}
+
 mh_help() {
-    cat <<EOF
-memory-hive — manage agent silos in your hive.
+    _advanced=0
+    case "${1:-}" in
+        --advanced|advanced) _advanced=1 ;;
+    esac
 
-Usage:
+    if [ "$_advanced" -eq 0 ]; then
+        cat <<'EOF'
+memory-hive — local-first memory for agent teams.
+
+Normal path:
+  memory-hive                         Show status (also the default with no args)
+  memory-hive update                  Refresh Memory Hive and run maintenance
+  memory-hive add <name> --role coder Add another agent silo
+  memory-hive search "term"           Search the hive
+  memory-hive recall "query text"     Retrieve cited context; index is maintained automatically
+
+That's it for day-one use. Agents read the hive on boot, write back after work,
+and `memory-hive update` handles periodic maintenance.
+
+Advanced/debug:
+  memory-hive help --advanced
+EOF
+        return 0
+    fi
+
+    cat <<'EOF'
+memory-hive advanced commands
+
+Lifecycle:
   memory-hive add <name> [--role <template|path>]
-      Create a new agent silo. <name> is sanitized to lowercase
-      letters/digits/dashes. <template> is one of: $(_mh_list_templates).
-      Alternatively pass a path to a .md file for a custom role.
-
-  memory-hive list
-      Print the current roster (excluding archived).
-
-  memory-hive archive <name>
-      Move the silo to hive/agents/_archived/<YYYY-MM-DD>/<name>/.
-      Never deletes.
-
-  memory-hive role <name>
-      Open the agent's context.md in \$EDITOR (defaults to vi).
-
-  memory-hive rename <old> <new>
-      Rename a silo directory. <old> must exist, <new> must not.
-
-  memory-hive register
-      Regenerate hive/registry/AGENTS.md from the current silo contents.
-      Runs automatically after add/archive/rename/role, so most users will
-      never call it directly. Also rebuilds CITATIONS.md.
-
-  memory-hive citations
-      Scan every silo for cross-agent citations (backticked agent names,
-      relative markdown links, and frontmatter \`cites:\` lists) and
-      rewrite hive/registry/CITATIONS.md as a directed graph showing
-      who cites whom. Also fires from \`register\`.
-
-  memory-hive doctor
-      Health-check the install: verifies hive layout, silo triplets, the
-      managed CLAUDE.md block, and that AGENTS.md matches on-disk silos.
-
+  memory-hive list | ls
   memory-hive setup
-      Run the interactive setup wizard — asks how many agents you want,
-      their names, and roles. Also offers to import agents from
-      ~/.claude/agents/ and ~/.openclaw/hive/agents/ if either exists.
+  memory-hive role <name>
+  memory-hive rename <old> <new>
+  memory-hive archive <name>
+  memory-hive register
+  memory-hive apply [--force]
 
-  memory-hive apply
-      Find running agent processes and print the exact commands to
-      restart them so the managed block takes effect. Non-destructive
-      by default (prints advice, doesn't kill anything). Add --force
-      to SIGTERM detected CLI agents.
+Health and maintenance:
+  memory-hive status
+  memory-hive update
+  memory-hive maintain [--quiet] [--dry-run|--apply] [--report <file>]
+  memory-hive doctor
+  memory-hive optimize|optimizer [--dry-run|--apply] [--report <file>]
+  memory-hive checkpoint [--name <name>] [--list]
+  memory-hive diff [--since <checkpoint|date>]
 
-  memory-hive stats
-      Honest telemetry. Counts REAL file writes in the hive (silo
-      logs, memory bullets, raw learnings, curator promotions) by
-      agent and by time window. Every count maps to a file on disk
-      you can \`ls -la\` yourself. No timers, no proxies, no fake
-      activity.
-
-  memory-hive dedup [--per-agent] [--strict] [--threshold N]
-      Scan hive/learnings/raw/ and report near-duplicate clusters so the
-      curator can consolidate. Default groups across all agents by
-      normalized H1/title. --strict adds a first-paragraph word-overlap
-      filter (default 50%, tunable with --threshold). Print-only;
-      raw files are never modified.
-
-  memory-hive conflicts [--agent <name>] [--strict] [--write]
-      Surface raw learnings that contradict each other so the curator can
-      resolve them via curator/CONFLICTS.md. Clusters by normalized title,
-      then within each 2+ cluster scans for three signals: opposing-claim
-      words (always/never, fix/broken, do/dont, use/avoid, ...), opposite
-      frontmatter \`kind:\` (win vs mistake), or confidence high/low split.
-      --agent narrows to clusters touching one silo. --strict exits 1 on
-      any conflict (CI gating). --write appends a stub block per cluster
-      to curator/CONFLICTS.md ready for the curator to investigate.
-
-  memory-hive watch
-      Live stream of file events as agents write to the hive. Prints
-      timestamp + agent + file for each event and keeps a running
-      counter. Ctrl+C to exit. Uses fswatch or inotifywait if
-      available; falls back to polling (5s).
-
+Inspection:
   memory-hive tail [-n <N>] [--silo <name>] [--since <YYYY-MM-DD>]
-      Show the N most recent hive writes with the key lines from each
-      (default N=10, cap 100). Like \`tail -f\` but for the hive — and
-      non-streaming: always exits after printing. Use \`watch\` for the
-      streaming view. Per-kind extraction: log/DECISIONS/CONFLICTS show
-      the newest dated heading + first paragraph; memory/context show
-      the tail; learnings show H1 + frontmatter.
-
-  memory-hive promote <raw-file> [--into <name>] [--title <text>] [--dry-run]
-      One-command curator workflow. Read a raw learning under
-      hive/learnings/raw/, append a summary with a backlink to a
-      distilled file, and log the decision in curator/DECISIONS.md.
-      The raw file is left untouched (source of truth).
-        <raw-file>      Path to raw markdown (relative or absolute).
-                        Must live under hive/learnings/raw/.
-        --into <name>   Target distilled filename (e.g. patterns.md,
-                        wins.md, mistakes.md, cross-agent-insights.md,
-                        or any topical file). Defaults to inferring
-                        from the raw frontmatter 'kind:' field, or
-                        patterns.md if no signal.
-        --title <text>  Override the section title (default: first H1
-                        of the raw file).
-        --dry-run       Print what would be written; touch nothing.
-      Examples:
-        memory-hive promote hive/learnings/raw/coder/2026-04-23-x.md
-        memory-hive promote raw/coder/x.md --into wins.md
-        memory-hive promote raw/coder/x.md --title "Test isolation"
-
-  memory-hive confidence
-      Cluster raw learnings (hive/learnings/raw/<agent>/*.md) by
-      normalized title and suggest upgrades when a cluster crosses an
-      HIVE_ARCHITECTURE threshold (3 aligned low → medium, 3 aligned
-      medium → high, 3+ aligned high → promotion-ready). Suggest-only;
-      curator decides what to actually promote.
-
-  memory-hive tag <file> <tag1> [tag2 ...]
-      Add tags to a learning file's YAML frontmatter. Tags must be
-      lowercase letters/digits/dashes, 2-24 chars. Existing tags are
-      merged, deduplicated, and re-sorted alphabetically. Prints the
-      before/after tags line.
-
-  memory-hive tags [--agent <name>] [--tag <name>]
-      Scan every .md file under the hive for \`tags:\` frontmatter.
-      Without args, print each unique tag and its count, sorted by
-      count desc. --tag lists every file using that tag. --agent
-      limits the scan to one agent's silo (agents/<name>/ and
-      learnings/raw/<name>-*.md).
-
-  memory-hive stale [--days N] [--agent <name>] [--count]
-      List raw learnings older than N days (default 7) that have no
-      backlink in curator/DECISIONS.md. The doctor's "stale raw
-      learnings" check uses the same data; a count above
-      MEMORY_HIVE_STALE_THRESHOLD (default 20) escalates doctor to
-      a warning. --count prints just the integer (scriptable).
-      Examples:
-        memory-hive stale
-        memory-hive stale --days 14 --agent coder
-        memory-hive stale --count
-
-  memory-hive checkpoint [--name <name>] | --list
-      Save a named reference marker under \$HIVE_DIR/.checkpoints/.
-      Used as the "since" point for \`memory-hive diff\`. Default name
-      is checkpoint-<YYYY-MM-DD-HHMMSS>. \`--list\` prints all
-      checkpoints (newest first).
-
-  memory-hive diff [--since <checkpoint|YYYY-MM-DD>] [--verbose]
-      Show every hive write since a reference point. Default --since
-      is the most recent checkpoint, or the install baseline if none
-      exists. Lists New vs Modified files, classified by agent.
-
-  memory-hive query <term> [--silo <name>] [--kind <k>] [--since <date>]
-                           [--paths-only] [--regex]
-      Search every text surface of the hive (silo logs/memory/context,
-      raw + distilled learnings, knowledge, curator, registry, raw/).
-      Default is fixed-string match; pass --regex for ERE. Output is
-      grouped by file, ANSI-highlighted on a tty, exits 1 if no
-      matches. Run \`memory-hive query --help\` for full flag docs.
-
-  memory-hive recall|hyper build|update|query|bundle|stats|doctor|gc|bench|skills
-      Built-in Memory Hive HyperRecall index. Source of truth stays
-      markdown; the derived SQLite cache lives at hive/.hivecode/index.sqlite
-      and can be rebuilt at any time.
-      Examples:
-        memory-hive recall build --json
-        memory-hive recall query "operator context" --limit 5 --json
-        memory-hive recall bundle "task context" --for-agent hermes --max-tokens 1200
-        memory-hive recall stats --json
-        memory-hive recall doctor --json
-
-  memory-hive lint [--fix] [--strict] [<path>]
-      Validate every raw learning file's frontmatter + content against
-      the documented schema (HIVE_ARCHITECTURE.md). Reports issues with
-      file:level. Does NOT modify files unless --fix is set. Lint is
-      the gate that keeps signal high in the learning pool.
-        --fix      Auto-fix safe filename issues (uppercase ->
-                   lowercase, underscores -> dashes).
-        --strict   Treat warnings as errors (CI-friendly).
-      Exit codes: 0 clean, 1 warnings only, 2 errors. Examples:
-        memory-hive lint
-        memory-hive lint --strict
-        memory-hive lint hive/learnings/raw/coder/2026-04-23-foo.md
-
-  memory-hive seed [--scenario <name>] [--dry-run] [--force]
-      Populate a fresh hive with synthetic but realistic data so that
-      \`tail\`, \`digest\`, \`confidence\`, etc. produce non-trivial output
-      on first use. Bundled scenarios: default (3 agents, 2 weeks of
-      activity), solo (1 agent), large-team (5 agents). Refuses to run
-      against a non-empty hive unless --force is set.
-        --scenario <name>   default | solo | large-team
-        --dry-run           list what would be written; touch nothing
-        --force             overwrite a non-empty hive
-
-  memory-hive digest [--today | --yesterday | --week | --since YYYY-MM-DD]
-      Human-readable summary of what changed in the hive over a time
-      window. Complements 'stats' (counts only) by extracting the
-      content of writes — newest log entry per silo, new raw learnings,
-      curator promotions, decisions added. Default window: last 24
-      hours. Examples:
-        memory-hive digest                    # last 24 hours
-        memory-hive digest --today
-        memory-hive digest --yesterday
-        memory-hive digest --week
-        memory-hive digest --since 2026-04-20
-
-  memory-hive curate [--dry-run | --apply]
-      One-pass autonomous curator. Runs dedup, confidence, lint --strict,
-      and stale in order, then prints a compact summary
-      ("X clusters need attention, Y promotions ready, Z lint violations,
-      N stale items."). Default is --dry-run (suggest only). --apply runs
-      promotions for clusters with 3+ aligned high-confidence
-      observations; the representative file is the highest-confidence,
-      newest-mtime cluster member. Every action is printed even under
-      --apply so the curator stays in the loop.
-
-  memory-hive optimize [--dry-run | --apply] [--report <file>]
-      Built-in Optimizer loop for Memory Hive. Runs doctor, curate, digest,
-      stats, and stale, then prints a short action report. With --report,
-      writes a compact markdown report for Hive Swarm routing signals.
-      Alias: memory-hive optimizer.
-
+  memory-hive watch
+  memory-hive stats
+  memory-hive digest [--today|--yesterday|--week|--since <YYYY-MM-DD>]
+  memory-hive query|search <term> [--regex] [--paths-only]
   memory-hive bundle [--for <agent>] [--max-tokens N] [--out <file>]
-      Concatenate the canonical hive surfaces into a single
-      prompt-injection-ready markdown bundle. Closes the gap between
-      "memory exists on disk" and "the agent's prompt knows about it."
-      Sections are emitted in this order, each under a markdown H1
-      heading naming its source path:
-        1. hive/index.md
-        2. hive/registry/AGENTS.md
-        3. hive/knowledge/HUMAN_CONTEXT.md (and other knowledge files)
-        4. hive/learnings/distilled/*.md (newest first)
-        5. agents/<for>/context.md + memory.md (only with --for)
-      Default writes to stdout; --out <file> writes to disk. --max-tokens
-      uses a 1 token ~ 4 chars estimate and trims oldest distilled
-      content first when over budget. Footer summary on stderr.
-      Honors .baseline-installed: unedited installer scaffolding files
-      (e.g. an empty HUMAN_CONTEXT.md template) are skipped so they
-      don't pollute the bundle. Examples:
-        memory-hive bundle
-        memory-hive bundle --for coder
-        memory-hive bundle --for main --max-tokens 4000
-        memory-hive bundle --out ~/prompts/hive-context.md
 
-  memory-hive reflect <agent> [--days N] [--write] [--raw] [--dry-run]
-      Self-reflection. Read <agent>'s log.md, distill the entries from
-      the last N days (default 7) into a memory.md addendum that
-      surfaces recurring themes (words appearing in 3+ entries score
-      as patterns). Default mode is dry-run: prints the proposed
-      addendum and writes nothing. --write appends to the agent's
-      memory.md; --raw also drops a raw learning under
-      learnings/raw/<agent>/ for the curator to promote. Lets agents
-      close their own loop without waiting on the curator.
-      Examples:
-        memory-hive reflect coder
-        memory-hive reflect coder --days 14
-        memory-hive reflect coder --write
-        memory-hive reflect coder --write --raw
+HyperRecall / TokenFS:
+  memory-hive recall "query text"
+  memory-hive recall query "query text" [--json]
+  memory-hive recall bundle "query text" [--for-agent <agent>] [--json]
+  memory-hive recall build --json
+  memory-hive recall update --json
+  memory-hive recall doctor --json
+  memory-hive recall stats --json
+  memory-hive hyper ...
+  Derived index: hive/.hivecode/index.sqlite
 
-  memory-hive help
-      Show this message.
-
-Install root: $INSTALL_DIR
+Curator workflow:
+  memory-hive curate [--dry-run|--apply]
+  memory-hive promote <raw-file> [--into <name>] [--title <text>] [--dry-run]
+  memory-hive confidence
+  memory-hive dedup [--per-agent] [--strict] [--threshold N]
+  memory-hive conflicts [--agent <name>] [--strict] [--write]
+  memory-hive stale [--days N] [--agent <name>] [--count]
+  memory-hive lint [--fix] [--strict]
+  memory-hive tag <file> <tag1> [tag2 ...]
+  memory-hive tags [--agent <name>] [--tag <name>]
+  memory-hive citations
+  memory-hive reflect [--agent <name>] [--context <text>]
+  memory-hive seed [--scenario <name>] [--dry-run] [--force]
 EOF
 }
 
@@ -6590,13 +6715,16 @@ EOF
 # --- dispatch ----------------------------------------------------------------
 
 if [ $# -eq 0 ]; then
-    mh_help
+    mh_status
     exit 0
 fi
 
 _verb="$1"
 shift
 case "$_verb" in
+    status)   mh_status "$@" ;;
+    update|upgrade|sync) mh_update "$@" ;;
+    maintain|maintenance) mh_maintain "$@" ;;
     add)      mh_add "$@" ;;
     list|ls)  mh_list ;;
     archive)  mh_archive "$@" ;;
@@ -6620,7 +6748,7 @@ case "$_verb" in
     dedup)    mh_dedup "$@" ;;
     conflicts) mh_conflicts "$@" ;;
     query|search) mh_query "$@" ;;
-    recall|hyper) if [ -d "$HIVE_DIR" ]; then MEMORY_HIVE_DIR="$HIVE_DIR" python3 "$(dirname "$0")/memory_hive_recall.py" "$@"; else MEMORY_HIVE_DIR="$INSTALL_DIR" python3 "$(dirname "$0")/memory_hive_recall.py" "$@"; fi ;;
+    recall|hyper) mh_recall "$@" ;;
     lint)     mh_lint "$@" ;;
     digest)   mh_digest "$@" ;;
     curate)   mh_curate "$@" ;;
@@ -6628,7 +6756,7 @@ case "$_verb" in
     bundle)   mh_bundle "$@" ;;
     reflect)  mh_reflect "$@" ;;
     seed)     mh_seed "$@" ;;
-    help|-h|--help) mh_help ;;
+    help|-h|--help) mh_help "$@" ;;
     *)
         printf 'Unknown command: %s\n\n' "$_verb" >&2
         mh_help >&2
