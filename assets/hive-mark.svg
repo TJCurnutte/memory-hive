@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" role="img" aria-label="Memory Hive">
+  <defs>
+    <linearGradient id="hive-logo-gradient" x1="24" y1="16" x2="99" y2="99" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#8d6cff"/>
+      <stop offset=".34" stop-color="#ff7da8"/>
+      <stop offset=".68" stop-color="#4edcff"/>
+      <stop offset="1" stop-color="#48e7a4"/>
+    </linearGradient>
+    <radialGradient id="hive-logo-depth" cx="44%" cy="34%" r="72%">
+      <stop offset="0" stop-color="#ffffff" stop-opacity=".32"/>
+      <stop offset=".48" stop-color="#ffffff" stop-opacity=".07"/>
+      <stop offset="1" stop-color="#11100d" stop-opacity=".28"/>
+    </radialGradient>
+    <mask id="hive-logo-comb-mask">
+      <rect width="128" height="128" fill="#fff"/>
+      <g fill="#000">
+        <path d="M64 47l13 7.5v15L64 77l-13-7.5v-15L64 47Z"/>
+        <path d="M40 47l13 7.5v15L40 77l-13-7.5v-15L40 47Z"/>
+        <path d="M88 47l13 7.5v15L88 77l-13-7.5v-15L88 47Z"/>
+        <path d="M52 27l13 7.5v15L52 57l-13-7.5v-15L52 27Z"/>
+        <path d="M76 27l13 7.5v15L76 57l-13-7.5v-15L76 27Z"/>
+        <path d="M52 67l13 7.5v15L52 97l-13-7.5v-15L52 67Z"/>
+        <path d="M76 67l13 7.5v15L76 97l-13-7.5v-15L76 67Z"/>
+      </g>
+    </mask>
+  </defs>
+  <g mask="url(#hive-logo-comb-mask)">
+    <rect x="8" y="8" width="112" height="112" rx="32" fill="url(#hive-logo-gradient)"/>
+    <rect x="8" y="8" width="112" height="112" rx="32" fill="url(#hive-logo-depth)"/>
+    <path d="M22 19h40c27 0 47 13 58 38-26-12-57-9-92 8-12 6-20 12-25 18 0-32 6-53 19-64Z" fill="#fff" opacity=".22"/>
+    <path d="M13 91c20-18 44-28 72-31 18-2 31 0 40 5-8 32-29 53-64 56H40c-15 0-25-10-27-30Z" fill="#10100d" opacity=".14"/>
+  </g>
+  <g fill="none" stroke="#f1fffa" stroke-opacity=".72" stroke-width="2" stroke-linejoin="round">
+    <path d="M64 47l13 7.5v15L64 77l-13-7.5v-15L64 47Z"/>
+    <path d="M40 47l13 7.5v15L40 77l-13-7.5v-15L40 47Z"/>
+    <path d="M88 47l13 7.5v15L88 77l-13-7.5v-15L88 47Z"/>
+    <path d="M52 27l13 7.5v15L52 57l-13-7.5v-15L52 27Z"/>
+    <path d="M76 27l13 7.5v15L76 57l-13-7.5v-15L76 27Z"/>
+    <path d="M52 67l13 7.5v15L52 97l-13-7.5v-15L52 67Z"/>
+    <path d="M76 67l13 7.5v15L76 97l-13-7.5v-15L76 67Z"/>
+  </g>
+</svg>

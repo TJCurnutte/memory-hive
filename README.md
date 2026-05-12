@@ -1,5 +1,5 @@
 <p align="center">
-  <img alt="Memory Hive logo" src="assets/hive-mark.png" width="148">
+  <img alt="Memory Hive logo" src="assets/hive-mark.svg" width="148">
 </p>
 
 <h1 align="center">Memory Hive</h1>
