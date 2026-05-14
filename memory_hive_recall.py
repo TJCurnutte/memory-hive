@@ -353,6 +353,7 @@ def _init_db(con: sqlite3.Connection) -> str:
     CREATE INDEX idx_chunks_file ON chunks(file_id);
     CREATE INDEX idx_codes_code ON codes(code);
     CREATE INDEX idx_tokens_token ON tokens(token);
+    CREATE INDEX idx_tokens_chunk ON tokens(chunk_id);
     """)
     try:
         con.execute("CREATE VIRTUAL TABLE chunks_fts USING fts5(text, heading_path, rel_path)")
@@ -360,6 +361,88 @@ def _init_db(con: sqlite3.Connection) -> str:
         return "available"
     except sqlite3.OperationalError:
         return "unavailable"
+
+
+def _index_markdown_file(
+    con: sqlite3.Connection,
+    root: Path,
+    path: Path,
+    *,
+    used_codes: dict[str, int],
+    fts5: str,
+    indexed_at: int,
+    data: bytes | None = None,
+) -> tuple[FileRecord, list[Chunk], list[CodeRecord]]:
+    rel_path = _rel(path, root)
+    data = path.read_bytes() if data is None else data
+    stat = path.stat()
+    kind, agent = classify_file(rel_path)
+    record = FileRecord(rel_path, kind, agent, _sha256(data), len(data), int(stat.st_mtime_ns))
+    cur = con.execute(
+        "INSERT INTO files(rel_path, kind, agent, sha256, size, mtime_ns, indexed_at) VALUES(?, ?, ?, ?, ?, ?, ?)",
+        (record.rel_path, record.kind, record.agent, record.sha256, record.size, record.mtime_ns, indexed_at),
+    )
+    file_id_raw = cur.lastrowid
+    if file_id_raw is None:
+        raise RuntimeError(f"failed to index file: {rel_path}")
+    file_id = int(file_id_raw)
+    chunks: list[Chunk] = []
+    codes: list[CodeRecord] = []
+    for ordinal, chunk in enumerate(chunk_file(path, hive_root=root), start=1):
+        code = make_code(chunk, agent, used_codes)
+        checksum = _sha256(chunk.text.encode("utf-8"))
+        ccur = con.execute(
+            """INSERT INTO chunks(file_id, ordinal, chunk_type, heading_path, start_line, end_line, start_byte, end_byte, text_sha256, text, source_key) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (file_id, ordinal, chunk.kind, chunk.heading_path, chunk.start_line, chunk.end_line, chunk.start_byte, chunk.end_byte, checksum, chunk.text, chunk.source_key),
+        )
+        chunk_id_raw = ccur.lastrowid
+        if chunk_id_raw is None:
+            raise RuntimeError(f"failed to index chunk in {rel_path}:{chunk.start_line}-{chunk.end_line}")
+        chunk_id = int(chunk_id_raw)
+        chunk_with_code = Chunk(**{**asdict(chunk), "code": code, "chunk_id": chunk_id})
+        chunks.append(chunk_with_code)
+        con.execute("INSERT INTO codes(chunk_id, code, checksum) VALUES(?, ?, ?)", (chunk_id, code, checksum))
+        if fts5 == "available":
+            con.execute("INSERT INTO chunks_fts(rowid, text, heading_path, rel_path) VALUES(?, ?, ?, ?)", (chunk_id, chunk.text, chunk.heading_path, rel_path))
+        for token in sorted(set(w.lower() for w in WORD_RE.findall(chunk.text))):
+            con.execute("INSERT INTO tokens(chunk_id, token, weight) VALUES(?, ?, ?)", (chunk_id, token, 1.0))
+        con.execute("INSERT INTO sketches(chunk_id, simhash64) VALUES(?, ?)", (chunk_id, _sha256(chunk.text.lower().encode("utf-8"))[:16]))
+        codes.append(CodeRecord(code, chunk.source_key, rel_path, chunk.start_line, chunk.end_line, checksum))
+    return record, chunks, codes
+
+
+def _code_base_and_count(code: str) -> tuple[str, int]:
+    base, sep, suffix = code.rpartition("~")
+    if sep and suffix.isdigit():
+        return base, int(suffix)
+    return code, 1
+
+
+def _load_used_codes(con: sqlite3.Connection) -> dict[str, int]:
+    used: dict[str, int] = {}
+    for row in con.execute("SELECT code FROM codes"):
+        base, count = _code_base_and_count(row[0])
+        used[base] = max(used.get(base, 0), count)
+    return used
+
+
+def _delete_indexed_file(con: sqlite3.Connection, rel_path: str) -> int:
+    row = con.execute("SELECT id FROM files WHERE rel_path=?", (rel_path,)).fetchone()
+    if row is None:
+        return 0
+    file_id = int(row[0])
+    chunk_ids = [int(r[0]) for r in con.execute("SELECT id FROM chunks WHERE file_id=?", (file_id,))]
+    for chunk_id in chunk_ids:
+        try:
+            con.execute("DELETE FROM chunks_fts WHERE rowid=?", (chunk_id,))
+        except sqlite3.OperationalError:
+            pass
+        con.execute("DELETE FROM tokens WHERE chunk_id=?", (chunk_id,))
+        con.execute("DELETE FROM sketches WHERE chunk_id=?", (chunk_id,))
+        con.execute("DELETE FROM codes WHERE chunk_id=?", (chunk_id,))
+    con.execute("DELETE FROM chunks WHERE file_id=?", (file_id,))
+    con.execute("DELETE FROM files WHERE id=?", (file_id,))
+    return len(chunk_ids)
 
 
 def build_index(hive_root: str | os.PathLike[str], *, force: bool = False, incremental: bool = False) -> BuildResult:
@@ -376,28 +459,10 @@ def build_index(hive_root: str | os.PathLike[str], *, force: bool = False, incre
         con.execute("INSERT INTO meta(key, value) VALUES('fts5', ?)", (fts5,))
         now = int(time.time())
         for path in iter_markdown_files(root):
-            rel_path = _rel(path, root)
-            data = path.read_bytes()
-            stat = path.stat()
-            kind, agent = classify_file(rel_path)
-            record = FileRecord(rel_path, kind, agent, _sha256(data), len(data), int(stat.st_mtime_ns))
-            files[rel_path] = record
-            cur = con.execute("INSERT INTO files(rel_path, kind, agent, sha256, size, mtime_ns, indexed_at) VALUES(?, ?, ?, ?, ?, ?, ?)", (record.rel_path, record.kind, record.agent, record.sha256, record.size, record.mtime_ns, now))
-            file_id = int(cur.lastrowid)
-            for ordinal, chunk in enumerate(chunk_file(path, hive_root=root), start=1):
-                code = make_code(chunk, agent, used_codes)
-                checksum = _sha256(chunk.text.encode("utf-8"))
-                ccur = con.execute("""INSERT INTO chunks(file_id, ordinal, chunk_type, heading_path, start_line, end_line, start_byte, end_byte, text_sha256, text, source_key) VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (file_id, ordinal, chunk.kind, chunk.heading_path, chunk.start_line, chunk.end_line, chunk.start_byte, chunk.end_byte, checksum, chunk.text, chunk.source_key))
-                chunk_id = int(ccur.lastrowid)
-                chunk_with_code = Chunk(**{**asdict(chunk), "code": code, "chunk_id": chunk_id})
-                chunks.append(chunk_with_code)
-                con.execute("INSERT INTO codes(chunk_id, code, checksum) VALUES(?, ?, ?)", (chunk_id, code, checksum))
-                if fts5 == "available":
-                    con.execute("INSERT INTO chunks_fts(rowid, text, heading_path, rel_path) VALUES(?, ?, ?, ?)", (chunk_id, chunk.text, chunk.heading_path, rel_path))
-                for token in sorted(set(w.lower() for w in WORD_RE.findall(chunk.text))):
-                    con.execute("INSERT INTO tokens(chunk_id, token, weight) VALUES(?, ?, ?)", (chunk_id, token, 1.0))
-                con.execute("INSERT INTO sketches(chunk_id, simhash64) VALUES(?, ?)", (chunk_id, _sha256(chunk.text.lower().encode("utf-8"))[:16]))
-                codes.append(CodeRecord(code, chunk.source_key, rel_path, chunk.start_line, chunk.end_line, checksum))
+            record, file_chunks, file_codes = _index_markdown_file(con, root, path, used_codes=used_codes, fts5=fts5, indexed_at=now)
+            files[record.rel_path] = record
+            chunks.extend(file_chunks)
+            codes.extend(file_codes)
         con.commit()
     return BuildResult(root, db_path, files, chunks, codes)
 
@@ -481,24 +546,53 @@ def doctor(hive_root: str | os.PathLike[str]) -> dict[str, object]:
 def update_index(hive_root: str | os.PathLike[str]) -> dict[str, int | str]:
     root = Path(hive_root).resolve()
     existing = {row["rel_path"]: row for row in _indexed_file_rows(root)}
-    current: dict[str, tuple[str, int, int]] = {}
+    current_paths: set[str] = set()
+    changed_files: list[tuple[Path, bytes]] = []
+    skipped = 0
+    touched_same_content = 0
+
     for path in iter_markdown_files(root):
         rel_path = _rel(path, root)
-        data = path.read_bytes()
+        current_paths.add(rel_path)
         st = path.stat()
-        current[rel_path] = (_sha256(data), len(data), int(st.st_mtime_ns))
-    changed = 0
-    skipped = 0
-    for rel_path, meta in current.items():
         row = existing.get(rel_path)
-        if row and row["sha256"] == meta[0] and int(row["size"]) == meta[1] and int(row["mtime_ns"]) == meta[2]:
+        size = int(st.st_size)
+        mtime_ns = int(st.st_mtime_ns)
+        if row and int(row["size"]) == size and int(row["mtime_ns"]) == mtime_ns:
             skipped += 1
-        else:
-            changed += 1
-    deleted = len(set(existing) - set(current))
-    if changed or deleted:
-        build_index(root, force=True)
-    return {"ok": 1, "changed_files": changed, "skipped_files": skipped, "deleted_files": deleted, "source_fingerprint": source_fingerprint(root)}
+            continue
+        data = path.read_bytes()
+        sha = _sha256(data)
+        if row and row["sha256"] == sha and int(row["size"]) == size:
+            touched_same_content += 1
+            skipped += 1
+            with _connect_existing(root) as con:
+                con.execute("UPDATE files SET mtime_ns=?, indexed_at=? WHERE rel_path=?", (mtime_ns, int(time.time()), rel_path))
+                con.commit()
+            continue
+        changed_files.append((path, data))
+
+    deleted_paths = sorted(set(existing) - current_paths)
+    if changed_files or deleted_paths:
+        with _connect_existing(root) as con:
+            fts_row = con.execute("SELECT value FROM meta WHERE key='fts5'").fetchone()
+            fts5 = str(fts_row[0]) if fts_row else "unavailable"
+            for rel_path in sorted([_rel(path, root) for path, _ in changed_files] + deleted_paths):
+                _delete_indexed_file(con, rel_path)
+            used_codes = _load_used_codes(con)
+            now = int(time.time())
+            for path, data in sorted(changed_files, key=lambda item: _rel(item[0], root)):
+                _index_markdown_file(con, root, path, used_codes=used_codes, fts5=fts5, indexed_at=now, data=data)
+            con.commit()
+
+    return {
+        "ok": 1,
+        "changed_files": len(changed_files),
+        "skipped_files": skipped,
+        "deleted_files": len(deleted_paths),
+        "touched_same_content": touched_same_content,
+        "source_fingerprint": source_fingerprint(root),
+    }
 
 
 def gc_index(hive_root: str | os.PathLike[str]) -> dict[str, int]:

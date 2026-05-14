@@ -6,3 +6,6 @@ hive/.hivecode/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# Local proof receipts
+reports/
