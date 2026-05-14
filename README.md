@@ -99,7 +99,7 @@ Memory Hive keeps the plumbing available without making it the user journey.
 | Install health checks | during install and `memory-hive status` |
 | Roster/registry refresh | during install, add/archive/rename, and maintenance |
 | Citation registry refresh | during maintenance |
-| HyperRecall build/update | during install, maintenance, and first recall query if missing |
+| HyperRecall build/update | during install, maintenance, and first recall query if missing; normal updates reindex changed/deleted files only |
 | Curation health pass | during maintenance through the built-in Optimizer wrapper |
 | Stale/raw-learning signal | included in status and maintenance summaries |
 
@@ -171,7 +171,7 @@ For the full governance model, see [HIVE_ARCHITECTURE.md](HIVE_ARCHITECTURE.md).
 | **Drop-in tool wiring** | Installer detects Claude Code, Cursor, Codex, Hermes, Aider, Gemini CLI, Goose, and more. |
 | **Install-once CLI** | Day-one UX is `install`, `status`, optional `add`, `search`, `recall`, and periodic `update`. |
 | **Maintenance wrapper** | `memory-hive maintain` runs registry/citation refresh, recall index maintenance, and the Optimizer pass. |
-| **HyperRecall / TokenFS** | Local SQLite/FTS5 recall index, stable HiveCodes, cited bundles, cache, stale detection, and skill routing. |
+| **HyperRecall / TokenFS** | Local SQLite/FTS5 recall index, stable HiveCodes, cited bundles, cache, stale detection, changed-file-only updates, and skill routing. |
 | **Prompt Optimizer addon** | Planned Memory Hive addon that compiles rough operator prompts into Hive-backed internal work orders before execution. |
 | **Semver release history** | Versioned GitHub Releases stay readable: `v1.1.0`, `v0.4.1`, and so on. |
 

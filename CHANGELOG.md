@@ -6,6 +6,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.2.1] — 2026-05-13 — `Incremental recall update proof`
+
+### Fixed
+
+- Reworked `memory-hive recall update` so normal single-file memory/log writeback updates only changed or deleted markdown files instead of falling back to a full SQLite/FTS rebuild.
+- Preserved unchanged file rows and citations during update, while keeping `files`, `chunks`, `codes`, `tokens`, `sketches`, and FTS rows coherent for changed files.
+- Added regression coverage that fails if `update_index()` calls full `build_index()` for single-file append/delete cases.
+
+### Added
+
+- Added `scripts/validate_incremental_update_1000.py`, a sandbox proof harness that runs append → update → query loops while monkeypatching full rebuilds to fail.
+- Added `docs/INCREMENTAL_RECALL_UPDATE.md` with the proof contract, regression gate, and local 1000-loop benchmark snapshot.
+
 ## [1.2.0] — 2026-05-11 — `Install-once status/update UX`
 
 ### Added
