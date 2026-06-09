@@ -874,6 +874,18 @@ PLATS
         fi
     fi
 
+    # --- 4c. Platform-neutral guide template (memory-hive guide) -----------
+    # Shipped by install.sh; `memory-hive guide` renders it at runtime, so a
+    # missing copy breaks on-demand guidance on every platform, not just one.
+    if [ ! -f "$INSTALL_DIR/templates/guide.md" ]; then
+        printf '  %s guide template missing (%s/templates/guide.md) — `memory-hive guide` will fail\n' \
+            "$_D_WARN" "$INSTALL_DIR"
+        printf '     run %s to restore it.\n' "\`sh $INSTALL_DIR/install.sh\`"
+        _warnings=$((_warnings + 1))
+    else
+        printf '  %s guide template present (`memory-hive guide` serves all platforms)\n' "$_D_OK"
+    fi
+
     # --- 5. registry AGENTS.md is in sync ----------------------------------
     _reg="$HIVE_DIR/registry/AGENTS.md"
     if [ ! -f "$_reg" ]; then
@@ -1497,6 +1509,71 @@ mh_update() {
     _mh_die "update.sh missing at $INSTALL_DIR/update.sh. Re-run: curl -fsSL https://hive.neural-forge.io/install.sh | sh"
 }
 
+# memory-hive guide [topic]
+# Print the platform-neutral operating guide rendered with this install's
+# real paths. Same body the Claude Code Agent Skill ships with — this verb
+# is the progressive-disclosure path for every other platform: boot blocks
+# stay tiny, and any agent that can run a shell pulls the full contract
+# (retrieval verbs, raw-learning frontmatter, lane rules, curator loop) on
+# demand. A topic narrows the output to one section.
+mh_guide() {
+    _tpl="$INSTALL_DIR/templates/guide.md"
+
+    _topic="${1:-}"
+    _pat=""
+    case "$_topic" in
+        "")                         _pat="" ;;
+        paths|map)                  _pat="^## Path map" ;;
+        id|identity)                _pat="^## Resolve your agent id" ;;
+        hydrate|boot)               _pat="^## Workflow 1" ;;
+        retrieve|search|recall)     _pat="^## Workflow 2" ;;
+        write|writeback|log)        _pat="^## Workflow 3" ;;
+        lanes|rules)                _pat="^## Lane rules" ;;
+        curate|curator)             _pat="^## Workflow 4" ;;
+        health|doctor|troubleshoot) _pat="^## Health" ;;
+        -h|--help|topics)
+            cat <<'EOF'
+Usage: memory-hive guide [topic]
+
+Prints the Memory Hive operating guide (how agents hydrate, retrieve,
+write back, and curate) with real paths for this install. Works the same
+on every platform — Claude Code, Cursor, Codex, Gemini CLI, anything that
+can run a shell.
+
+Topics: paths, id, hydrate, retrieve, write, lanes, curate, health
+EOF
+            return 0
+            ;;
+        *)
+            printf 'Unknown guide topic: %s\n' "$_topic" >&2
+            printf 'Topics: paths, id, hydrate, retrieve, write, lanes, curate, health\n' >&2
+            return 2
+            ;;
+    esac
+
+    if [ ! -f "$_tpl" ]; then
+        _mh_die "guide template missing at $_tpl — run \`sh $INSTALL_DIR/install.sh\` to restore it"
+    fi
+
+    # Same substitution the installer uses, applied at read time so the
+    # shipped template stays portable.
+    _hive_esc="$(printf '%s' "$HIVE_DIR" | sed 's/[&|]/\\&/g')"
+    _inst_esc="$(printf '%s' "$INSTALL_DIR" | sed 's/[&|]/\\&/g')"
+    if [ -z "$_pat" ]; then
+        sed -e "s|\${HIVE_DIR}|$_hive_esc|g" \
+            -e "s|\${INSTALL_DIR}|$_inst_esc|g" "$_tpl"
+    else
+        # Print from the matching H2 heading up to (not including) the next.
+        awk -v pat="$_pat" '
+            $0 ~ pat { inb = 1; print; next }
+            inb && /^## / { exit }
+            inb { print }
+        ' "$_tpl" \
+            | sed -e "s|\${HIVE_DIR}|$_hive_esc|g" \
+                  -e "s|\${INSTALL_DIR}|$_inst_esc|g"
+    fi
+}
+
 mh_help() {
     _advanced=0
     case "${1:-}" in
@@ -1513,6 +1590,7 @@ Normal path:
   memory-hive add <name> --role coder Add another agent silo
   memory-hive search "term"           Search the hive
   memory-hive recall "query text"     Retrieve cited context; index is maintained automatically
+  memory-hive guide [topic]           Print the agent operating guide (paths, write-back, lane rules)
 
 That's it for day-one use. Agents read the hive on boot, write back after work,
 and `memory-hive update` handles periodic maintenance.
@@ -1552,6 +1630,7 @@ Inspection:
   memory-hive digest [--today|--yesterday|--week|--since <YYYY-MM-DD>]
   memory-hive query|search <term> [--regex] [--paths-only]
   memory-hive bundle [--for <agent>] [--max-tokens N] [--out <file>]
+  memory-hive guide [paths|id|hydrate|retrieve|write|lanes|curate|health]
 
 HyperRecall / TokenFS:
   memory-hive recall "query text"
@@ -6779,6 +6858,7 @@ case "$_verb" in
     curate)   mh_curate "$@" ;;
     optimize|optimizer) mh_optimize "$@" ;;
     bundle)   mh_bundle "$@" ;;
+    guide)    mh_guide "$@" ;;
     reflect)  mh_reflect "$@" ;;
     seed)     mh_seed "$@" ;;
     help|-h|--help) mh_help "$@" ;;

@@ -47,10 +47,14 @@ curator loop, troubleshooting) only when memory work is actually happening.
 Progressive disclosure instead of a permanent context tax. Also user-invocable
 as `/memory-hive` inside any Claude Code session.
 
-**Source template:** [`templates/skills/memory-hive/SKILL.md`](../skills/memory-hive/SKILL.md)
-The installer renders `${HIVE_DIR}` and `${INSTALL_DIR}` placeholders to real
-paths. The unrendered template is also shipped to
-`~/.memory-hive/templates/skills/memory-hive/SKILL.md` for inspection.
+**Source templates:** the YAML frontmatter head at
+[`templates/skills/memory-hive/SKILL.md`](../skills/memory-hive/SKILL.md)
+plus the platform-neutral body at [`templates/guide.md`](../guide.md) —
+the same guide every other platform prints with `memory-hive guide`, so
+the Claude skill and the cross-platform guide cannot drift apart. The
+installer concatenates them, renders `${HIVE_DIR}` and `${INSTALL_DIR}`
+placeholders to real paths, and writes the result. The unrendered sources
+are also shipped under `~/.memory-hive/templates/` for inspection.
 
 **Refresh semantics:** re-installing overwrites the skill file in place. The
 whole file is installer-managed; no markers are needed because the file must

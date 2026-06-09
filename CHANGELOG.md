@@ -8,6 +8,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- New `memory-hive guide [topic]` verb: prints the platform-neutral
+  operating guide (path map, hydrate/retrieve/write-back workflows, lane
+  rules, curator loop, troubleshooting) rendered with the install's real
+  paths. Topics narrow output to one section:
+  `paths|id|hydrate|retrieve|write|lanes|curate|health`. This is the
+  progressive-disclosure path for every platform — any agent that can run
+  a shell pulls full memory guidance on demand instead of carrying it in
+  every session.
+- New canonical guide source at `templates/guide.md`, shipped unrendered to
+  `~/.memory-hive/templates/guide.md`. The Claude Code Agent Skill body is
+  assembled from this same file at install time (frontmatter head +
+  guide body), so the skill and the cross-platform guide cannot drift.
+- The managed boot block now ends with a `### Going deeper` pointer to
+  `memory-hive guide`, so all auto-injected platforms (Cursor, Codex,
+  Gemini CLI, Goose, Warp, Amp, OpenCode, ...) advertise the on-demand
+  guide, not just Claude Code.
+- `memory-hive doctor` warns when the shipped guide template is missing
+  (it is load-bearing for `memory-hive guide` on every platform).
 - Shipped a native Claude Code Agent Skill template at
   `templates/skills/memory-hive/SKILL.md`. The installer renders
   `${HIVE_DIR}` / `${INSTALL_DIR}` placeholders to real paths and writes the
@@ -25,6 +43,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   install directory, with a re-install hint when the check fails.
 - Added CI smoke coverage for skill template rendering, doctor skill check,
   and the new skip-var behavior.
+
+### Fixed
+
+- The managed boot block's task-end ritual now teaches the canonical raw
+  learning layout (`learnings/raw/<agent-id>/YYYY-MM-DD-<slug>.md`) and a
+  frontmatter example that includes the lint-required `confidence` field.
+  The previous flat-path example (`learnings/raw/<agent-id>-<slug>.md`,
+  no `confidence`) produced files that failed `memory-hive lint` on both
+  the `agent:`-matches-parent-directory rule and the required-field rule.
+- The boot block's lane-keeping rule now scopes shared-pool writes to the
+  agent's own subdir (`learnings/raw/<your-agent-id>/`), matching how
+  lint, `promote`, and `stale` actually resolve ownership.
 
 ### Changed
 

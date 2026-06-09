@@ -329,6 +329,8 @@ jobs:
               grep -q '^name: memory-hive$' "$SKILL" || { echo "FAIL: skill missing 'name: memory-hive'" >&2; fail=1; }
               grep -q '^description: ' "$SKILL" || { echo "FAIL: skill missing 'description:' line" >&2; fail=1; }
               grep -q "$INSTALL_DIR" "$SKILL" || { echo "FAIL: skill does not contain INSTALL_DIR path" >&2; fail=1; }
+              # Body must be assembled from guide.md (frontmatter alone is a broken build).
+              grep -q '^## Lane rules' "$SKILL" || { echo "FAIL: skill body not assembled from guide.md" >&2; fail=1; }
               ! grep -q '${HIVE_DIR}' "$SKILL" || { echo "FAIL: skill contains unrendered \${HIVE_DIR}" >&2; fail=1; }
               ! grep -q '${INSTALL_DIR}' "$SKILL" || { echo "FAIL: skill contains unrendered \${INSTALL_DIR}" >&2; fail=1; }
           fi
@@ -339,6 +341,37 @@ jobs:
               grep -q '${HIVE_DIR}' "$INSTALL_DIR/templates/skills/memory-hive/SKILL.md" || \
                   { echo "FAIL: shipped template does not contain literal \${HIVE_DIR}" >&2; fail=1; }
           fi
+
+          # Platform-neutral guide: shipped template + `memory-hive guide` verb.
+          if [ ! -f "$INSTALL_DIR/templates/guide.md" ]; then
+              echo "FAIL: shipped guide missing at \$INSTALL_DIR/templates/guide.md" >&2
+              fail=1
+          else
+              grep -q '${HIVE_DIR}' "$INSTALL_DIR/templates/guide.md" || \
+                  { echo "FAIL: shipped guide does not contain literal \${HIVE_DIR}" >&2; fail=1; }
+          fi
+          if HOME="$FAKE_HOME" sh "$INSTALL_DIR/memory-hive" guide > /tmp/mh-guide-full.out 2>&1; then
+              grep -q "$INSTALL_DIR" /tmp/mh-guide-full.out || { echo "FAIL: guide output lacks INSTALL_DIR path" >&2; fail=1; }
+              ! grep -q '${HIVE_DIR}' /tmp/mh-guide-full.out || { echo "FAIL: guide output has unrendered \${HIVE_DIR}" >&2; fail=1; }
+              ! grep -q '${INSTALL_DIR}' /tmp/mh-guide-full.out || { echo "FAIL: guide output has unrendered \${INSTALL_DIR}" >&2; fail=1; }
+          else
+              echo "FAIL: memory-hive guide exited non-zero" >&2
+              fail=1
+          fi
+          if HOME="$FAKE_HOME" sh "$INSTALL_DIR/memory-hive" guide write > /tmp/mh-guide-write.out 2>&1; then
+              grep -q '^## Workflow 3' /tmp/mh-guide-write.out || { echo "FAIL: guide write lacks Workflow 3 section" >&2; fail=1; }
+              ! grep -q '^## Path map' /tmp/mh-guide-write.out || { echo "FAIL: guide write leaked other sections" >&2; fail=1; }
+          else
+              echo "FAIL: memory-hive guide write exited non-zero" >&2
+              fail=1
+          fi
+          if HOME="$FAKE_HOME" sh "$INSTALL_DIR/memory-hive" guide bogus-topic >/dev/null 2>&1; then
+              echo "FAIL: guide accepted an unknown topic" >&2
+              fail=1
+          fi
+          # Boot block (all auto-inject platforms) must point at the guide verb.
+          grep -q 'memory-hive guide' "$FAKE_HOME/.claude/CLAUDE.md" || \
+              { echo "FAIL: wired boot block has no 'memory-hive guide' pointer" >&2; fail=1; }
 
           [ "$fail" -eq 0 ] || exit 1
           echo "Platform integration smoke OK"

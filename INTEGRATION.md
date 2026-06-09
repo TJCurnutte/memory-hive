@@ -88,6 +88,29 @@ The installer creates just the `main` curator silo and prints a
 one-liner for adding more agents later. Backward-compatible with any
 CI pipeline or scripted install.
 
+### The deep guide — every platform
+
+The managed block each platform receives is deliberately tiny: it has to
+ride along in every session. Deep operating knowledge — the retrieval verb
+guide, the exact raw-learning frontmatter that passes lint, lane rules, the
+curator loop — lives in one platform-neutral document instead:
+[`templates/guide.md`](templates/guide.md).
+
+Any agent on any platform pulls it on demand:
+
+```bash
+memory-hive guide            # full guide, rendered with this install's real paths
+memory-hive guide write      # one section: paths|id|hydrate|retrieve|write|lanes|curate|health
+```
+
+The managed block points agents at this verb (`### Going deeper`), so
+Cursor, Codex, Gemini CLI, Goose, Warp, Amp, OpenCode, and the rest get the
+same progressive disclosure Claude Code gets — the boot surface stays
+small, and depth is a shell call away. The installer ships the unrendered
+guide to `~/.memory-hive/templates/guide.md`; `memory-hive guide`
+substitutes `${HIVE_DIR}` / `${INSTALL_DIR}` at read time, and
+`memory-hive doctor` warns if the shipped copy goes missing.
+
 ### Claude Code users
 
 If `~/.claude/` exists, the installer injects a managed fenced block
@@ -131,15 +154,17 @@ context tax.
 The skill is also user-invocable as `/memory-hive` inside any Claude Code
 session.
 
-The source template lives at
-[`templates/skills/memory-hive/SKILL.md`](templates/skills/memory-hive/SKILL.md);
-the installer renders `${HIVE_DIR}` and `${INSTALL_DIR}` placeholders to real
-paths and writes the result to `~/.claude/skills/memory-hive/SKILL.md`. The
-unrendered template is also shipped to
-`~/.memory-hive/templates/skills/memory-hive/SKILL.md` for inspection.
-Re-installing overwrites the skill file in place (the whole file is
-installer-managed; no markers are needed because the file must start with
-YAML frontmatter).
+The skill is assembled at install time from two sources: the YAML
+frontmatter head at
+[`templates/skills/memory-hive/SKILL.md`](templates/skills/memory-hive/SKILL.md)
+plus the platform-neutral body at [`templates/guide.md`](templates/guide.md)
+— the same body `memory-hive guide` prints on every other platform, so the
+two surfaces cannot drift apart. The installer renders `${HIVE_DIR}` and
+`${INSTALL_DIR}` placeholders to real paths and writes the result to
+`~/.claude/skills/memory-hive/SKILL.md`. The unrendered sources are also
+shipped under `~/.memory-hive/templates/` for inspection. Re-installing
+overwrites the skill file in place (the whole file is installer-managed; no
+markers are needed because the file must start with YAML frontmatter).
 
 `memory-hive doctor` checks that the skill file exists and references the
 current install, and warns with a re-install hint if it does not.

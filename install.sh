@@ -610,7 +610,20 @@ sed -e "s|\${HIVE_DIR}|$_hive_dir_escaped|g" \
 # that case leave HIVE_SKILL_FILE empty so the wiring step no-ops silently.
 HIVE_SKILL_FILE="$TMP_DIR/hive-skill.md"
 HIVE_SKILL_TEMPLATE="$TMP_DIR/memory-hive/templates/skills/memory-hive/SKILL.md"
-if [ -f "$HIVE_SKILL_TEMPLATE" ]; then
+HIVE_GUIDE_TEMPLATE="$TMP_DIR/memory-hive/templates/guide.md"
+if [ -f "$HIVE_SKILL_TEMPLATE" ] && [ -f "$HIVE_GUIDE_TEMPLATE" ]; then
+    # The skill is YAML frontmatter (SKILL.md) + the platform-neutral guide
+    # body (guide.md). guide.md is the single source of truth for deep
+    # operating knowledge — the same body any agent on any platform can
+    # print with `memory-hive guide`; Claude Code just gets it packaged as
+    # a native Agent Skill.
+    { cat "$HIVE_SKILL_TEMPLATE"; printf '\n'; cat "$HIVE_GUIDE_TEMPLATE"; } \
+        | sed -e "s|\${HIVE_DIR}|$_hive_dir_escaped|g" \
+              -e "s|\${INSTALL_DIR}|$_install_dir_escaped|g" \
+        > "$HIVE_SKILL_FILE" \
+        || die "Failed to render Agent Skill from $HIVE_SKILL_TEMPLATE + $HIVE_GUIDE_TEMPLATE"
+elif [ -f "$HIVE_SKILL_TEMPLATE" ]; then
+    # Older checkout without guide.md: SKILL.md is self-contained.
     sed -e "s|\${HIVE_DIR}|$_hive_dir_escaped|g" \
         -e "s|\${INSTALL_DIR}|$_install_dir_escaped|g" \
         "$HIVE_SKILL_TEMPLATE" > "$HIVE_SKILL_FILE" \
@@ -658,6 +671,16 @@ _skill_doc_dst="$INSTALL_DIR/templates/skills/memory-hive/SKILL.md"
 if [ -f "$_skill_src" ]; then
     mkdir -p "$(dirname "$_skill_doc_dst")" 2>/dev/null || true
     cp "$_skill_src" "$_skill_doc_dst" 2>/dev/null || true
+fi
+
+# Ship the UNRENDERED platform-neutral guide too. Unlike the docs above,
+# this copy is load-bearing: `memory-hive guide` renders it with live
+# paths at runtime, on every platform — keep the placeholders intact.
+_guide_src="$TMP_DIR/memory-hive/templates/guide.md"
+_guide_dst="$INSTALL_DIR/templates/guide.md"
+if [ -f "$_guide_src" ]; then
+    mkdir -p "$(dirname "$_guide_dst")" 2>/dev/null || true
+    cp "$_guide_src" "$_guide_dst" 2>/dev/null || true
 fi
 
 # merge_hive_block <target-markdown-path>

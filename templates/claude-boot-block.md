@@ -23,7 +23,7 @@ Before every non-trivial, cross-session, or operational user prompt/task:
 
 ### Lane-keeping (write scope)
 
-- MUST write only to: `${HIVE_DIR}/agents/<your-agent-id>/` and `${HIVE_DIR}/learnings/raw/`.
+- MUST write only to: `${HIVE_DIR}/agents/<your-agent-id>/` and `${HIVE_DIR}/learnings/raw/<your-agent-id>/`.
 - NEVER write to other agents' silos.
 - NEVER write directly to `${HIVE_DIR}/knowledge/`, `${HIVE_DIR}/learnings/distilled/`, or `${HIVE_DIR}/index.md`. Promotion is the curator's job.
 
@@ -31,7 +31,11 @@ Before every non-trivial, cross-session, or operational user prompt/task:
 
 1. APPEND one line to `${HIVE_DIR}/agents/<your-agent-id>/log.md`: `YYYY-MM-DD — <what you did>`.
 2. IF a lesson was learned: APPEND a bullet to `${HIVE_DIR}/agents/<your-agent-id>/memory.md`.
-3. IF the lesson generalizes beyond you: WRITE `${HIVE_DIR}/learnings/raw/<agent-id>-<slug>.md` with frontmatter `---\ndate: YYYY-MM-DD\nagent: <your-agent-id>\ncontext: <one line>\n---`.
+3. IF the lesson generalizes beyond you: WRITE `${HIVE_DIR}/learnings/raw/<your-agent-id>/YYYY-MM-DD-<slug>.md` with frontmatter `---\ndate: YYYY-MM-DD\nagent: <your-agent-id>\ncontext: <one line>\nconfidence: low\n---` (full spec: `memory-hive guide write`).
+
+### Going deeper
+
+When you need the full operating contract (retrieval verbs, exact raw-learning frontmatter that passes lint, lane rules, curator loop), RUN `sh ${INSTALL_DIR}/memory-hive guide` — or one section via `... guide retrieve|write|lanes|curate`. Same guide on every platform; pull it on demand instead of guessing.
 
 ### Update protocol
 

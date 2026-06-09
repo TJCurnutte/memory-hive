@@ -168,8 +168,8 @@ For the full governance model, see [HIVE_ARCHITECTURE.md](HIVE_ARCHITECTURE.md).
 |---|---|
 | **Private agent silos** | Each agent gets `log.md`, `context.md`, and `memory.md` under `hive/agents/<agent>/`. |
 | **Shared hive knowledge** | Agents contribute raw learnings; `main` curates durable truth into shared knowledge. |
-| **Drop-in tool wiring** | Installer detects Claude Code, Cursor, Codex, Hermes, Aider, Gemini CLI, Goose, and more. For Claude Code, also installs a native Agent Skill (`/memory-hive`) that loads full memory guidance on demand — progressive disclosure instead of permanent context overhead. |
-| **Install-once CLI** | Day-one UX is `install`, `status`, optional `add`, `search`, `recall`, and periodic `update`. |
+| **Drop-in tool wiring** | Installer detects Claude Code, Cursor, Codex, Hermes, Aider, Gemini CLI, Goose, and more. Boot blocks stay tiny; every platform pulls the full operating guide on demand with `memory-hive guide` — progressive disclosure everywhere, packaged natively for Claude Code as an Agent Skill (`/memory-hive`). |
+| **Install-once CLI** | Day-one UX is `install`, `status`, optional `add`, `search`, `recall`, `guide`, and periodic `update`. |
 | **Maintenance wrapper** | `memory-hive maintain` runs registry/citation refresh, recall index maintenance, and the Optimizer pass. |
 | **HyperRecall / TokenFS** | Local SQLite/FTS5 recall index, stable HiveCodes, cited bundles, cache, stale detection, changed-file-only updates, and skill routing. |
 | **Prompt Optimizer addon** | Planned Memory Hive addon that compiles rough operator prompts into Hive-backed internal work orders before execution. |
