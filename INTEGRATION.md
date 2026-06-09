@@ -88,6 +88,29 @@ The installer creates just the `main` curator silo and prints a
 one-liner for adding more agents later. Backward-compatible with any
 CI pipeline or scripted install.
 
+### The deep guide — every platform
+
+The managed block each platform receives is deliberately tiny: it has to
+ride along in every session. Deep operating knowledge — the retrieval verb
+guide, the exact raw-learning frontmatter that passes lint, lane rules, the
+curator loop — lives in one platform-neutral document instead:
+[`templates/guide.md`](templates/guide.md).
+
+Any agent on any platform pulls it on demand:
+
+```bash
+memory-hive guide            # full guide, rendered with this install's real paths
+memory-hive guide write      # one section: paths|id|hydrate|retrieve|write|lanes|curate|health
+```
+
+The managed block points agents at this verb (`### Going deeper`), so
+Cursor, Codex, Gemini CLI, Goose, Warp, Amp, OpenCode, and the rest get the
+same progressive disclosure Claude Code gets — the boot surface stays
+small, and depth is a shell call away. The installer ships the unrendered
+guide to `~/.memory-hive/templates/guide.md`; `memory-hive guide`
+substitutes `${HIVE_DIR}` / `${INSTALL_DIR}` at read time, and
+`memory-hive doctor` warns if the shipped copy goes missing.
+
 ### Claude Code users
 
 If `~/.claude/` exists, the installer injects a managed fenced block
@@ -109,8 +132,71 @@ blocks — is never touched. The canonical content lives in
 the installer substitutes `${HIVE_DIR}` and `${INSTALL_DIR}` at install
 time.
 
-Opt out with `MEMORY_HIVE_SKIP_CLAUDE_MD=1` if you manage that file by
-hand.
+Opt out with `MEMORY_HIVE_SKIP_CLAUDE_CODE=1` (legacy alias
+`MEMORY_HIVE_SKIP_CLAUDE_MD=1` still honored) if you manage that file by
+hand. Setting this var skips both the managed block and the Agent Skill
+described below.
+
+#### Agent Skill
+
+In addition to the managed block, the installer renders and writes a
+native Claude Code Agent Skill to `~/.claude/skills/memory-hive/SKILL.md`.
+
+The **managed block** is the always-on boot contract: every session hydrates
+from the hive before responding and writes back after non-trivial work. The
+**Agent Skill** is the on-demand depth layer: Claude Code loads only the
+skill's one-line description into every session and pulls the full body
+— retrieval verb guide, exact raw-learning frontmatter that passes lint,
+lane rules, curator loop, troubleshooting — only when memory work is
+actually happening. This is progressive disclosure instead of a permanent
+context tax.
+
+The skill is also user-invocable as `/memory-hive` inside any Claude Code
+session.
+
+The skill is assembled at install time from two sources: the YAML
+frontmatter head at
+[`templates/skills/memory-hive/SKILL.md`](templates/skills/memory-hive/SKILL.md)
+plus the platform-neutral body at [`templates/guide.md`](templates/guide.md)
+— the same body `memory-hive guide` prints on every other platform, so the
+two surfaces cannot drift apart. The installer renders `${HIVE_DIR}` and
+`${INSTALL_DIR}` placeholders to real paths and writes the result to
+`~/.claude/skills/memory-hive/SKILL.md`. The unrendered sources are also
+shipped under `~/.memory-hive/templates/` for inspection. Re-installing
+overwrites the skill file in place (the whole file is installer-managed; no
+markers are needed because the file must start with YAML frontmatter).
+
+`memory-hive doctor` checks that the skill file exists and references the
+current install, and warns with a re-install hint if it does not.
+
+Opt out of the skill alone with `MEMORY_HIVE_SKIP_CLAUDE_SKILL=1`.
+
+#### Harness hooks (mechanical hydrate + ritual)
+
+The block and the skill are prompt-level: they *ask* the model to hydrate
+and write back. The installer also wires two hooks into
+`~/.claude/settings.json` so the harness does it mechanically:
+
+- **SessionStart** — runs `~/.memory-hive/hooks/session-start.sh`, which
+  injects a token-budgeted hive bundle (plus a pointer to
+  `memory-hive guide`) into every new session as additional context. New
+  sessions boot hydrated even if the model never reads `CLAUDE.md`.
+- **Stop** — runs `~/.memory-hive/hooks/stop-ritual.sh`, which blocks a
+  finishing session **at most once** when the task-end ritual hasn't run
+  (no fresh dated line in the agent's `log.md`), with instructions to run
+  it. `stop_hook_active` prevents loops; short transcripts (trivial
+  sessions) are exempt; any unexpected condition exits silently. The agent
+  id defaults to `main` — set `MEMORY_HIVE_AGENT_ID` in the environment to
+  point the hooks at another silo.
+
+The merge is done with `python3` (already required for HyperRecall) and is
+surgical: re-runs replace only entries carrying the `# memory-hive` marker
+in their command; hooks you wrote yourself are never touched. If
+`settings.json` is malformed JSON the installer refuses to modify it and
+warns instead.
+
+Opt out with `MEMORY_HIVE_SKIP_CLAUDE_HOOKS=1` at install time, or disable
+at runtime without uninstalling by exporting `MEMORY_HIVE_HOOKS_DISABLE=1`.
 
 ### OpenClaw users
 
@@ -194,7 +280,10 @@ silos you keep.
 | `MEMORY_HIVE_REPO` | Install from a local working copy instead of cloning GitHub. Points at a directory with a `hive/` subdir. |
 | `MEMORY_HIVE_MERGE_CWD` | Set to `1` to also merge the managed block into `$PWD/CLAUDE.md`. |
 | `MEMORY_HIVE_COPILOT_REPO` | Set to `1` to opt into writing `.github/copilot-instructions.md` in the current repo. |
-| `MEMORY_HIVE_SKIP_CLAUDE_CODE` | Opt out of the Claude Code wiring. Legacy `MEMORY_HIVE_SKIP_CLAUDE_MD=1` is still honored as an alias. |
+| `MEMORY_HIVE_SKIP_CLAUDE_CODE` | Opt out of all Claude Code wiring (managed block, Agent Skill, and harness hooks). Legacy `MEMORY_HIVE_SKIP_CLAUDE_MD=1` is still honored as an alias. |
+| `MEMORY_HIVE_SKIP_CLAUDE_SKILL` | Opt out of installing the Agent Skill only; the managed `CLAUDE.md` block is still written. |
+| `MEMORY_HIVE_SKIP_CLAUDE_HOOKS` | Opt out of wiring the SessionStart/Stop harness hooks into `~/.claude/settings.json`. Runtime equivalent without re-installing: `MEMORY_HIVE_HOOKS_DISABLE=1`. |
+| `MEMORY_HIVE_AGENT_ID` | Runtime (not install): which silo the harness hooks hydrate from and check the ritual against. Defaults to `main`. |
 | `MEMORY_HIVE_SKIP_OPENCLAW` | Opt out of OpenClaw wiring. |
 | `MEMORY_HIVE_SKIP_NANOCLAW` | Opt out of NanoClaw wiring. |
 | `MEMORY_HIVE_SKIP_HERMES` | Opt out of Hermes Agent wiring. |
@@ -222,8 +311,11 @@ silos you keep.
 
 ```bash
 rm -rf ~/.memory-hive
+rm -rf ~/.claude/skills/memory-hive
 # then open ~/.claude/CLAUDE.md and delete the block between
 # <!-- memory-hive:start --> and <!-- memory-hive:end -->
+# and remove the two hook entries marked `# memory-hive` from
+# ~/.claude/settings.json (under hooks.SessionStart and hooks.Stop)
 ```
 
 That's it. No other files are modified.

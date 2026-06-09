@@ -280,6 +280,12 @@ jobs:
           # And a couple of manual-only markers so we can see them reported.
           mkdir -p "$FAKE_HOME/.cline" "$FAKE_HOME/.config/zed"
 
+          # Pre-existing user hook in settings.json — the installer must
+          # merge around it, never clobber it.
+          cat > "$FAKE_HOME/.claude/settings.json" <<'JSON'
+          {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo user-stop-hook"}]}]}}
+          JSON
+
           sh install.sh < /dev/null > /tmp/mh-plat.log 2>&1
 
           # Assert: every auto-inject target file was written with the markers.
@@ -319,6 +325,121 @@ jobs:
           grep -q "\[manual\] Zed"   /tmp/mh-plat.log || { echo "Zed not reported as manual";   fail=1; }
           test ! -f "$FAKE_HOME/.cline/memory-hive.md" || { echo "Cline wrote a file (shouldn't)"; fail=1; }
 
+          # Claude Code Agent Skill assertions.
+          SKILL="$FAKE_HOME/.claude/skills/memory-hive/SKILL.md"
+          if [ ! -f "$SKILL" ]; then
+              echo "FAIL: skill file missing: $SKILL" >&2
+              fail=1
+          else
+              [ "$(head -n 1 "$SKILL")" = "---" ] || { echo "FAIL: skill first line is not ---" >&2; fail=1; }
+              grep -q '^name: memory-hive$' "$SKILL" || { echo "FAIL: skill missing 'name: memory-hive'" >&2; fail=1; }
+              grep -q '^description: ' "$SKILL" || { echo "FAIL: skill missing 'description:' line" >&2; fail=1; }
+              grep -q "$INSTALL_DIR" "$SKILL" || { echo "FAIL: skill does not contain INSTALL_DIR path" >&2; fail=1; }
+              # Body must be assembled from guide.md (frontmatter alone is a broken build).
+              grep -q '^## Lane rules' "$SKILL" || { echo "FAIL: skill body not assembled from guide.md" >&2; fail=1; }
+              ! grep -q '${HIVE_DIR}' "$SKILL" || { echo "FAIL: skill contains unrendered \${HIVE_DIR}" >&2; fail=1; }
+              ! grep -q '${INSTALL_DIR}' "$SKILL" || { echo "FAIL: skill contains unrendered \${INSTALL_DIR}" >&2; fail=1; }
+          fi
+          if [ ! -f "$INSTALL_DIR/templates/skills/memory-hive/SKILL.md" ]; then
+              echo "FAIL: shipped template missing at \$INSTALL_DIR/templates/skills/memory-hive/SKILL.md" >&2
+              fail=1
+          else
+              grep -q '${HIVE_DIR}' "$INSTALL_DIR/templates/skills/memory-hive/SKILL.md" || \
+                  { echo "FAIL: shipped template does not contain literal \${HIVE_DIR}" >&2; fail=1; }
+          fi
+
+          # Platform-neutral guide: shipped template + `memory-hive guide` verb.
+          if [ ! -f "$INSTALL_DIR/templates/guide.md" ]; then
+              echo "FAIL: shipped guide missing at \$INSTALL_DIR/templates/guide.md" >&2
+              fail=1
+          else
+              grep -q '${HIVE_DIR}' "$INSTALL_DIR/templates/guide.md" || \
+                  { echo "FAIL: shipped guide does not contain literal \${HIVE_DIR}" >&2; fail=1; }
+          fi
+          if HOME="$FAKE_HOME" sh "$INSTALL_DIR/memory-hive" guide > /tmp/mh-guide-full.out 2>&1; then
+              grep -q "$INSTALL_DIR" /tmp/mh-guide-full.out || { echo "FAIL: guide output lacks INSTALL_DIR path" >&2; fail=1; }
+              ! grep -q '${HIVE_DIR}' /tmp/mh-guide-full.out || { echo "FAIL: guide output has unrendered \${HIVE_DIR}" >&2; fail=1; }
+              ! grep -q '${INSTALL_DIR}' /tmp/mh-guide-full.out || { echo "FAIL: guide output has unrendered \${INSTALL_DIR}" >&2; fail=1; }
+          else
+              echo "FAIL: memory-hive guide exited non-zero" >&2
+              fail=1
+          fi
+          if HOME="$FAKE_HOME" sh "$INSTALL_DIR/memory-hive" guide write > /tmp/mh-guide-write.out 2>&1; then
+              grep -q '^## Workflow 3' /tmp/mh-guide-write.out || { echo "FAIL: guide write lacks Workflow 3 section" >&2; fail=1; }
+              ! grep -q '^## Path map' /tmp/mh-guide-write.out || { echo "FAIL: guide write leaked other sections" >&2; fail=1; }
+          else
+              echo "FAIL: memory-hive guide write exited non-zero" >&2
+              fail=1
+          fi
+          if HOME="$FAKE_HOME" sh "$INSTALL_DIR/memory-hive" guide bogus-topic >/dev/null 2>&1; then
+              echo "FAIL: guide accepted an unknown topic" >&2
+              fail=1
+          fi
+          # Boot block (all auto-inject platforms) must point at the guide verb.
+          grep -q 'memory-hive guide' "$FAKE_HOME/.claude/CLAUDE.md" || \
+              { echo "FAIL: wired boot block has no 'memory-hive guide' pointer" >&2; fail=1; }
+
+          # Harness hooks: shipped + rendered.
+          for hk in session-start.sh stop-ritual.sh; do
+              if [ ! -f "$INSTALL_DIR/hooks/$hk" ]; then
+                  echo "FAIL: hook script missing: $INSTALL_DIR/hooks/$hk" >&2; fail=1
+              elif grep -q '${HIVE_DIR}' "$INSTALL_DIR/hooks/$hk"; then
+                  echo "FAIL: $hk contains unrendered \${HIVE_DIR}" >&2; fail=1
+              fi
+          done
+
+          # Re-run the installer: the settings.json merge must be idempotent
+          # (exactly one entry of each) and must preserve the user's hook.
+          sh install.sh < /dev/null > /tmp/mh-plat2.log 2>&1
+          python3 - "$FAKE_HOME/.claude/settings.json" <<'PYCHK' || { echo "FAIL: settings.json merge check" >&2; fail=1; }
+          import json, sys
+          d = json.load(open(sys.argv[1]))
+          h = d.get("hooks", {})
+          def count(event, frag):
+              n = 0
+              for e in h.get(event, []):
+                  for k in e.get("hooks", []):
+                      c = str(k.get("command", ""))
+                      if "# memory-hive" in c and frag in c:
+                          n += 1
+              return n
+          ss = count("SessionStart", "session-start.sh")
+          st = count("Stop", "stop-ritual.sh")
+          user = any("user-stop-hook" in str(k.get("command", ""))
+                     for e in h.get("Stop", []) for k in e.get("hooks", []))
+          assert ss == 1, "SessionStart memory-hive entries: %d" % ss
+          assert st == 1, "Stop memory-hive entries: %d" % st
+          assert user, "user Stop hook was lost"
+          print("settings-merge-ok")
+          PYCHK
+
+          # SessionStart hook emits valid hook JSON with hydration content.
+          if echo '{}' | sh "$INSTALL_DIR/hooks/session-start.sh" > /tmp/mh-ss.out 2>/dev/null; then
+              python3 - /tmp/mh-ss.out <<'PYSS' || { echo "FAIL: session-start output invalid" >&2; fail=1; }
+          import json, sys
+          d = json.load(open(sys.argv[1]))
+          out = d["hookSpecificOutput"]
+          assert out["hookEventName"] == "SessionStart"
+          ctx = out["additionalContext"]
+          assert "Memory Hive hydration" in ctx and "memory-hive guide" in ctx
+          print("session-start-ok")
+          PYSS
+          else
+              echo "FAIL: session-start.sh exited non-zero" >&2; fail=1
+          fi
+
+          # Stop hook: loop guard is silent, trivial sessions are exempt,
+          # substantive sessions without a fresh log line block once.
+          out=$(printf '{"stop_hook_active": true}' | sh "$INSTALL_DIR/hooks/stop-ritual.sh") || { echo "FAIL: stop-ritual loop-guard exit" >&2; fail=1; }
+          [ -z "$out" ] || { echo "FAIL: stop-ritual output despite stop_hook_active" >&2; fail=1; }
+          seq 1 5 > /tmp/mh-transcript-short.jsonl
+          out=$(printf '{"stop_hook_active": false, "transcript_path": "/tmp/mh-transcript-short.jsonl"}' | sh "$INSTALL_DIR/hooks/stop-ritual.sh") || { echo "FAIL: stop-ritual short-transcript exit" >&2; fail=1; }
+          [ -z "$out" ] || { echo "FAIL: stop-ritual nagged a trivial session" >&2; fail=1; }
+          seq 1 40 > /tmp/mh-transcript-long.jsonl
+          printf -- '- 2001-01-01 — ancient entry\n' > "$INSTALL_DIR/hive/agents/main/log.md"
+          out=$(printf '{"stop_hook_active": false, "transcript_path": "/tmp/mh-transcript-long.jsonl"}' | sh "$INSTALL_DIR/hooks/stop-ritual.sh") || { echo "FAIL: stop-ritual block-path exit" >&2; fail=1; }
+          echo "$out" | grep -q '"decision": "block"' || { echo "FAIL: stop-ritual did not block a stale session" >&2; fail=1; }
+
           [ "$fail" -eq 0 ] || exit 1
           echo "Platform integration smoke OK"
 
@@ -332,9 +453,12 @@ jobs:
           export MEMORY_HIVE_DIR="$INSTALL_DIR"
           export MEMORY_HIVE_REPO="$(pwd)"
 
-          mkdir -p "$FAKE_HOME/.cursor" "$FAKE_HOME/.gemini"
+          mkdir -p "$FAKE_HOME/.cursor" "$FAKE_HOME/.gemini" "$FAKE_HOME/.claude"
           # Opt out of Cursor; Gemini should still be wired.
+          # Opt out of Claude Code Agent Skill; CLAUDE.md block should still be wired.
           export MEMORY_HIVE_SKIP_CURSOR=1
+          export MEMORY_HIVE_SKIP_CLAUDE_SKILL=1
+          export MEMORY_HIVE_SKIP_CLAUDE_HOOKS=1
           sh install.sh < /dev/null > /tmp/mh-optout.log 2>&1
 
           test ! -f "$FAKE_HOME/.cursor/rules/memory-hive.mdc" || \
@@ -343,6 +467,19 @@ jobs:
               { echo "Gemini CLI was NOT wired"; exit 1; }
           grep -q "\[skip \] Cursor" /tmp/mh-optout.log || \
               { echo "Cursor skip not reported"; exit 1; }
+          test -f "$FAKE_HOME/.claude/CLAUDE.md" || \
+              { echo "CLAUDE.md block not wired despite only skill being skipped"; exit 1; }
+          grep -q "memory-hive:start" "$FAKE_HOME/.claude/CLAUDE.md" || \
+              { echo "CLAUDE.md missing memory-hive:start marker"; exit 1; }
+          test ! -f "$FAKE_HOME/.claude/skills/memory-hive/SKILL.md" || \
+              { echo "skill was written despite MEMORY_HIVE_SKIP_CLAUDE_SKILL=1"; exit 1; }
+          grep -q "Claude Code Agent Skill" /tmp/mh-optout.log || \
+              { echo "skill skip not reported in log"; exit 1; }
+          if [ -f "$FAKE_HOME/.claude/settings.json" ] && grep -q "memory-hive" "$FAKE_HOME/.claude/settings.json"; then
+              echo "hooks were wired despite MEMORY_HIVE_SKIP_CLAUDE_HOOKS=1"; exit 1
+          fi
+          grep -q "Claude Code harness hooks" /tmp/mh-optout.log || \
+              { echo "hooks skip not reported in log"; exit 1; }
           echo "Opt-out smoke OK"
 
       - name: Platform integration smoke — idempotent
@@ -355,15 +492,19 @@ jobs:
           export MEMORY_HIVE_DIR="$INSTALL_DIR"
           export MEMORY_HIVE_REPO="$(pwd)"
 
-          mkdir -p "$FAKE_HOME/.cursor"
+          mkdir -p "$FAKE_HOME/.cursor" "$FAKE_HOME/.claude"
           sh install.sh < /dev/null > /dev/null 2>&1
           checksum_1=$(cksum "$FAKE_HOME/.cursor/rules/memory-hive.mdc" | awk '{print $1}')
+          skill_checksum_1=$(cksum "$FAKE_HOME/.claude/skills/memory-hive/SKILL.md" | awk '{print $1}')
 
           sh install.sh < /dev/null > /dev/null 2>&1
           checksum_2=$(cksum "$FAKE_HOME/.cursor/rules/memory-hive.mdc" | awk '{print $1}')
+          skill_checksum_2=$(cksum "$FAKE_HOME/.claude/skills/memory-hive/SKILL.md" | awk '{print $1}')
 
           [ "$checksum_1" = "$checksum_2" ] || \
               { echo "Re-install changed the managed block (not idempotent)"; exit 1; }
+          [ "$skill_checksum_1" = "$skill_checksum_2" ] || \
+              { echo "Re-install changed SKILL.md (skill not idempotent)"; exit 1; }
           echo "Idempotency smoke OK"
 
       - name: CLI smoke — tail + confidence

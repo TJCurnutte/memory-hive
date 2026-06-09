@@ -48,7 +48,7 @@ That first run does the work users previously had to stitch together by hand:
 - creates `~/.memory-hive`
 - creates the reserved `main` curator silo
 - installs the `memory-hive` command or a PATH shim when possible
-- wires managed Memory Hive blocks into detected agent tools
+- wires managed Memory Hive blocks into detected agent tools; when Claude Code is present, also installs the native Agent Skill (`~/.claude/skills/memory-hive/`) and SessionStart/Stop harness hooks that auto-hydrate every session and enforce the write-back ritual mechanically
 - refreshes the roster/registry
 - builds or updates the HyperRecall index quietly
 - runs the maintenance wrapper quietly
@@ -168,8 +168,8 @@ For the full governance model, see [HIVE_ARCHITECTURE.md](HIVE_ARCHITECTURE.md).
 |---|---|
 | **Private agent silos** | Each agent gets `log.md`, `context.md`, and `memory.md` under `hive/agents/<agent>/`. |
 | **Shared hive knowledge** | Agents contribute raw learnings; `main` curates durable truth into shared knowledge. |
-| **Drop-in tool wiring** | Installer detects Claude Code, Cursor, Codex, Hermes, Aider, Gemini CLI, Goose, and more. |
-| **Install-once CLI** | Day-one UX is `install`, `status`, optional `add`, `search`, `recall`, and periodic `update`. |
+| **Drop-in tool wiring** | Installer detects Claude Code, Cursor, Codex, Hermes, Aider, Gemini CLI, Goose, and more. Boot blocks stay tiny; every platform pulls the full operating guide on demand with `memory-hive guide` — progressive disclosure everywhere, packaged natively for Claude Code as an Agent Skill (`/memory-hive`). |
+| **Install-once CLI** | Day-one UX is `install`, `status`, optional `add`, `search`, `recall`, `guide`, and periodic `update`. |
 | **Maintenance wrapper** | `memory-hive maintain` runs registry/citation refresh, recall index maintenance, and the Optimizer pass. |
 | **HyperRecall / TokenFS** | Local SQLite/FTS5 recall index, stable HiveCodes, cited bundles, cache, stale detection, changed-file-only updates, and skill routing. |
 | **Prompt Optimizer addon** | Planned Memory Hive addon that compiles rough operator prompts into Hive-backed internal work orders before execution. |
@@ -192,7 +192,7 @@ Normal users should not need these during onboarding. They remain available for 
 
 **Health and maintenance** — `doctor`, `maintain`, `optimize`, `checkpoint`, `diff`.
 
-**Inspection** — `tail`, `watch`, `stats`, `digest`, `query`, `bundle`.
+**Inspection** — `tail`, `watch`, `stats`, `digest`, `query`, `bundle`, `guide`.
 
 **HyperRecall** — `recall query`, `recall bundle`, `recall build`, `recall update`, `recall doctor`, `recall stats`, `hyper`.
 

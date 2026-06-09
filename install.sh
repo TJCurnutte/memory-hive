@@ -24,6 +24,13 @@
 #   MEMORY_HIVE_SKIP_CLAUDE_MD=1   don't modify ~/.claude/CLAUDE.md even if it
 #                                  exists (useful for tests that shouldn't
 #                                  touch the developer's real config)
+#   MEMORY_HIVE_SKIP_CLAUDE_SKILL=1 don't install the native Claude Code Agent
+#                                  Skill into ~/.claude/skills/memory-hive/
+#                                  (the on-demand /memory-hive companion to the
+#                                  CLAUDE.md boot block)
+#   MEMORY_HIVE_SKIP_CLAUDE_HOOKS=1 don't wire the harness hooks (SessionStart
+#                                  hydration + Stop task-end-ritual nudge) into
+#                                  ~/.claude/settings.json
 #   MEMORY_HIVE_ONLY=hermes,cursor comma- or space-separated platform IDs;
 #                                  wire ONLY these and filter every other
 #                                  detected platform out (useful when you
@@ -597,6 +604,37 @@ sed -e "s|\${HIVE_DIR}|$_hive_dir_escaped|g" \
     "$HIVE_BLOCK_TEMPLATE" > "$HIVE_BLOCK_FILE" \
     || die "Failed to render boot block from $HIVE_BLOCK_TEMPLATE"
 
+# Render the native Claude Code Agent Skill from the same kind of template.
+# Unlike the boot block (a marker-delimited splice into a user-owned
+# CLAUDE.md), the skill is a standalone file wholly owned by the installer:
+# it MUST begin with YAML frontmatter, so there are no start/end markers and
+# no splice — we render the whole file and write it verbatim at wire time.
+# Older local checkouts (via MEMORY_HIVE_REPO) may predate the template; in
+# that case leave HIVE_SKILL_FILE empty so the wiring step no-ops silently.
+HIVE_SKILL_FILE="$TMP_DIR/hive-skill.md"
+HIVE_SKILL_TEMPLATE="$TMP_DIR/memory-hive/templates/skills/memory-hive/SKILL.md"
+HIVE_GUIDE_TEMPLATE="$TMP_DIR/memory-hive/templates/guide.md"
+if [ -f "$HIVE_SKILL_TEMPLATE" ] && [ -f "$HIVE_GUIDE_TEMPLATE" ]; then
+    # The skill is YAML frontmatter (SKILL.md) + the platform-neutral guide
+    # body (guide.md). guide.md is the single source of truth for deep
+    # operating knowledge — the same body any agent on any platform can
+    # print with `memory-hive guide`; Claude Code just gets it packaged as
+    # a native Agent Skill.
+    { cat "$HIVE_SKILL_TEMPLATE"; printf '\n'; cat "$HIVE_GUIDE_TEMPLATE"; } \
+        | sed -e "s|\${HIVE_DIR}|$_hive_dir_escaped|g" \
+              -e "s|\${INSTALL_DIR}|$_install_dir_escaped|g" \
+        > "$HIVE_SKILL_FILE" \
+        || die "Failed to render Agent Skill from $HIVE_SKILL_TEMPLATE + $HIVE_GUIDE_TEMPLATE"
+elif [ -f "$HIVE_SKILL_TEMPLATE" ]; then
+    # Older checkout without guide.md: SKILL.md is self-contained.
+    sed -e "s|\${HIVE_DIR}|$_hive_dir_escaped|g" \
+        -e "s|\${INSTALL_DIR}|$_install_dir_escaped|g" \
+        "$HIVE_SKILL_TEMPLATE" > "$HIVE_SKILL_FILE" \
+        || die "Failed to render Agent Skill from $HIVE_SKILL_TEMPLATE"
+else
+    HIVE_SKILL_FILE=""
+fi
+
 # Also render the aider-conventions.md template with the same
 # substitutions, since it ships with unresolved ${HIVE_DIR} placeholders
 # (so the source file in the repo stays portable). This is a tools-level
@@ -624,6 +662,46 @@ if [ -d "$_plat_src_dir" ]; then
         # Skip aider-conventions.md — already rendered above.
         [ "$_pname" = "aider-conventions.md" ] && continue
         cp "$_pf" "$_plat_dst_dir/$_pname" 2>/dev/null || true
+    done
+fi
+
+# Ship the UNRENDERED Agent Skill template to the install dir too, so users
+# can inspect the source post-install and offline updates keep a local copy
+# to render from. Verbatim copy — the ${HIVE_DIR}/${INSTALL_DIR} placeholders
+# stay intact here; only the wired copy under ~/.claude is rendered.
+_skill_src="$TMP_DIR/memory-hive/templates/skills/memory-hive/SKILL.md"
+_skill_doc_dst="$INSTALL_DIR/templates/skills/memory-hive/SKILL.md"
+if [ -f "$_skill_src" ]; then
+    mkdir -p "$(dirname "$_skill_doc_dst")" 2>/dev/null || true
+    cp "$_skill_src" "$_skill_doc_dst" 2>/dev/null || true
+fi
+
+# Ship the UNRENDERED platform-neutral guide too. Unlike the docs above,
+# this copy is load-bearing: `memory-hive guide` renders it with live
+# paths at runtime, on every platform — keep the placeholders intact.
+_guide_src="$TMP_DIR/memory-hive/templates/guide.md"
+_guide_dst="$INSTALL_DIR/templates/guide.md"
+if [ -f "$_guide_src" ]; then
+    mkdir -p "$(dirname "$_guide_dst")" 2>/dev/null || true
+    cp "$_guide_src" "$_guide_dst" 2>/dev/null || true
+fi
+
+# Render the Claude Code harness hook scripts straight into the install dir.
+# They execute from $INSTALL_DIR/hooks/ at session time, so they get real
+# paths now (same substitution as the boot block). Shipping is unconditional
+# and harmless; wiring them into ~/.claude/settings.json happens later and
+# honors the skip env vars.
+_hooks_src_dir="$TMP_DIR/memory-hive/templates/hooks"
+if [ -d "$_hooks_src_dir" ]; then
+    mkdir -p "$INSTALL_DIR/hooks" 2>/dev/null || true
+    for _hk in "$_hooks_src_dir"/*.sh; do
+        [ -f "$_hk" ] || continue
+        _hk_dst="$INSTALL_DIR/hooks/$(basename "$_hk")"
+        if sed -e "s|\${HIVE_DIR}|$_hive_dir_escaped|g" \
+               -e "s|\${INSTALL_DIR}|$_install_dir_escaped|g" \
+               "$_hk" > "$_hk_dst" 2>/dev/null; then
+            chmod +x "$_hk_dst" 2>/dev/null || true
+        fi
     done
 fi
 
@@ -807,6 +885,163 @@ if [ "$DETECTED_CWD_CLAUDE_MD" -eq 1 ] && [ "${MEMORY_HIVE_MERGE_CWD:-0}" = "1" 
     fi
 elif [ "$DETECTED_CWD_CLAUDE_MD" -eq 1 ]; then
     info "Skipping project-level $CWD_CLAUDE_MD (set MEMORY_HIVE_MERGE_CWD=1 to opt in)"
+fi
+
+# Install the native Claude Code Agent Skill for Claude Code users.
+# The CLAUDE.md managed block is the always-on boot contract every turn pays
+# for; this skill is the on-demand depth (progressive disclosure) Claude Code
+# loads ONLY when it actually does memory work, and which the user can invoke
+# directly as /memory-hive. So it complements — not duplicates — the block:
+# the heavy how-to (path map, workflows, lane rules, curation verbs) lives
+# here and stays out of the per-turn context budget until it's needed.
+# This is a separate file wholly owned by us (frontmatter-first, no markers),
+# so it gets an atomic whole-file write rather than merge_hive_block's splice.
+if [ -n "$HIVE_SKILL_FILE" ] && [ -f "$HIVE_SKILL_FILE" ] && [ -d "$HOME/.claude" ]; then
+    # MEMORY_HIVE_ONLY allow-list: mirror the wiring loop — if the user named
+    # an explicit subset and claude-code isn't in it, the skill is filtered.
+    _skill_filtered=0
+    if [ -n "$_only_list" ]; then
+        case "$_only_list" in
+            *" claude-code "*) : ;;  # in the allow-list, proceed
+            *)
+                _mh_record PLATFORM_SKIPPED "claude-skill" "Claude Code Agent Skill filtered by MEMORY_HIVE_ONLY"
+                _skill_filtered=1
+                ;;
+        esac
+    fi
+    if [ "$_skill_filtered" -eq 0 ]; then
+        # Honor the Claude Code skip env var (shared with the boot block) and
+        # a dedicated MEMORY_HIVE_SKIP_CLAUDE_SKILL for skipping just the skill.
+        if _mh_platform_is_skipped claude-code || [ "${MEMORY_HIVE_SKIP_CLAUDE_SKILL:-0}" = "1" ]; then
+            _mh_record PLATFORM_SKIPPED "claude-skill" "Claude Code Agent Skill skipped by env var"
+        else
+            _skill_target="$HOME/.claude/skills/memory-hive/SKILL.md"
+            mkdir -p "$(dirname "$_skill_target")" 2>/dev/null || true
+            # Atomic write: stage then mv into place (same idiom as
+            # merge_hive_block). Never die — a skill failure is non-fatal.
+            _skill_tmp="$_skill_target.memhive.$$"
+            if cp "$HIVE_SKILL_FILE" "$_skill_tmp" 2>/dev/null \
+                && mv "$_skill_tmp" "$_skill_target" 2>/dev/null; then
+                _mh_record PLATFORM_WIRED "claude-skill" "Claude Code Agent Skill: wired $_skill_target"
+                if [ -z "$WIRED_TARGETS" ]; then
+                    WIRED_TARGETS="$_skill_target"
+                else
+                    WIRED_TARGETS="$WIRED_TARGETS $_skill_target"
+                fi
+                ok "Claude Code: Agent Skill written to $(printf '%s' "$_skill_target" | sed -e "s|^$HOME|~|")"
+            else
+                rm -f "$_skill_tmp" 2>/dev/null || true
+                warn "Claude Code: could not install Agent Skill at $_skill_target -- continuing"
+            fi
+        fi
+    fi
+fi
+
+# --- Claude Code harness hooks (SessionStart hydration + Stop ritual) -------
+# The boot block and skill are prompt-level: they ask the model to hydrate
+# and write back. These hooks make the HARNESS do it mechanically — every
+# new session gets hive context injected (SessionStart), and a session that
+# ends without the task-end ritual gets blocked exactly once with
+# instructions (Stop; stop_hook_active prevents loops, short transcripts are
+# exempt). Merged into ~/.claude/settings.json via python3 (already a
+# Memory Hive dependency for HyperRecall); entries the user wrote themselves
+# are never touched, and re-runs replace only our own entries.
+if [ -d "$HOME/.claude" ] \
+    && [ -f "$INSTALL_DIR/hooks/session-start.sh" ] \
+    && [ -f "$INSTALL_DIR/hooks/stop-ritual.sh" ]; then
+    _hooks_filtered=0
+    if [ -n "$_only_list" ]; then
+        case "$_only_list" in
+            *" claude-code "*) : ;;  # in the allow-list, proceed
+            *)
+                _mh_record PLATFORM_SKIPPED "claude-hooks" "Claude Code harness hooks filtered by MEMORY_HIVE_ONLY"
+                _hooks_filtered=1
+                ;;
+        esac
+    fi
+    if [ "$_hooks_filtered" -eq 0 ]; then
+        if _mh_platform_is_skipped claude-code || [ "${MEMORY_HIVE_SKIP_CLAUDE_HOOKS:-0}" = "1" ]; then
+            _mh_record PLATFORM_SKIPPED "claude-hooks" "Claude Code harness hooks skipped by env var"
+        elif ! command -v python3 >/dev/null 2>&1; then
+            _mh_record PLATFORM_SKIPPED "claude-hooks" "Claude Code harness hooks need python3 (not found)"
+            warn "Claude Code: python3 not found -- harness hooks not wired (wire by hand per templates/platforms/claude-code.md)"
+        else
+            _settings="$HOME/.claude/settings.json"
+            if MEMORY_HIVE_SETTINGS="$_settings" MEMORY_HIVE_INSTALL="$INSTALL_DIR" python3 - <<'PYHOOKS'
+import json, os, sys
+
+path = os.environ["MEMORY_HIVE_SETTINGS"]
+install = os.environ["MEMORY_HIVE_INSTALL"]
+# The trailing comment is a machine-readable ownership marker: re-runs (and
+# installs moved to a new INSTALL_DIR) find and replace exactly these
+# entries, never anything the user wrote.
+ss_cmd = 'sh "%s/hooks/session-start.sh" # memory-hive' % install
+st_cmd = 'sh "%s/hooks/stop-ritual.sh" # memory-hive' % install
+
+data = {}
+if os.path.exists(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        sys.exit(3)  # malformed settings -- refuse to touch
+if not isinstance(data, dict):
+    sys.exit(3)
+hooks = data.setdefault("hooks", {})
+if not isinstance(hooks, dict):
+    sys.exit(3)
+
+
+def ours(cmd):
+    cmd = str(cmd)
+    return "# memory-hive" in cmd and (
+        "/hooks/session-start.sh" in cmd or "/hooks/stop-ritual.sh" in cmd
+    )
+
+
+def ensure(event, matcher, cmd):
+    arr = hooks.setdefault(event, [])
+    if not isinstance(arr, list):
+        sys.exit(3)
+    kept = []
+    for entry in arr:
+        if isinstance(entry, dict) and isinstance(entry.get("hooks"), list):
+            entry["hooks"] = [
+                h for h in entry["hooks"]
+                if not (isinstance(h, dict) and ours(h.get("command", "")))
+            ]
+            if not entry["hooks"]:
+                continue  # entry was wholly ours -- drop and re-add fresh
+        kept.append(entry)
+    new = {"hooks": [{"type": "command", "command": cmd, "timeout": 15}]}
+    if matcher:
+        new["matcher"] = matcher
+    kept.append(new)
+    hooks[event] = kept
+
+
+ensure("SessionStart", "startup|clear|compact", ss_cmd)
+ensure("Stop", None, st_cmd)
+
+tmp = path + ".memhive.tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+os.replace(tmp, path)
+PYHOOKS
+            then
+                _mh_record PLATFORM_WIRED "claude-hooks" "Claude Code harness hooks: wired $_settings"
+                if [ -z "$WIRED_TARGETS" ]; then
+                    WIRED_TARGETS="$_settings"
+                else
+                    WIRED_TARGETS="$WIRED_TARGETS $_settings"
+                fi
+                ok "Claude Code: harness hooks (SessionStart + Stop) wired into $(printf '%s' "$_settings" | sed -e "s|^$HOME|~|")"
+            else
+                warn "Claude Code: could not update $_settings safely -- harness hooks not wired"
+            fi
+        fi
+    fi
 fi
 
 # =============================================================================
@@ -1643,6 +1878,14 @@ for _ppid in $_prev_wired; do
         *" $_ppid "*) continue ;;   # still wired, no delta
         *)
             _pgone_name="$(_mh_platform_field "$_ppid" name 2>/dev/null)"
+            # claude-skill / claude-hooks are virtual ids (extra Claude Code
+            # surfaces, not platform rows), so the field lookup above won't
+            # name them — do so by hand.
+            if [ "$_ppid" = "claude-skill" ]; then
+                _pgone_name="Claude Code Agent Skill"
+            elif [ "$_ppid" = "claude-hooks" ]; then
+                _pgone_name="Claude Code harness hooks"
+            fi
             [ -n "$_pgone_name" ] || _pgone_name="$_ppid"
             _mh_record PLATFORM_GONE "$_ppid" "$_pgone_name: no longer detected (cleaned up with the uninstall)"
             ;;

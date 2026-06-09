@@ -6,6 +6,80 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.3.0] — 2026-06-09 — `Memory everywhere, enforced`
+
+### Added
+
+- Claude Code harness hooks, wired into `~/.claude/settings.json` at
+  install time: a `SessionStart` hook injects a token-budgeted hive bundle
+  (plus a `memory-hive guide` pointer) into every new session, and a `Stop`
+  hook blocks a finishing session at most once when the task-end ritual has
+  not run (no fresh dated line in the agent's `log.md`). The boot contract
+  becomes mechanical instead of prompt-compliance. Scripts ship rendered to
+  `~/.memory-hive/hooks/`; the JSON merge is python3-based, idempotent
+  (entries carry a `# memory-hive` marker), and never touches user-authored
+  hooks or malformed settings files. Loop-guarded via `stop_hook_active`,
+  trivial sessions exempt, every failure path fails open. Opt out at
+  install with `MEMORY_HIVE_SKIP_CLAUDE_HOOKS=1`, mute at runtime with
+  `MEMORY_HIVE_HOOKS_DISABLE=1`, retarget the silo with
+  `MEMORY_HIVE_AGENT_ID`. `memory-hive doctor` checks the wiring (4d) and
+  CI smoke-tests merge idempotency, user-hook preservation, and all three
+  Stop-hook paths.
+- New `memory-hive guide [topic]` verb: prints the platform-neutral
+  operating guide (path map, hydrate/retrieve/write-back workflows, lane
+  rules, curator loop, troubleshooting) rendered with the install's real
+  paths. Topics narrow output to one section:
+  `paths|id|hydrate|retrieve|write|lanes|curate|health`. This is the
+  progressive-disclosure path for every platform — any agent that can run
+  a shell pulls full memory guidance on demand instead of carrying it in
+  every session.
+- New canonical guide source at `templates/guide.md`, shipped unrendered to
+  `~/.memory-hive/templates/guide.md`. The Claude Code Agent Skill body is
+  assembled from this same file at install time (frontmatter head +
+  guide body), so the skill and the cross-platform guide cannot drift.
+- The managed boot block now ends with a `### Going deeper` pointer to
+  `memory-hive guide`, so all auto-injected platforms (Cursor, Codex,
+  Gemini CLI, Goose, Warp, Amp, OpenCode, ...) advertise the on-demand
+  guide, not just Claude Code.
+- `memory-hive doctor` warns when the shipped guide template is missing
+  (it is load-bearing for `memory-hive guide` on every platform).
+- Shipped a native Claude Code Agent Skill template at
+  `templates/skills/memory-hive/SKILL.md`. The installer renders
+  `${HIVE_DIR}` / `${INSTALL_DIR}` placeholders to real paths and writes the
+  result to `~/.claude/skills/memory-hive/SKILL.md` whenever `~/.claude/`
+  exists. The unrendered template is also copied to
+  `~/.memory-hive/templates/skills/memory-hive/SKILL.md` for inspection.
+  Re-installs overwrite the skill file in place (whole-file managed; YAML
+  frontmatter is the contract, no start/end markers needed).
+- Added `MEMORY_HIVE_SKIP_CLAUDE_SKILL=1` env var to opt out of the Agent
+  Skill installation only, leaving the managed `CLAUDE.md` block intact.
+  `MEMORY_HIVE_SKIP_CLAUDE_CODE=1` (and its legacy alias
+  `MEMORY_HIVE_SKIP_CLAUDE_MD=1`) now skips both the block and the skill.
+- Extended `memory-hive doctor` to check that
+  `~/.claude/skills/memory-hive/SKILL.md` exists and references the current
+  install directory, with a re-install hint when the check fails.
+- Added CI smoke coverage for skill template rendering, doctor skill check,
+  and the new skip-var behavior.
+
+### Fixed
+
+- The managed boot block's task-end ritual now teaches the canonical raw
+  learning layout (`learnings/raw/<agent-id>/YYYY-MM-DD-<slug>.md`) and a
+  frontmatter example that includes the lint-required `confidence` field.
+  The previous flat-path example (`learnings/raw/<agent-id>-<slug>.md`,
+  no `confidence`) produced files that failed `memory-hive lint` on both
+  the `agent:`-matches-parent-directory rule and the required-field rule.
+- The boot block's lane-keeping rule now scopes shared-pool writes to the
+  agent's own subdir (`learnings/raw/<your-agent-id>/`), matching how
+  lint, `promote`, and `stale` actually resolve ownership.
+
+### Changed
+
+- Documented the block-vs-skill positioning in `INTEGRATION.md`,
+  `templates/platforms/claude-code.md`, and `README.md`: the managed
+  `CLAUDE.md` block is the always-on boot contract; the Agent Skill is the
+  on-demand depth layer (progressive disclosure, invocable as `/memory-hive`).
+
 ## [1.2.1] — 2026-05-13 — `Incremental recall update proof`
 
 ### Fixed
