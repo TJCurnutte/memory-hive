@@ -319,6 +319,27 @@ jobs:
           grep -q "\[manual\] Zed"   /tmp/mh-plat.log || { echo "Zed not reported as manual";   fail=1; }
           test ! -f "$FAKE_HOME/.cline/memory-hive.md" || { echo "Cline wrote a file (shouldn't)"; fail=1; }
 
+          # Claude Code Agent Skill assertions.
+          SKILL="$FAKE_HOME/.claude/skills/memory-hive/SKILL.md"
+          if [ ! -f "$SKILL" ]; then
+              echo "FAIL: skill file missing: $SKILL" >&2
+              fail=1
+          else
+              [ "$(head -n 1 "$SKILL")" = "---" ] || { echo "FAIL: skill first line is not ---" >&2; fail=1; }
+              grep -q '^name: memory-hive$' "$SKILL" || { echo "FAIL: skill missing 'name: memory-hive'" >&2; fail=1; }
+              grep -q '^description: ' "$SKILL" || { echo "FAIL: skill missing 'description:' line" >&2; fail=1; }
+              grep -q "$INSTALL_DIR" "$SKILL" || { echo "FAIL: skill does not contain INSTALL_DIR path" >&2; fail=1; }
+              ! grep -q '${HIVE_DIR}' "$SKILL" || { echo "FAIL: skill contains unrendered \${HIVE_DIR}" >&2; fail=1; }
+              ! grep -q '${INSTALL_DIR}' "$SKILL" || { echo "FAIL: skill contains unrendered \${INSTALL_DIR}" >&2; fail=1; }
+          fi
+          if [ ! -f "$INSTALL_DIR/templates/skills/memory-hive/SKILL.md" ]; then
+              echo "FAIL: shipped template missing at \$INSTALL_DIR/templates/skills/memory-hive/SKILL.md" >&2
+              fail=1
+          else
+              grep -q '${HIVE_DIR}' "$INSTALL_DIR/templates/skills/memory-hive/SKILL.md" || \
+                  { echo "FAIL: shipped template does not contain literal \${HIVE_DIR}" >&2; fail=1; }
+          fi
+
           [ "$fail" -eq 0 ] || exit 1
           echo "Platform integration smoke OK"
 
@@ -332,9 +353,11 @@ jobs:
           export MEMORY_HIVE_DIR="$INSTALL_DIR"
           export MEMORY_HIVE_REPO="$(pwd)"
 
-          mkdir -p "$FAKE_HOME/.cursor" "$FAKE_HOME/.gemini"
+          mkdir -p "$FAKE_HOME/.cursor" "$FAKE_HOME/.gemini" "$FAKE_HOME/.claude"
           # Opt out of Cursor; Gemini should still be wired.
+          # Opt out of Claude Code Agent Skill; CLAUDE.md block should still be wired.
           export MEMORY_HIVE_SKIP_CURSOR=1
+          export MEMORY_HIVE_SKIP_CLAUDE_SKILL=1
           sh install.sh < /dev/null > /tmp/mh-optout.log 2>&1
 
           test ! -f "$FAKE_HOME/.cursor/rules/memory-hive.mdc" || \
@@ -343,6 +366,14 @@ jobs:
               { echo "Gemini CLI was NOT wired"; exit 1; }
           grep -q "\[skip \] Cursor" /tmp/mh-optout.log || \
               { echo "Cursor skip not reported"; exit 1; }
+          test -f "$FAKE_HOME/.claude/CLAUDE.md" || \
+              { echo "CLAUDE.md block not wired despite only skill being skipped"; exit 1; }
+          grep -q "memory-hive:start" "$FAKE_HOME/.claude/CLAUDE.md" || \
+              { echo "CLAUDE.md missing memory-hive:start marker"; exit 1; }
+          test ! -f "$FAKE_HOME/.claude/skills/memory-hive/SKILL.md" || \
+              { echo "skill was written despite MEMORY_HIVE_SKIP_CLAUDE_SKILL=1"; exit 1; }
+          grep -q "Claude Code Agent Skill" /tmp/mh-optout.log || \
+              { echo "skill skip not reported in log"; exit 1; }
           echo "Opt-out smoke OK"
 
       - name: Platform integration smoke — idempotent
@@ -355,15 +386,19 @@ jobs:
           export MEMORY_HIVE_DIR="$INSTALL_DIR"
           export MEMORY_HIVE_REPO="$(pwd)"
 
-          mkdir -p "$FAKE_HOME/.cursor"
+          mkdir -p "$FAKE_HOME/.cursor" "$FAKE_HOME/.claude"
           sh install.sh < /dev/null > /dev/null 2>&1
           checksum_1=$(cksum "$FAKE_HOME/.cursor/rules/memory-hive.mdc" | awk '{print $1}')
+          skill_checksum_1=$(cksum "$FAKE_HOME/.claude/skills/memory-hive/SKILL.md" | awk '{print $1}')
 
           sh install.sh < /dev/null > /dev/null 2>&1
           checksum_2=$(cksum "$FAKE_HOME/.cursor/rules/memory-hive.mdc" | awk '{print $1}')
+          skill_checksum_2=$(cksum "$FAKE_HOME/.claude/skills/memory-hive/SKILL.md" | awk '{print $1}')
 
           [ "$checksum_1" = "$checksum_2" ] || \
               { echo "Re-install changed the managed block (not idempotent)"; exit 1; }
+          [ "$skill_checksum_1" = "$skill_checksum_2" ] || \
+              { echo "Re-install changed SKILL.md (skill not idempotent)"; exit 1; }
           echo "Idempotency smoke OK"
 
       - name: CLI smoke — tail + confidence
