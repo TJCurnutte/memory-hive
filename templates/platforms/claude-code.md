@@ -1,6 +1,8 @@
 # Memory Hive wiring — Claude Code
 
-Claude Code gets two Memory Hive surfaces installed together.
+Claude Code gets three Memory Hive surfaces installed together: a managed
+boot block (always-on contract), an Agent Skill (on-demand depth), and
+harness hooks (mechanical enforcement).
 
 ---
 
@@ -29,7 +31,8 @@ in place and never touches content outside the markers.
 The installer substitutes `${HIVE_DIR}` and `${INSTALL_DIR}` at install time.
 
 **Opt out:** `MEMORY_HIVE_SKIP_CLAUDE_CODE=1` (or legacy
-`MEMORY_HIVE_SKIP_CLAUDE_MD=1`) — skips both the block and the Agent Skill.
+`MEMORY_HIVE_SKIP_CLAUDE_MD=1`) — skips the block, the Agent Skill, and the
+harness hooks.
 
 ---
 
@@ -68,10 +71,40 @@ and references the current install, and warns with a re-install hint if not.
 
 ---
 
+## Surface 3 — Harness hooks in `~/.claude/settings.json`
+
+**Integration:** JSON merge via python3, entries marked `# memory-hive`
+
+The block and skill ask the model to follow the memory contract; the hooks
+make the harness enforce it mechanically:
+
+| Hook | Script | What it does |
+|---|---|---|
+| `SessionStart` (matcher `startup\|clear\|compact`) | `~/.memory-hive/hooks/session-start.sh` | Injects a token-budgeted hive bundle + `memory-hive guide` pointer into the session as additional context. Sessions boot hydrated even if the model never reads `CLAUDE.md`. |
+| `Stop` | `~/.memory-hive/hooks/stop-ritual.sh` | When a substantive session ends without a fresh dated line in the agent's `log.md`, blocks once with instructions to run the task-end ritual. `stop_hook_active` prevents loops; short transcripts are exempt. |
+
+Both scripts fail open — missing hive, missing python3, unparseable input
+all exit 0 silently, never breaking a session. The agent id defaults to
+`main`; set `MEMORY_HIVE_AGENT_ID` to target another silo.
+
+**Refresh semantics:** re-installing replaces only the entries whose command
+carries the `# memory-hive` marker. Hooks you wrote yourself are untouched;
+malformed `settings.json` is left alone (with a warning).
+
+**Opt out:** `MEMORY_HIVE_SKIP_CLAUDE_HOOKS=1` at install time, or export
+`MEMORY_HIVE_HOOKS_DISABLE=1` at runtime to mute the installed hooks.
+
+**Doctor coverage:** `memory-hive doctor` warns when the hook scripts are
+missing or `settings.json` no longer references them.
+
+---
+
 ## Uninstalling
 
 ```bash
 rm -rf ~/.claude/skills/memory-hive
 # then open ~/.claude/CLAUDE.md and delete the block between
 # <!-- memory-hive:start --> and <!-- memory-hive:end -->
+# and remove the two hook entries marked `# memory-hive` from
+# ~/.claude/settings.json (under hooks.SessionStart and hooks.Stop)
 ```

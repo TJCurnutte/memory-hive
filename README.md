@@ -48,7 +48,7 @@ That first run does the work users previously had to stitch together by hand:
 - creates `~/.memory-hive`
 - creates the reserved `main` curator silo
 - installs the `memory-hive` command or a PATH shim when possible
-- wires managed Memory Hive blocks into detected agent tools and installs the native Claude Code Agent Skill (`~/.claude/skills/memory-hive/`) when Claude Code is present
+- wires managed Memory Hive blocks into detected agent tools; when Claude Code is present, also installs the native Agent Skill (`~/.claude/skills/memory-hive/`) and SessionStart/Stop harness hooks that auto-hydrate every session and enforce the write-back ritual mechanically
 - refreshes the roster/registry
 - builds or updates the HyperRecall index quietly
 - runs the maintenance wrapper quietly

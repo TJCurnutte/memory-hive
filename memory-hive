@@ -886,6 +886,30 @@ PLATS
         printf '  %s guide template present (`memory-hive guide` serves all platforms)\n' "$_D_OK"
     fi
 
+    # --- 4d. Claude Code harness hooks (settings.json wiring) --------------
+    # SessionStart hydration + Stop ritual nudge, wired by install.sh into
+    # ~/.claude/settings.json. Only meaningful when Claude Code exists.
+    if [ -d "$HOME/.claude" ]; then
+        _hk_ss="$INSTALL_DIR/hooks/session-start.sh"
+        _hk_st="$INSTALL_DIR/hooks/stop-ritual.sh"
+        _hk_settings="$HOME/.claude/settings.json"
+        if [ ! -f "$_hk_ss" ] || [ ! -f "$_hk_st" ]; then
+            printf '  %s harness hook scripts missing under %s/hooks/\n' \
+                "$_D_WARN" "$INSTALL_DIR"
+            printf '     run %s to restore them.\n' "\`sh $INSTALL_DIR/install.sh\`"
+            _warnings=$((_warnings + 1))
+        elif [ ! -f "$_hk_settings" ] \
+            || ! grep -q -F "hooks/session-start.sh" "$_hk_settings" 2>/dev/null \
+            || ! grep -q -F "hooks/stop-ritual.sh" "$_hk_settings" 2>/dev/null; then
+            printf '  %s harness hooks not wired in ~/.claude/settings.json (sessions will not auto-hydrate)\n' \
+                "$_D_WARN"
+            printf '     run %s to wire them.\n' "\`sh $INSTALL_DIR/install.sh\`"
+            _warnings=$((_warnings + 1))
+        else
+            printf '  %s Claude Code harness hooks wired (SessionStart hydrate + Stop ritual)\n' "$_D_OK"
+        fi
+    fi
+
     # --- 5. registry AGENTS.md is in sync ----------------------------------
     _reg="$HIVE_DIR/registry/AGENTS.md"
     if [ ! -f "$_reg" ]; then

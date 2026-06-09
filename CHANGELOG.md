@@ -8,6 +8,21 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- Claude Code harness hooks, wired into `~/.claude/settings.json` at
+  install time: a `SessionStart` hook injects a token-budgeted hive bundle
+  (plus a `memory-hive guide` pointer) into every new session, and a `Stop`
+  hook blocks a finishing session at most once when the task-end ritual has
+  not run (no fresh dated line in the agent's `log.md`). The boot contract
+  becomes mechanical instead of prompt-compliance. Scripts ship rendered to
+  `~/.memory-hive/hooks/`; the JSON merge is python3-based, idempotent
+  (entries carry a `# memory-hive` marker), and never touches user-authored
+  hooks or malformed settings files. Loop-guarded via `stop_hook_active`,
+  trivial sessions exempt, every failure path fails open. Opt out at
+  install with `MEMORY_HIVE_SKIP_CLAUDE_HOOKS=1`, mute at runtime with
+  `MEMORY_HIVE_HOOKS_DISABLE=1`, retarget the silo with
+  `MEMORY_HIVE_AGENT_ID`. `memory-hive doctor` checks the wiring (4d) and
+  CI smoke-tests merge idempotency, user-hook preservation, and all three
+  Stop-hook paths.
 - New `memory-hive guide [topic]` verb: prints the platform-neutral
   operating guide (path map, hydrate/retrieve/write-back workflows, lane
   rules, curator loop, troubleshooting) rendered with the install's real
