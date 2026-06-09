@@ -22,7 +22,7 @@ appending; use CLI verbs for search, recall, and curation.
 | `${HIVE_DIR}/knowledge/` | Curated shared truth (`HUMAN_CONTEXT.md`, `SOUL.md`, ...) | curator only |
 | `${HIVE_DIR}/learnings/raw/<id>/` | Your contributions to the shared pool | any agent, own subdir |
 | `${HIVE_DIR}/learnings/distilled/` | Promoted patterns, wins, mistakes | curator only |
-| `${HIVE_DIR}/tasks/queue.md` | Shared task queue | any agent |
+| `${HIVE_DIR}/tasks/queue.md` | Shared task queue (read for coordination) | curator only |
 | `${HIVE_DIR}/curator/` | Conflicts, decisions audit trail | curator only |
 
 ## Resolve your agent id
@@ -92,11 +92,15 @@ an answer.
    <The reusable lesson, stated so another agent can apply it>
    ```
 
-   Rules that keep `memory-hive lint` green: file starts with the `---`
-   frontmatter fence; `agent:` matches the parent directory name;
-   `confidence:` is one of `low`/`medium`/`high` (new single observations
-   are `low`); `kind:` is one of `pattern`/`win`/`mistake`/`insight`.
-   Keep files under 20KB.
+   Rules that keep `memory-hive lint` green — errors (exit 2): file starts
+   with the `---` frontmatter fence; `date`, `agent`, `context`, and
+   `confidence` fields all present; `date:` is `YYYY-MM-DD`; `agent:`
+   matches the parent directory name. Warnings (exit 1): `confidence:` not
+   one of `low`/`medium`/`high` (new single observations are `low`);
+   filename not `YYYY-MM-DD-<slug>.md`; missing `# H1` title; file ≥50KB.
+   `kind:` (`pattern`/`win`/`mistake`/`insight`) is optional — lint ignores
+   it, but it steers which distilled file `promote` targets and helps
+   `conflicts` cluster, so include it.
 
 Do not skip the ritual because a task feels small — one log line is the
 floor, and a missed ritual gets noted in `memory.md` as a violation and run
@@ -122,7 +126,7 @@ memory-hive curate            # collect -> review -> suggest (dry-run)
 memory-hive curate --apply    # checkpoint, then promote high-confidence clusters
 ```
 
-Targeted verbs when triaging by hand: `tail` (newest raw writes),
+Targeted verbs when triaging by hand: `tail` (newest hive writes),
 `confidence` (clusters ready to upgrade), `dedup` (near-duplicates),
 `promote <raw-file> [--into <topic>.md]`, `conflicts --write`
 (contradictions into `curator/CONFLICTS.md`), `stale` (raw learnings >7
@@ -138,6 +142,7 @@ untouched as the source of truth.
 - When the user says "update memory hive": run `sh ${INSTALL_DIR}/update.sh`,
   then re-read `${HIVE_DIR}/index.md` before continuing.
 
-Deeper references on disk: `${INSTALL_DIR}/HIVE_ARCHITECTURE.md`
-(governance, confidence gates, conflict handling) and
-`${INSTALL_DIR}/templates/platforms/` (per-platform wiring docs).
+Deeper references: `${INSTALL_DIR}/templates/platforms/` on disk
+(per-platform wiring docs) and `HIVE_ARCHITECTURE.md` in the source repo
+(<https://github.com/TJCurnutte/memory-hive>) for governance, confidence
+gates, and conflict handling.

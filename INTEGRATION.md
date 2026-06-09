@@ -109,8 +109,42 @@ blocks — is never touched. The canonical content lives in
 the installer substitutes `${HIVE_DIR}` and `${INSTALL_DIR}` at install
 time.
 
-Opt out with `MEMORY_HIVE_SKIP_CLAUDE_MD=1` if you manage that file by
-hand.
+Opt out with `MEMORY_HIVE_SKIP_CLAUDE_CODE=1` (legacy alias
+`MEMORY_HIVE_SKIP_CLAUDE_MD=1` still honored) if you manage that file by
+hand. Setting this var skips both the managed block and the Agent Skill
+described below.
+
+#### Agent Skill
+
+In addition to the managed block, the installer renders and writes a
+native Claude Code Agent Skill to `~/.claude/skills/memory-hive/SKILL.md`.
+
+The **managed block** is the always-on boot contract: every session hydrates
+from the hive before responding and writes back after non-trivial work. The
+**Agent Skill** is the on-demand depth layer: Claude Code loads only the
+skill's one-line description into every session and pulls the full body
+— retrieval verb guide, exact raw-learning frontmatter that passes lint,
+lane rules, curator loop, troubleshooting — only when memory work is
+actually happening. This is progressive disclosure instead of a permanent
+context tax.
+
+The skill is also user-invocable as `/memory-hive` inside any Claude Code
+session.
+
+The source template lives at
+[`templates/skills/memory-hive/SKILL.md`](templates/skills/memory-hive/SKILL.md);
+the installer renders `${HIVE_DIR}` and `${INSTALL_DIR}` placeholders to real
+paths and writes the result to `~/.claude/skills/memory-hive/SKILL.md`. The
+unrendered template is also shipped to
+`~/.memory-hive/templates/skills/memory-hive/SKILL.md` for inspection.
+Re-installing overwrites the skill file in place (the whole file is
+installer-managed; no markers are needed because the file must start with
+YAML frontmatter).
+
+`memory-hive doctor` checks that the skill file exists and references the
+current install, and warns with a re-install hint if it does not.
+
+Opt out of the skill alone with `MEMORY_HIVE_SKIP_CLAUDE_SKILL=1`.
 
 ### OpenClaw users
 
@@ -194,7 +228,8 @@ silos you keep.
 | `MEMORY_HIVE_REPO` | Install from a local working copy instead of cloning GitHub. Points at a directory with a `hive/` subdir. |
 | `MEMORY_HIVE_MERGE_CWD` | Set to `1` to also merge the managed block into `$PWD/CLAUDE.md`. |
 | `MEMORY_HIVE_COPILOT_REPO` | Set to `1` to opt into writing `.github/copilot-instructions.md` in the current repo. |
-| `MEMORY_HIVE_SKIP_CLAUDE_CODE` | Opt out of the Claude Code wiring. Legacy `MEMORY_HIVE_SKIP_CLAUDE_MD=1` is still honored as an alias. |
+| `MEMORY_HIVE_SKIP_CLAUDE_CODE` | Opt out of all Claude Code wiring (managed block and Agent Skill). Legacy `MEMORY_HIVE_SKIP_CLAUDE_MD=1` is still honored as an alias. |
+| `MEMORY_HIVE_SKIP_CLAUDE_SKILL` | Opt out of installing the Agent Skill only; the managed `CLAUDE.md` block is still written. |
 | `MEMORY_HIVE_SKIP_OPENCLAW` | Opt out of OpenClaw wiring. |
 | `MEMORY_HIVE_SKIP_NANOCLAW` | Opt out of NanoClaw wiring. |
 | `MEMORY_HIVE_SKIP_HERMES` | Opt out of Hermes Agent wiring. |
@@ -222,6 +257,7 @@ silos you keep.
 
 ```bash
 rm -rf ~/.memory-hive
+rm -rf ~/.claude/skills/memory-hive
 # then open ~/.claude/CLAUDE.md and delete the block between
 # <!-- memory-hive:start --> and <!-- memory-hive:end -->
 ```

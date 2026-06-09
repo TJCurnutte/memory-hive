@@ -6,6 +6,33 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Shipped a native Claude Code Agent Skill template at
+  `templates/skills/memory-hive/SKILL.md`. The installer renders
+  `${HIVE_DIR}` / `${INSTALL_DIR}` placeholders to real paths and writes the
+  result to `~/.claude/skills/memory-hive/SKILL.md` whenever `~/.claude/`
+  exists. The unrendered template is also copied to
+  `~/.memory-hive/templates/skills/memory-hive/SKILL.md` for inspection.
+  Re-installs overwrite the skill file in place (whole-file managed; YAML
+  frontmatter is the contract, no start/end markers needed).
+- Added `MEMORY_HIVE_SKIP_CLAUDE_SKILL=1` env var to opt out of the Agent
+  Skill installation only, leaving the managed `CLAUDE.md` block intact.
+  `MEMORY_HIVE_SKIP_CLAUDE_CODE=1` (and its legacy alias
+  `MEMORY_HIVE_SKIP_CLAUDE_MD=1`) now skips both the block and the skill.
+- Extended `memory-hive doctor` to check that
+  `~/.claude/skills/memory-hive/SKILL.md` exists and references the current
+  install directory, with a re-install hint when the check fails.
+- Added CI smoke coverage for skill template rendering, doctor skill check,
+  and the new skip-var behavior.
+
+### Changed
+
+- Documented the block-vs-skill positioning in `INTEGRATION.md`,
+  `templates/platforms/claude-code.md`, and `README.md`: the managed
+  `CLAUDE.md` block is the always-on boot contract; the Agent Skill is the
+  on-demand depth layer (progressive disclosure, invocable as `/memory-hive`).
+
 ## [1.2.1] — 2026-05-13 — `Incremental recall update proof`
 
 ### Fixed

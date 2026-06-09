@@ -24,6 +24,10 @@
 #   MEMORY_HIVE_SKIP_CLAUDE_MD=1   don't modify ~/.claude/CLAUDE.md even if it
 #                                  exists (useful for tests that shouldn't
 #                                  touch the developer's real config)
+#   MEMORY_HIVE_SKIP_CLAUDE_SKILL=1 don't install the native Claude Code Agent
+#                                  Skill into ~/.claude/skills/memory-hive/
+#                                  (the on-demand /memory-hive companion to the
+#                                  CLAUDE.md boot block)
 #   MEMORY_HIVE_ONLY=hermes,cursor comma- or space-separated platform IDs;
 #                                  wire ONLY these and filter every other
 #                                  detected platform out (useful when you
@@ -597,6 +601,24 @@ sed -e "s|\${HIVE_DIR}|$_hive_dir_escaped|g" \
     "$HIVE_BLOCK_TEMPLATE" > "$HIVE_BLOCK_FILE" \
     || die "Failed to render boot block from $HIVE_BLOCK_TEMPLATE"
 
+# Render the native Claude Code Agent Skill from the same kind of template.
+# Unlike the boot block (a marker-delimited splice into a user-owned
+# CLAUDE.md), the skill is a standalone file wholly owned by the installer:
+# it MUST begin with YAML frontmatter, so there are no start/end markers and
+# no splice — we render the whole file and write it verbatim at wire time.
+# Older local checkouts (via MEMORY_HIVE_REPO) may predate the template; in
+# that case leave HIVE_SKILL_FILE empty so the wiring step no-ops silently.
+HIVE_SKILL_FILE="$TMP_DIR/hive-skill.md"
+HIVE_SKILL_TEMPLATE="$TMP_DIR/memory-hive/templates/skills/memory-hive/SKILL.md"
+if [ -f "$HIVE_SKILL_TEMPLATE" ]; then
+    sed -e "s|\${HIVE_DIR}|$_hive_dir_escaped|g" \
+        -e "s|\${INSTALL_DIR}|$_install_dir_escaped|g" \
+        "$HIVE_SKILL_TEMPLATE" > "$HIVE_SKILL_FILE" \
+        || die "Failed to render Agent Skill from $HIVE_SKILL_TEMPLATE"
+else
+    HIVE_SKILL_FILE=""
+fi
+
 # Also render the aider-conventions.md template with the same
 # substitutions, since it ships with unresolved ${HIVE_DIR} placeholders
 # (so the source file in the repo stays portable). This is a tools-level
@@ -625,6 +647,17 @@ if [ -d "$_plat_src_dir" ]; then
         [ "$_pname" = "aider-conventions.md" ] && continue
         cp "$_pf" "$_plat_dst_dir/$_pname" 2>/dev/null || true
     done
+fi
+
+# Ship the UNRENDERED Agent Skill template to the install dir too, so users
+# can inspect the source post-install and offline updates keep a local copy
+# to render from. Verbatim copy — the ${HIVE_DIR}/${INSTALL_DIR} placeholders
+# stay intact here; only the wired copy under ~/.claude is rendered.
+_skill_src="$TMP_DIR/memory-hive/templates/skills/memory-hive/SKILL.md"
+_skill_doc_dst="$INSTALL_DIR/templates/skills/memory-hive/SKILL.md"
+if [ -f "$_skill_src" ]; then
+    mkdir -p "$(dirname "$_skill_doc_dst")" 2>/dev/null || true
+    cp "$_skill_src" "$_skill_doc_dst" 2>/dev/null || true
 fi
 
 # merge_hive_block <target-markdown-path>
@@ -807,6 +840,56 @@ if [ "$DETECTED_CWD_CLAUDE_MD" -eq 1 ] && [ "${MEMORY_HIVE_MERGE_CWD:-0}" = "1" 
     fi
 elif [ "$DETECTED_CWD_CLAUDE_MD" -eq 1 ]; then
     info "Skipping project-level $CWD_CLAUDE_MD (set MEMORY_HIVE_MERGE_CWD=1 to opt in)"
+fi
+
+# Install the native Claude Code Agent Skill for Claude Code users.
+# The CLAUDE.md managed block is the always-on boot contract every turn pays
+# for; this skill is the on-demand depth (progressive disclosure) Claude Code
+# loads ONLY when it actually does memory work, and which the user can invoke
+# directly as /memory-hive. So it complements — not duplicates — the block:
+# the heavy how-to (path map, workflows, lane rules, curation verbs) lives
+# here and stays out of the per-turn context budget until it's needed.
+# This is a separate file wholly owned by us (frontmatter-first, no markers),
+# so it gets an atomic whole-file write rather than merge_hive_block's splice.
+if [ -n "$HIVE_SKILL_FILE" ] && [ -f "$HIVE_SKILL_FILE" ] && [ -d "$HOME/.claude" ]; then
+    # MEMORY_HIVE_ONLY allow-list: mirror the wiring loop — if the user named
+    # an explicit subset and claude-code isn't in it, the skill is filtered.
+    _skill_filtered=0
+    if [ -n "$_only_list" ]; then
+        case "$_only_list" in
+            *" claude-code "*) : ;;  # in the allow-list, proceed
+            *)
+                _mh_record PLATFORM_SKIPPED "claude-skill" "Claude Code Agent Skill filtered by MEMORY_HIVE_ONLY"
+                _skill_filtered=1
+                ;;
+        esac
+    fi
+    if [ "$_skill_filtered" -eq 0 ]; then
+        # Honor the Claude Code skip env var (shared with the boot block) and
+        # a dedicated MEMORY_HIVE_SKIP_CLAUDE_SKILL for skipping just the skill.
+        if _mh_platform_is_skipped claude-code || [ "${MEMORY_HIVE_SKIP_CLAUDE_SKILL:-0}" = "1" ]; then
+            _mh_record PLATFORM_SKIPPED "claude-skill" "Claude Code Agent Skill skipped by env var"
+        else
+            _skill_target="$HOME/.claude/skills/memory-hive/SKILL.md"
+            mkdir -p "$(dirname "$_skill_target")" 2>/dev/null || true
+            # Atomic write: stage then mv into place (same idiom as
+            # merge_hive_block). Never die — a skill failure is non-fatal.
+            _skill_tmp="$_skill_target.memhive.$$"
+            if cp "$HIVE_SKILL_FILE" "$_skill_tmp" 2>/dev/null \
+                && mv "$_skill_tmp" "$_skill_target" 2>/dev/null; then
+                _mh_record PLATFORM_WIRED "claude-skill" "Claude Code Agent Skill: wired $_skill_target"
+                if [ -z "$WIRED_TARGETS" ]; then
+                    WIRED_TARGETS="$_skill_target"
+                else
+                    WIRED_TARGETS="$WIRED_TARGETS $_skill_target"
+                fi
+                ok "Claude Code: Agent Skill written to $(printf '%s' "$_skill_target" | sed -e "s|^$HOME|~|")"
+            else
+                rm -f "$_skill_tmp" 2>/dev/null || true
+                warn "Claude Code: could not install Agent Skill at $_skill_target -- continuing"
+            fi
+        fi
+    fi
 fi
 
 # =============================================================================
@@ -1643,6 +1726,11 @@ for _ppid in $_prev_wired; do
         *" $_ppid "*) continue ;;   # still wired, no delta
         *)
             _pgone_name="$(_mh_platform_field "$_ppid" name 2>/dev/null)"
+            # claude-skill is a virtual id (the Agent Skill, not a platform
+            # row), so the field lookup above won't name it — do so by hand.
+            if [ "$_ppid" = "claude-skill" ]; then
+                _pgone_name="Claude Code Agent Skill"
+            fi
             [ -n "$_pgone_name" ] || _pgone_name="$_ppid"
             _mh_record PLATFORM_GONE "$_ppid" "$_pgone_name: no longer detected (cleaned up with the uninstall)"
             ;;

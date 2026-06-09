@@ -849,6 +849,31 @@ PLATS
     fi
     _warnings=$((_warnings + _plat_warnings))
 
+    # --- 4b. Claude Code Agent Skill (on-demand depth surface) -------------
+    # The skill file ($HOME/.claude/skills/memory-hive/SKILL.md) is installed
+    # by install.sh and lets Claude Code users invoke memory-hive tools from
+    # natural language. Only check when ~/.claude exists — if it is absent the
+    # user has no Claude Code install at all and there is nothing to report.
+    if [ -d "$HOME/.claude" ]; then
+        _skill="$HOME/.claude/skills/memory-hive/SKILL.md"
+        if [ ! -f "$_skill" ]; then
+            printf '  %s Claude Code Agent Skill missing (~/.claude/skills/memory-hive/SKILL.md)\n' \
+                "$_D_WARN"
+            printf '     run %s to install it.\n' "\`sh $INSTALL_DIR/install.sh\`"
+            _warnings=$((_warnings + 1))
+        elif ! grep -q -F "$INSTALL_DIR" "$_skill" 2>/dev/null; then
+            # File exists but was generated against a different INSTALL_DIR —
+            # most likely the hive was moved or reinstalled to a new path.
+            printf '  %s Claude Code Agent Skill does not reference %s\n' \
+                "$_D_WARN" "$INSTALL_DIR"
+            printf '     run %s to install it.\n' "\`sh $INSTALL_DIR/install.sh\`"
+            _warnings=$((_warnings + 1))
+        else
+            printf '  %s Claude Code Agent Skill points at this install (~/.claude/skills/memory-hive/SKILL.md)\n' \
+                "$_D_OK"
+        fi
+    fi
+
     # --- 5. registry AGENTS.md is in sync ----------------------------------
     _reg="$HIVE_DIR/registry/AGENTS.md"
     if [ ! -f "$_reg" ]; then
