@@ -192,7 +192,7 @@ Normal users should not need these during onboarding. They remain available for 
 
 **Health and maintenance** — `doctor`, `maintain`, `optimize`, `checkpoint`, `diff`.
 
-**Inspection** — `tail`, `watch`, `stats`, `digest`, `query`, `bundle`.
+**Inspection** — `tail`, `watch`, `stats`, `digest`, `query`, `bundle`, `guide`.
 
 **HyperRecall** — `recall query`, `recall bundle`, `recall build`, `recall update`, `recall doctor`, `recall stats`, `hyper`.
 
