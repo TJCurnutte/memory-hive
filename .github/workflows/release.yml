@@ -2,6 +2,10 @@
 #
 # Behavior:
 #   - Versioned tag pushes (`v*.*.*`) publish changelog-backed releases.
+#   - Manual dispatch (version + optional sha) creates the tag first, then
+#     publishes the same way — for environments that can push branches but
+#     not tag refs. Tags created with GITHUB_TOKEN don't re-trigger this
+#     workflow, so the dispatch path must do both halves itself.
 #   - Plain pushes to `main` run CI only; release cards stay semver-readable.
 name: Release
 
@@ -9,6 +13,16 @@ on:
   push:
     tags:
       - "v*.*.*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Semver tag to create and release (e.g. v1.3.0)"
+        required: true
+        type: string
+      sha:
+        description: "Commit SHA to tag (defaults to this ref's HEAD)"
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -27,13 +41,41 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Create tag (manual dispatch only)
+        if: github.event_name == 'workflow_dispatch'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          DISPATCH_VERSION: ${{ inputs.version }}
+          DISPATCH_SHA: ${{ inputs.sha }}
+        run: |
+          set -eu
+          TAG="v${DISPATCH_VERSION#v}"
+          TARGET="${DISPATCH_SHA:-$GITHUB_SHA}"
+          if gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${TAG}" >/dev/null 2>&1; then
+            echo "Tag ${TAG} already exists; skipping creation."
+          else
+            gh api "repos/${GITHUB_REPOSITORY}/git/refs" \
+              -f ref="refs/tags/${TAG}" -f sha="${TARGET}"
+            echo "Created tag ${TAG} at ${TARGET}"
+          fi
+          # Make the tag visible to the notes step's git log/tag queries.
+          git fetch --force origin "refs/tags/${TAG}:refs/tags/${TAG}"
+
       - name: Build release notes
         id: notes
         shell: bash
+        env:
+          DISPATCH_VERSION: ${{ inputs.version }}
         run: |
           set -eu
 
+          # Tag pushes name the tag in GITHUB_REF_NAME; dispatches carry it
+          # in the version input (empty for push events).
           TAG="${GITHUB_REF_NAME}"
+          if [ -n "${DISPATCH_VERSION:-}" ]; then
+            TAG="v${DISPATCH_VERSION#v}"
+          fi
           VERSION="${TAG#v}"
           TITLE="${TAG}"
           NOTES_FILE="$RUNNER_TEMP/release-notes.md"
