@@ -29,9 +29,9 @@ Before every non-trivial, cross-session, or operational user prompt/task:
 
 ### Task-end ritual (MUST fire at end of any non-trivial task)
 
-1. APPEND one line to `${HIVE_DIR}/agents/<your-agent-id>/log.md`: `YYYY-MM-DD — <what you did>`.
+1. RUN `sh ${INSTALL_DIR}/memory-hive log --agent <your-agent-id> "<what you did, one line>"` (appends the dated line to your silo log for you).
 2. IF a lesson was learned: APPEND a bullet to `${HIVE_DIR}/agents/<your-agent-id>/memory.md`.
-3. IF the lesson generalizes beyond you: WRITE `${HIVE_DIR}/learnings/raw/<your-agent-id>/YYYY-MM-DD-<slug>.md` with frontmatter `---\ndate: YYYY-MM-DD\nagent: <your-agent-id>\ncontext: <one line>\nconfidence: low\n---` (full spec: `memory-hive guide write`).
+3. IF the lesson generalizes beyond you: RUN `sh ${INSTALL_DIR}/memory-hive learn --agent <your-agent-id> "<imperative rule>" --context "<one line: where it came up>" --kind <pattern|win|mistake|insight>` (writes a lint-valid raw learning for you; full spec: `memory-hive guide write`).
 
 ### Going deeper
 

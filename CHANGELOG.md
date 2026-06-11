@@ -6,6 +6,34 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-06-11 — `Ritual as commands`
+
+### Added
+
+- The release workflow gained a `workflow_dispatch` path (version +
+  optional sha): it creates the tag via the API and publishes the same
+  changelog-backed release in one run — for environments that can push
+  branches but not tag refs. Tag-push behavior is unchanged.
+- New write-back verbs that make the task-end ritual executable on every
+  platform instead of described in prose: `memory-hive log "<what you
+  did>"` appends the dated line to the agent's silo log, and `memory-hive
+  learn "<imperative rule>" --context "<one line>" [--kind ...]
+  [--confidence ...] [--body <file>|-]` writes a raw learning to the
+  canonical `learnings/raw/<id>/YYYY-MM-DD-<slug>.md` path with
+  frontmatter that passes `memory-hive lint` by construction (and runs
+  lint on the new file as a receipt). Both honor `--agent` /
+  `MEMORY_HIVE_AGENT_ID`. This removes the biggest cross-model failure
+  mode — hand-formatted paths, dates, and frontmatter — for Codex,
+  Hermes, Cursor, Gemini CLI, and every other wired tool equally.
+
+### Changed
+
+- The managed boot block's task-end ritual now instructs agents to run
+  `memory-hive log` / `memory-hive learn` instead of hand-writing files;
+  the guide's Workflow 3 leads with the verbs (file format remains
+  documented as the underlying contract); the Claude Code Stop hook's
+  nudge now cites the exact `memory-hive log` command to run.
+
 ## [1.3.0] — 2026-06-09 — `Memory everywhere, enforced`
 
 ### Added

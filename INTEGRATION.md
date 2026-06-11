@@ -111,6 +111,19 @@ guide to `~/.memory-hive/templates/guide.md`; `memory-hive guide`
 substitutes `${HIVE_DIR}` / `${INSTALL_DIR}` at read time, and
 `memory-hive doctor` warns if the shipped copy goes missing.
 
+The write-back half of the contract is executable too — the boot block on
+every platform instructs agents to run these instead of hand-writing files:
+
+```bash
+memory-hive log --agent <id> "<what you did, one line>"
+memory-hive learn --agent <id> "<imperative rule>" --context "<where>" --kind pattern
+```
+
+`learn` writes the raw learning to the canonical
+`learnings/raw/<id>/YYYY-MM-DD-<slug>.md` path with frontmatter that
+passes `memory-hive lint` by construction, regardless of which model or
+harness invoked it.
+
 ### Claude Code users
 
 If `~/.claude/` exists, the installer injects a managed fenced block
