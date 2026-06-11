@@ -6,8 +6,14 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.4.0] — 2026-06-11 — `Ritual as commands`
+
 ### Added
 
+- The release workflow gained a `workflow_dispatch` path (version +
+  optional sha): it creates the tag via the API and publishes the same
+  changelog-backed release in one run — for environments that can push
+  branches but not tag refs. Tag-push behavior is unchanged.
 - New write-back verbs that make the task-end ritual executable on every
   platform instead of described in prose: `memory-hive log "<what you
   did>"` appends the dated line to the agent's silo log, and `memory-hive
