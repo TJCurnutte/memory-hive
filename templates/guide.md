@@ -59,11 +59,24 @@ an answer.
 
 ## Workflow 3 — Write back (end of any non-trivial task)
 
-1. Append one line to `${HIVE_DIR}/agents/<id>/log.md`:
-   `- YYYY-MM-DD — <what you did, one line>`.
+The ritual is runnable as commands — same on every platform, lint-valid by
+construction:
+
+```sh
+memory-hive log --agent <id> "<what you did, one line>"
+memory-hive learn --agent <id> "<imperative rule>" \
+    --context "<one line: where it came up>" \
+    --kind pattern|win|mistake|insight [--body <file>|-]
+```
+
+Step by step, with the underlying files:
+
+1. Log it (`memory-hive log`, or append one line to
+   `${HIVE_DIR}/agents/<id>/log.md`: `- YYYY-MM-DD — <what you did>`).
 2. If you learned something only you need: append a bullet to
    `agents/<id>/memory.md` under the right heading.
-3. If the lesson generalizes to other agents, write
+3. If the lesson generalizes to other agents, run `memory-hive learn`
+   (preferred) or write
    `${HIVE_DIR}/learnings/raw/<id>/YYYY-MM-DD-<slug>.md` (lowercase
    hyphenated slug, agent subdir matters) in exactly this shape:
 

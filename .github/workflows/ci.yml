@@ -439,6 +439,18 @@ jobs:
           printf -- '- 2001-01-01 — ancient entry\n' > "$INSTALL_DIR/hive/agents/main/log.md"
           out=$(printf '{"stop_hook_active": false, "transcript_path": "/tmp/mh-transcript-long.jsonl"}' | sh "$INSTALL_DIR/hooks/stop-ritual.sh") || { echo "FAIL: stop-ritual block-path exit" >&2; fail=1; }
           echo "$out" | grep -q '"decision": "block"' || { echo "FAIL: stop-ritual did not block a stale session" >&2; fail=1; }
+          echo "$out" | grep -q 'memory-hive log' || { echo "FAIL: block reason does not cite the log verb" >&2; fail=1; }
+
+          # Write-back verbs: the ritual as commands, lint-valid by construction.
+          HOME="$FAKE_HOME" sh "$INSTALL_DIR/memory-hive" log "ci smoke line" > /dev/null || { echo "FAIL: log verb exit" >&2; fail=1; }
+          grep -q 'ci smoke line' "$INSTALL_DIR/hive/agents/main/log.md" || { echo "FAIL: log line not appended" >&2; fail=1; }
+          HOME="$FAKE_HOME" sh "$INSTALL_DIR/memory-hive" learn "Always smoke test release verbs" --context "ci platform step" --kind win > /dev/null || { echo "FAIL: learn verb exit" >&2; fail=1; }
+          LRN="$(ls "$INSTALL_DIR"/hive/learnings/raw/main/*always-smoke-test*.md 2>/dev/null | head -n 1)"
+          if [ -z "$LRN" ]; then
+              echo "FAIL: learn did not write the raw learning file" >&2; fail=1
+          else
+              HOME="$FAKE_HOME" sh "$INSTALL_DIR/memory-hive" lint "$LRN" || { echo "FAIL: generated learning is not lint-clean" >&2; fail=1; }
+          fi
 
           [ "$fail" -eq 0 ] || exit 1
           echo "Platform integration smoke OK"

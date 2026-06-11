@@ -14,6 +14,7 @@
 [ "${MEMORY_HIVE_HOOKS_DISABLE:-0}" = "1" ] && exit 0
 
 HIVE_DIR="${HIVE_DIR}"
+INSTALL_DIR="${INSTALL_DIR}"
 AGENT="${MEMORY_HIVE_AGENT_ID:-main}"
 LOG="$HIVE_DIR/agents/$AGENT/log.md"
 
@@ -25,7 +26,8 @@ command -v python3 >/dev/null 2>&1 || exit 0
 # captured here or it is lost to the heredoc.
 _payload="$(cat 2>/dev/null || :)"
 
-MH_PAYLOAD="$_payload" python3 - "$LOG" <<'PY'
+MH_PAYLOAD="$_payload" MH_INSTALL="$INSTALL_DIR" MH_AGENT="$AGENT" \
+    python3 - "$LOG" <<'PY'
 import datetime, json, os, sys
 
 try:
@@ -53,14 +55,16 @@ try:
 except Exception:
     sys.exit(0)
 
+install = os.environ.get("MH_INSTALL", "")
+agent = os.environ.get("MH_AGENT", "main")
 print(json.dumps({
     "decision": "block",
     "reason": (
-        "Memory Hive task-end ritual has not run this session. Append one "
-        "line to " + sys.argv[1] + " in the form `- " + today + " — <what "
-        "you did>`. If a lesson generalizes beyond you, also write a raw "
-        "learning (exact spec: `memory-hive guide write`). Then finish "
-        "your response."
+        "Memory Hive task-end ritual has not run this session. Run: `sh "
+        + install + "/memory-hive log --agent " + agent + " \"<what you "
+        "did, one line>\"`. If a lesson generalizes beyond you, also run "
+        "`memory-hive learn \"<imperative rule>\" --context \"<where>\"` "
+        "(spec: `memory-hive guide write`). Then finish your response."
     ),
 }))
 PY

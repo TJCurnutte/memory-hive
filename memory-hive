@@ -1533,6 +1533,120 @@ mh_update() {
     _mh_die "update.sh missing at $INSTALL_DIR/update.sh. Re-run: curl -fsSL https://hive.neural-forge.io/install.sh | sh"
 }
 
+# memory-hive log "<what you did>" [--agent <id>]
+# Task-end ritual step 1 as a single command any model on any platform can
+# run correctly: appends the dated line to the agent's silo log. Removes
+# the cross-model failure mode of hand-formatting paths and dates.
+mh_log() {
+    _mh_require_install
+    _agent="${MEMORY_HIVE_AGENT_ID:-main}"
+    _line=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --agent) shift; _agent="${1:-}" ;;
+            -h|--help)
+                cat <<'LOGHELP'
+Usage: memory-hive log "<what you did, one line>" [--agent <id>]
+
+Appends `- YYYY-MM-DD — <text>` to hive/agents/<id>/log.md. Default agent
+is $MEMORY_HIVE_AGENT_ID or main. Step 1 of the task-end ritual — works
+the same from Claude Code, Cursor, Codex, Hermes, or any shell.
+LOGHELP
+                return 0 ;;
+            *)
+                if [ -z "$_line" ]; then _line="$1"; else _line="$_line $1"; fi ;;
+        esac
+        shift
+    done
+    [ -n "$_line" ] || _mh_die "usage: memory-hive log \"<what you did>\" [--agent <id>]"
+    _log="$AGENTS_DIR/$_agent/log.md"
+    [ -f "$_log" ] || _mh_die "no silo log at $_log — create the agent first: memory-hive add $_agent"
+    _today="$(date +%Y-%m-%d)"
+    printf -- '- %s — %s\n' "$_today" "$_line" >> "$_log" \
+        || _mh_die "could not append to $_log"
+    printf 'logged: - %s — %s\n  -> %s\n' "$_today" "$_line" "$_log"
+}
+
+# memory-hive learn "<imperative rule>" --context "<one line>" [options]
+# Task-end ritual step 3 as a single command: writes a raw learning to the
+# agent's shared-pool subdir with frontmatter that is lint-valid by
+# construction (canonical path, date, agent-matches-dir, confidence). The
+# title doubles as the generalizable rule; pass --body for richer content.
+mh_learn() {
+    _mh_require_install
+    _agent="${MEMORY_HIVE_AGENT_ID:-main}"
+    _title=""; _context=""; _kind="pattern"; _conf="low"; _body_src=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --agent)      shift; _agent="${1:-}" ;;
+            --context)    shift; _context="${1:-}" ;;
+            --kind)       shift; _kind="${1:-}" ;;
+            --confidence) shift; _conf="${1:-}" ;;
+            --body)       shift; _body_src="${1:-}" ;;
+            -h|--help)
+                cat <<'LEARNHELP'
+Usage: memory-hive learn "<imperative rule>" --context "<one line>" \
+           [--kind pattern|win|mistake|insight] [--confidence low|medium|high] \
+           [--agent <id>] [--body <file>|-]
+
+Writes hive/learnings/raw/<id>/YYYY-MM-DD-<slug>.md with valid
+frontmatter — the file passes `memory-hive lint` by construction.
+Defaults: kind=pattern, confidence=low (new single observations),
+agent=$MEMORY_HIVE_AGENT_ID or main. Without --body, the file scaffolds
+"What happened" from --context and "Generalizable rule" from the title.
+--body - reads the body from stdin.
+LEARNHELP
+                return 0 ;;
+            *)
+                if [ -z "$_title" ]; then _title="$1"; else _title="$_title $1"; fi ;;
+        esac
+        shift
+    done
+    [ -n "$_title" ] || _mh_die "usage: memory-hive learn \"<imperative rule>\" --context \"<one line>\" [--kind ...]"
+    [ -n "$_context" ] || _mh_die "--context \"<one line: where this came up>\" is required"
+    case "$_kind" in pattern|win|mistake|insight) : ;; *) _mh_die "--kind must be one of: pattern win mistake insight" ;; esac
+    case "$_conf" in low|medium|high) : ;; *) _mh_die "--confidence must be one of: low medium high" ;; esac
+    [ -d "$AGENTS_DIR/$_agent" ] || _mh_die "unknown agent '$_agent' — run: memory-hive add $_agent"
+
+    _today="$(date +%Y-%m-%d)"
+    _slug="$(_mh_sanitize_name "$_title")"
+    [ -n "$_slug" ] || _mh_die "could not derive a filename slug from the title"
+    _dir="$HIVE_DIR/learnings/raw/$_agent"
+    mkdir -p "$_dir" || _mh_die "could not create $_dir"
+    _file="$_dir/$_today-$_slug.md"
+    _n=2
+    while [ -e "$_file" ]; do
+        _file="$_dir/$_today-$_slug-$_n.md"
+        _n=$((_n + 1))
+    done
+
+    _body=""
+    if [ "$_body_src" = "-" ]; then
+        _body="$(cat)"
+    elif [ -n "$_body_src" ]; then
+        [ -f "$_body_src" ] || _mh_die "body file not found: $_body_src"
+        _body="$(cat "$_body_src")"
+    fi
+
+    {
+        printf -- '---\n'
+        printf 'date: %s\n' "$_today"
+        printf 'agent: %s\n' "$_agent"
+        printf 'context: %s\n' "$_context"
+        printf 'confidence: %s\n' "$_conf"
+        printf 'kind: %s\n' "$_kind"
+        printf -- '---\n\n'
+        printf '# %s\n\n' "$_title"
+        if [ -n "$_body" ]; then
+            printf '%s\n' "$_body"
+        else
+            printf '## What happened\n\n%s\n\n## Generalizable rule\n\n%s\n' "$_context" "$_title"
+        fi
+    } > "$_file" || _mh_die "could not write $_file"
+    printf 'wrote %s\n' "$_file"
+    mh_lint "$_file"
+}
+
 # memory-hive guide [topic]
 # Print the platform-neutral operating guide rendered with this install's
 # real paths. Same body the Claude Code Agent Skill ships with — this verb
@@ -1615,6 +1729,8 @@ Normal path:
   memory-hive search "term"           Search the hive
   memory-hive recall "query text"     Retrieve cited context; index is maintained automatically
   memory-hive guide [topic]           Print the agent operating guide (paths, write-back, lane rules)
+  memory-hive log "did X"             Task-end ritual: append today's dated line to your silo log
+  memory-hive learn "rule" --context "where"   Write a lint-valid raw learning to the shared pool
 
 That's it for day-one use. Agents read the hive on boot, write back after work,
 and `memory-hive update` handles periodic maintenance.
@@ -1655,6 +1771,10 @@ Inspection:
   memory-hive query|search <term> [--regex] [--paths-only]
   memory-hive bundle [--for <agent>] [--max-tokens N] [--out <file>]
   memory-hive guide [paths|id|hydrate|retrieve|write|lanes|curate|health]
+
+Write-back (task-end ritual as commands):
+  memory-hive log "<what you did>" [--agent <id>]
+  memory-hive learn "<imperative rule>" --context "<one line>" [--kind <k>] [--confidence <c>] [--agent <id>] [--body <file>|-]
 
 HyperRecall / TokenFS:
   memory-hive recall "query text"
@@ -6883,6 +7003,8 @@ case "$_verb" in
     optimize|optimizer) mh_optimize "$@" ;;
     bundle)   mh_bundle "$@" ;;
     guide)    mh_guide "$@" ;;
+    log)      mh_log "$@" ;;
+    learn)    mh_learn "$@" ;;
     reflect)  mh_reflect "$@" ;;
     seed)     mh_seed "$@" ;;
     help|-h|--help) mh_help "$@" ;;
