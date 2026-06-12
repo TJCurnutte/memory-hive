@@ -6,6 +6,23 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.9.0] — 2026-06-12 — `Receipts and resources`
+
+### Added
+
+- MCP resources: the server now exposes the hive canon for native
+  mounting in MCP clients — `hive://index`, `hive://guide` (rendered
+  with real paths), every `hive://knowledge/*.md`, and every
+  `hive://distilled/*.md`, scanned fresh per call so curator promotions
+  appear without restarting. `resources/list` + `resources/read`, with
+  only registered URIs readable (no traversal surface). CI smoke covers
+  capability advertisement, listing, reads, and traversal rejection.
+- `memory-hive doctor` gains a sync receipt on synced hives: OK line
+  with remote and ahead/behind, warning (exit 1) with a `sync pull`
+  hint when the local hive is behind its upstream. Offline (local refs
+  only); silent when sync is not configured. The guide's Health section
+  and INTEGRATION.md document the cross-machine workflow.
+
 ## [1.8.0] — 2026-06-12 — `One hive, every machine`
 
 ### Added

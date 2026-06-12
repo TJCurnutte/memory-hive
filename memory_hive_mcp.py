@@ -224,6 +224,68 @@ def call_tool(name, args):
     return False, "unknown tool: %s" % name
 
 
+HIVE_DIR = os.path.join(INSTALL_DIR, "hive")
+
+
+def list_resources():
+    """Hive canon as MCP resources: index, rendered guide, knowledge and
+    distilled learnings. Scanned fresh per call so curator promotions show
+    up without restarting the server."""
+    res = [
+        {
+            "uri": "hive://index",
+            "name": "Hive index",
+            "description": "Boot entrypoint and global hive state.",
+            "mimeType": "text/markdown",
+        },
+        {
+            "uri": "hive://guide",
+            "name": "Operating guide",
+            "description": "How agents hydrate, retrieve, write back, and curate.",
+            "mimeType": "text/markdown",
+        },
+    ]
+    for sub, prefix in (("knowledge", "hive://knowledge/"),
+                        ("learnings/distilled", "hive://distilled/")):
+        d = os.path.join(HIVE_DIR, sub)
+        try:
+            names = sorted(os.listdir(d))
+        except Exception:
+            continue
+        for n in names:
+            if not n.endswith(".md"):
+                continue
+            res.append({
+                "uri": prefix + n,
+                "name": "%s/%s" % (sub, n),
+                "description": "Curated shared hive content.",
+                "mimeType": "text/markdown",
+            })
+    return res
+
+
+def read_resource(uri):
+    """Resolve a registered uri to text. Only uris produced by
+    list_resources are readable — no path traversal surface."""
+    if uri == "hive://index":
+        path = os.path.join(HIVE_DIR, "index.md")
+    elif uri == "hive://guide":
+        ok, out = run_cli(["guide"])
+        if not ok:
+            raise ValueError("guide unavailable: %s" % out)
+        return out
+    elif uri.startswith("hive://knowledge/"):
+        name = os.path.basename(uri[len("hive://knowledge/"):])
+        path = os.path.join(HIVE_DIR, "knowledge", name)
+    elif uri.startswith("hive://distilled/"):
+        name = os.path.basename(uri[len("hive://distilled/"):])
+        path = os.path.join(HIVE_DIR, "learnings", "distilled", name)
+    else:
+        raise ValueError("unknown resource: %s" % uri)
+    with open(path, encoding="utf-8", errors="replace") as f:
+        return f.read()
+
+
 def reply(msg_id, result=None, error=None):
     out = {"jsonrpc": "2.0", "id": msg_id}
     if error is not None:
@@ -255,7 +317,7 @@ def main():
                 proto = params.get("protocolVersion") or FALLBACK_PROTOCOL
                 reply(msg_id, {
                     "protocolVersion": proto,
-                    "capabilities": {"tools": {}},
+                    "capabilities": {"tools": {}, "resources": {}},
                     "serverInfo": {
                         "name": "memory-hive",
                         "version": SERVER_VERSION,
@@ -265,6 +327,22 @@ def main():
                 reply(msg_id, {})
             elif method == "tools/list":
                 reply(msg_id, {"tools": TOOLS})
+            elif method == "resources/list":
+                reply(msg_id, {"resources": list_resources()})
+            elif method == "resources/read":
+                uri = str(params.get("uri") or "")
+                try:
+                    text = read_resource(uri)
+                    reply(msg_id, {"contents": [{
+                        "uri": uri,
+                        "mimeType": "text/markdown",
+                        "text": text,
+                    }]})
+                except Exception as exc:
+                    reply(msg_id, error={
+                        "code": -32602,
+                        "message": str(exc),
+                    })
             elif method == "tools/call":
                 name = params.get("name", "")
                 args = params.get("arguments") or {}
