@@ -924,6 +924,30 @@ PLATS
         printf '  %s MCP helper present (`memory-hive mcp` serves any MCP client)\n' "$_D_OK"
     fi
 
+    # --- 4e2. Multi-machine sync (when the hive is its own repo) -----------
+    # Informational receipt; warns when the local hive is behind its
+    # upstream (other machines pushed memory this machine hasn't pulled).
+    if [ -d "$HIVE_DIR/.git" ]; then
+        _sy_tl="$(git -C "$HIVE_DIR" rev-parse --show-toplevel 2>/dev/null || :)"
+        _sy_hp="$(cd "$HIVE_DIR" 2>/dev/null && pwd -P)"
+        _sy_tp="$(cd "$_sy_tl" 2>/dev/null && pwd -P)"
+        if [ -n "$_sy_tp" ] && [ "$_sy_hp" = "$_sy_tp" ]; then
+            _sy_remote="$(git -C "$HIVE_DIR" remote get-url origin 2>/dev/null || printf 'no remote')"
+            _sy_ab="$(git -C "$HIVE_DIR" rev-list --left-right --count '@{upstream}...HEAD' 2>/dev/null || printf '0 0')"
+            _sy_behind="$(printf '%s' "$_sy_ab" | awk '{print $1}')"
+            _sy_ahead="$(printf '%s' "$_sy_ab" | awk '{print $2}')"
+            if [ "${_sy_behind:-0}" -gt 0 ] 2>/dev/null; then
+                printf '  %s hive sync: %s commit(s) behind %s — other machines pushed memory\n' \
+                    "$_D_WARN" "$_sy_behind" "$_sy_remote"
+                printf '     run %s to pull it.\n' '`memory-hive sync pull`'
+                _warnings=$((_warnings + 1))
+            else
+                printf '  %s hive sync configured (%s, %s ahead / %s behind)\n' \
+                    "$_D_OK" "$_sy_remote" "${_sy_ahead:-0}" "${_sy_behind:-0}"
+            fi
+        fi
+    fi
+
     # --- 4f. Cursor harness hooks (hooks.json wiring) -----------------------
     # stop ritual nudge + sessionEnd capture, wired by install.sh into
     # ~/.cursor/hooks.json. Only meaningful when Cursor exists.

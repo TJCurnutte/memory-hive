@@ -162,6 +162,26 @@ trace of every session exists even when the model never wrote back; other
 harnesses can do the same from cron or their own hook systems by calling
 the verb.
 
+### One hive across machines
+
+If you run agents on more than one box, give the hive a private git
+remote and sync it:
+
+```bash
+memory-hive sync setup git@github.com:you/my-hive.git   # on each machine
+memory-hive sync pull    # before substantive work
+memory-hive sync push    # end of day / after meaningful write-backs
+memory-hive sync status  # remote, ahead/behind, dirty count
+```
+
+Append-only surfaces (silo logs and memory, raw learnings, raw streams,
+the task queue) merge with `merge=union`, so machines that wrote
+concurrently never conflict. `sync pull` checkpoints first and refreshes
+the recall index after; machine-local artifacts (index, checkpoints,
+maintenance timestamps) never leave the box. `memory-hive doctor` warns
+when the local hive is behind its remote. Use a **private** remote — the
+hive is your agents' memory.
+
 ### Claude Code users
 
 If `~/.claude/` exists, the installer injects a managed fenced block

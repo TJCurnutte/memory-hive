@@ -485,6 +485,24 @@ jobs:
           print("mcp-ok")
           PYMCP
           grep -q 'mcp ci smoke' "$INSTALL_DIR/hive/agents/main/log.md" || { echo "FAIL: mcp hive_log did not append" >&2; fail=1; }
+          # MCP resources: list exposes hive canon, read returns content.
+          printf '%s\n%s\n%s\n' \
+              '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' \
+              '{"jsonrpc":"2.0","id":2,"method":"resources/list"}' \
+              '{"jsonrpc":"2.0","id":3,"method":"resources/read","params":{"uri":"hive://index"}}' \
+              | MEMORY_HIVE_DIR="$INSTALL_DIR" python3 "$INSTALL_DIR/memory_hive_mcp.py" > /tmp/mh-mcp-res.out 2>/dev/null \
+              || { echo "FAIL: mcp resources run" >&2; fail=1; }
+          python3 - /tmp/mh-mcp-res.out <<'PYRES' || { echo "FAIL: mcp resources invalid" >&2; fail=1; }
+          import json, sys
+          m = {d["id"]: d for d in (json.loads(l) for l in open(sys.argv[1]) if l.strip())}
+          assert "resources" in m[1]["result"]["capabilities"]
+          uris = [r["uri"] for r in m[2]["result"]["resources"]]
+          assert "hive://index" in uris and "hive://guide" in uris, uris
+          assert any(u.startswith("hive://distilled/") for u in uris), uris
+          body = m[3]["result"]["contents"][0]["text"]
+          assert "Memory Hive" in body
+          print("mcp-resources-ok")
+          PYRES
 
           # Cursor hooks.json merge: idempotent after the re-install above,
           # version field present, user entry preserved.
@@ -646,6 +664,11 @@ jobs:
           DEV="$(mktemp -d)"; git init -q "$DEV"; mkdir -p "$DEV/sub/hive/agents/main"; touch "$DEV/sub/hive/index.md"
           NESTED_OUT="$(HOME="$DEV" MEMORY_HIVE_DIR="$DEV/sub" sh memory-hive sync setup "$BARE/hive.git" 2>&1 || :)"
           echo "$NESTED_OUT" | grep -q 'inside another git repository' || { echo "FAIL: nested refusal missing; got: $NESTED_OUT"; exit 1; }
+          # Doctor shows the sync receipt on a synced hive. Capture first:
+          # grep -q exits at first match and doctor would die on SIGPIPE
+          # under this step's pipefail while printing later sections.
+          DOC_OUT="$(HOME="$B" sh "$B/.memory-hive/memory-hive" doctor 2>/dev/null || :)"
+          echo "$DOC_OUT" | grep -q 'hive sync configured' || { echo "FAIL: doctor sync receipt missing"; exit 1; }
           echo "Hive sync smoke OK"
 
       - name: Platform integration smoke — opt-out

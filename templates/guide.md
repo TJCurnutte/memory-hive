@@ -150,6 +150,9 @@ untouched as the source of truth.
 - `memory-hive doctor` — wiring and content checks with fix-it hints.
 - `memory-hive guide [topic]` — re-print this guide (or one section:
   `paths|id|hydrate|retrieve|write|lanes|curate|health`) on any platform.
+- Multi-machine hives: `memory-hive sync status` shows whether other
+  machines pushed memory; `sync pull` before substantive work and
+  `sync push` at the end of the day keep every box on one hive.
 - When the user says "update memory hive": run `sh ${INSTALL_DIR}/update.sh`,
   then re-read `${HIVE_DIR}/index.md` before continuing.
 
