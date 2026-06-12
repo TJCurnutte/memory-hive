@@ -6,6 +6,25 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- MCP server: `memory-hive mcp` serves the hive over the Model Context
+  Protocol (stdio, stdlib-python only — same dependency envelope as
+  HyperRecall). Any MCP client (Claude Desktop/Code, Cursor, Goose,
+  GitHub Copilot, ...) gets native tools — `ask_hive` (ranked, cited
+  retrieval), `hive_log`, `hive_learn`, `hive_capture`, `hive_guide` —
+  with no boot block at all. `memory-hive mcp --config` prints the
+  ready-to-paste client config with the install's real paths. The helper
+  ships to `~/.memory-hive/memory_hive_mcp.py`; doctor checks it (4e);
+  CI smoke-tests initialize/list/call over stdio.
+- Ambient workstream capture: `memory-hive capture "<event>" [--source
+  <name>] [--agent <id>]` appends timestamped events to
+  `hive/raw/<source>/YYYY-MM-DD.md` (Tier 1, append-only, searchable via
+  query/recall, distilled later by the curator). A new Claude Code
+  SessionEnd hook feeds the stream automatically — memory forms even
+  when a session never ran the ritual. Same fail-open contract as the
+  other hooks.
+
 ## [1.4.0] — 2026-06-11 — `Ritual as commands`
 
 ### Added

@@ -55,7 +55,8 @@ Pick the cheapest verb that answers the question:
 
 `recall` builds or updates its index automatically — never rebuild by hand.
 Cite what you used (file paths) when the operator asks what memory informed
-an answer.
+an answer. MCP clients can get the same retrieval natively: `memory-hive
+mcp --config` prints the client config for the built-in MCP server.
 
 ## Workflow 3 — Write back (end of any non-trivial task)
 

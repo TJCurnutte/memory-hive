@@ -892,22 +892,36 @@ PLATS
     if [ -d "$HOME/.claude" ]; then
         _hk_ss="$INSTALL_DIR/hooks/session-start.sh"
         _hk_st="$INSTALL_DIR/hooks/stop-ritual.sh"
+        _hk_se="$INSTALL_DIR/hooks/session-end.sh"
         _hk_settings="$HOME/.claude/settings.json"
-        if [ ! -f "$_hk_ss" ] || [ ! -f "$_hk_st" ]; then
+        if [ ! -f "$_hk_ss" ] || [ ! -f "$_hk_st" ] || [ ! -f "$_hk_se" ]; then
             printf '  %s harness hook scripts missing under %s/hooks/\n' \
                 "$_D_WARN" "$INSTALL_DIR"
             printf '     run %s to restore them.\n' "\`sh $INSTALL_DIR/install.sh\`"
             _warnings=$((_warnings + 1))
         elif [ ! -f "$_hk_settings" ] \
             || ! grep -q -F "hooks/session-start.sh" "$_hk_settings" 2>/dev/null \
-            || ! grep -q -F "hooks/stop-ritual.sh" "$_hk_settings" 2>/dev/null; then
+            || ! grep -q -F "hooks/stop-ritual.sh" "$_hk_settings" 2>/dev/null \
+            || ! grep -q -F "hooks/session-end.sh" "$_hk_settings" 2>/dev/null; then
             printf '  %s harness hooks not wired in ~/.claude/settings.json (sessions will not auto-hydrate)\n' \
                 "$_D_WARN"
             printf '     run %s to wire them.\n' "\`sh $INSTALL_DIR/install.sh\`"
             _warnings=$((_warnings + 1))
         else
-            printf '  %s Claude Code harness hooks wired (SessionStart hydrate + Stop ritual)\n' "$_D_OK"
+            printf '  %s Claude Code harness hooks wired (SessionStart hydrate + Stop ritual + SessionEnd capture)\n' "$_D_OK"
         fi
+    fi
+
+    # --- 4e. MCP server helper ----------------------------------------------
+    # `memory-hive mcp` serves the hive to any MCP client; the helper ships
+    # with install.sh and is load-bearing for that verb.
+    if [ ! -f "$INSTALL_DIR/memory_hive_mcp.py" ]; then
+        printf '  %s MCP helper missing (%s/memory_hive_mcp.py) — `memory-hive mcp` will fail\n' \
+            "$_D_WARN" "$INSTALL_DIR"
+        printf '     run %s to restore it.\n' "\`sh $INSTALL_DIR/install.sh\`"
+        _warnings=$((_warnings + 1))
+    else
+        printf '  %s MCP helper present (`memory-hive mcp` serves any MCP client)\n' "$_D_OK"
     fi
 
     # --- 5. registry AGENTS.md is in sync ----------------------------------
@@ -1647,6 +1661,80 @@ LEARNHELP
     mh_lint "$_file"
 }
 
+# memory-hive capture "<event>" [--source <name>] [--agent <id>]
+# Ambient workstream memory (Tier 1): append a timestamped event to
+# hive/raw/<source>/YYYY-MM-DD.md. Unlike log/learn this is not the
+# task-end ritual — it is the passive stream for things worth remembering
+# that are not a finished lesson yet (session ends, meeting notes,
+# decisions seen in chat). Append-only, per the hive/raw/ convention.
+mh_capture() {
+    _mh_require_install
+    _agent="${MEMORY_HIVE_AGENT_ID:-main}"
+    _source="sessions"
+    _text=""
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --agent)  shift; _agent="${1:-}" ;;
+            --source) shift; _source="${1:-}" ;;
+            -h|--help)
+                cat <<'CAPHELP'
+Usage: memory-hive capture "<event, one line>" [--source <name>] [--agent <id>]
+
+Appends `- HH:MM — [<agent>] <event>` to hive/raw/<source>/YYYY-MM-DD.md
+(default source: sessions). The raw stream is Tier 1 ambient memory —
+append-only, searchable via query/recall, distilled later by the curator.
+Use `-` as the event to read it from stdin.
+CAPHELP
+                return 0 ;;
+            *)
+                if [ -z "$_text" ]; then _text="$1"; else _text="$_text $1"; fi ;;
+        esac
+        shift
+    done
+    [ "$_text" = "-" ] && _text="$(cat)"
+    [ -n "$_text" ] || _mh_die "usage: memory-hive capture \"<event>\" [--source <name>] [--agent <id>]"
+    _source="$(_mh_sanitize_name "$_source")"
+    [ -n "$_source" ] || _mh_die "--source must sanitize to a non-empty name"
+    _dir="$HIVE_DIR/raw/$_source"
+    mkdir -p "$_dir" || _mh_die "could not create $_dir"
+    _today="$(date +%Y-%m-%d)"
+    _file="$_dir/$_today.md"
+    if [ ! -f "$_file" ]; then
+        printf '# Workstream — %s — %s\n\n' "$_source" "$_today" > "$_file" \
+            || _mh_die "could not create $_file"
+    fi
+    _now="$(date +%H:%M)"
+    printf -- '- %s — [%s] %s\n' "$_now" "$_agent" "$_text" >> "$_file" \
+        || _mh_die "could not append to $_file"
+    printf 'captured: - %s — [%s] %s\n  -> %s\n' "$_now" "$_agent" "$_text" "$_file"
+}
+
+# memory-hive mcp [--config]
+# Serve the hive over the Model Context Protocol (stdio). Any MCP client —
+# Claude Desktop/Code, Cursor, Goose, Copilot — gets native tools
+# (ask_hive, hive_log, hive_learn, hive_capture, hive_guide) with no boot
+# block at all. --config prints a ready-to-paste client config snippet.
+mh_mcp() {
+    _helper="$INSTALL_DIR/memory_hive_mcp.py"
+    case "${1:-}" in
+        -h|--help)
+            cat <<'MCPHELP'
+Usage: memory-hive mcp [--config]
+
+Runs the Memory Hive MCP server on stdio (newline-delimited JSON-RPC).
+Point any MCP client at it; `--config` prints the client config snippet
+with this install's real paths.
+MCPHELP
+            return 0 ;;
+        --config)
+            printf '{\n  "mcpServers": {\n    "memory-hive": {\n      "command": "python3",\n      "args": ["%s"]\n    }\n  }\n}\n' "$_helper"
+            return 0 ;;
+    esac
+    [ -f "$_helper" ] || _mh_die "MCP helper missing at $_helper — run \`sh $INSTALL_DIR/install.sh\` to restore it"
+    command -v python3 >/dev/null 2>&1 || _mh_die "python3 is required for the MCP server"
+    MEMORY_HIVE_DIR="$INSTALL_DIR" exec python3 "$_helper"
+}
+
 # memory-hive guide [topic]
 # Print the platform-neutral operating guide rendered with this install's
 # real paths. Same body the Claude Code Agent Skill ships with — this verb
@@ -1775,6 +1863,11 @@ Inspection:
 Write-back (task-end ritual as commands):
   memory-hive log "<what you did>" [--agent <id>]
   memory-hive learn "<imperative rule>" --context "<one line>" [--kind <k>] [--confidence <c>] [--agent <id>] [--body <file>|-]
+  memory-hive capture "<event>" [--source <name>] [--agent <id>]
+
+MCP (serve the hive to any MCP client):
+  memory-hive mcp            # stdio server: ask_hive, hive_log, hive_learn, hive_capture, hive_guide
+  memory-hive mcp --config   # print the client config snippet with real paths
 
 HyperRecall / TokenFS:
   memory-hive recall "query text"
@@ -7005,6 +7098,8 @@ case "$_verb" in
     guide)    mh_guide "$@" ;;
     log)      mh_log "$@" ;;
     learn)    mh_learn "$@" ;;
+    capture)  mh_capture "$@" ;;
+    mcp)      mh_mcp "$@" ;;
     reflect)  mh_reflect "$@" ;;
     seed)     mh_seed "$@" ;;
     help|-h|--help) mh_help "$@" ;;
