@@ -1774,7 +1774,13 @@ mh_sync() {
     _sgit() { git -C "$HIVE_DIR" "$@"; }
     _sync_own_repo() {
         _tl="$(_sgit rev-parse --show-toplevel 2>/dev/null || :)"
-        [ -n "$_tl" ] && [ "$_tl" = "$HIVE_DIR" ]
+        [ -n "$_tl" ] || return 1
+        # Compare PHYSICAL paths: macOS tempdirs live behind /var -> /private
+        # symlinks and git prints the resolved path, so a string comparison
+        # against the logical $HIVE_DIR false-negatives on every Mac.
+        _hp="$(cd "$HIVE_DIR" 2>/dev/null && pwd -P)"
+        _tp="$(cd "$_tl" 2>/dev/null && pwd -P)"
+        [ -n "$_hp" ] && [ "$_hp" = "$_tp" ]
     }
     _sync_require_own() {
         _sync_own_repo || _mh_die "hive at $HIVE_DIR is not its own git repo — run \`memory-hive sync setup <git-url>\` first"

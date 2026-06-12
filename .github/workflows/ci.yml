@@ -641,8 +641,11 @@ jobs:
           grep -q 'machine A second' "$B/.memory-hive/hive/agents/main/log.md" || { echo "FAIL: no convergence"; exit 1; }
           git -C "$B/.memory-hive/hive" ls-files | grep -q '.checkpoints' && { echo "FAIL: checkpoints synced"; exit 1; }
           # Nested-repo refusal: a hive inside another repo must not sync.
+          # Capture output first — the command exits 1 by design, and piping
+          # it straight into grep trips this step's pipefail.
           DEV="$(mktemp -d)"; git init -q "$DEV"; mkdir -p "$DEV/sub/hive/agents/main"; touch "$DEV/sub/hive/index.md"
-          HOME="$DEV" MEMORY_HIVE_DIR="$DEV/sub" sh memory-hive sync setup "$BARE/hive.git" 2>&1 | grep -q 'inside another git repository' || { echo "FAIL: nested refusal missing"; exit 1; }
+          NESTED_OUT="$(HOME="$DEV" MEMORY_HIVE_DIR="$DEV/sub" sh memory-hive sync setup "$BARE/hive.git" 2>&1 || :)"
+          echo "$NESTED_OUT" | grep -q 'inside another git repository' || { echo "FAIL: nested refusal missing; got: $NESTED_OUT"; exit 1; }
           echo "Hive sync smoke OK"
 
       - name: Platform integration smoke — opt-out
