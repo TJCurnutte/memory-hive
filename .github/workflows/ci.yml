@@ -515,6 +515,11 @@ jobs:
           printf '{"model": "gpt", "workspace_roots": ["/tmp/ws"]}' | sh "$INSTALL_DIR/hooks/cursor-session-end.sh" || { echo "FAIL: cursor-session-end exit" >&2; fail=1; }
           grep -q 'cursor session ended | model: gpt | workspace: /tmp/ws' "$CAPF" 2>/dev/null || { echo "FAIL: cursor sessionEnd event not captured" >&2; fail=1; }
 
+          # Digest surfaces the ambient stream.
+          HOME="$FAKE_HOME" sh "$INSTALL_DIR/memory-hive" digest --today > /tmp/mh-digest.out 2>&1 || { echo "FAIL: digest exit" >&2; fail=1; }
+          grep -q 'Workstream (ambient capture)' /tmp/mh-digest.out || { echo "FAIL: digest missing workstream section" >&2; fail=1; }
+          grep -q 'raw/sessions/' /tmp/mh-digest.out || { echo "FAIL: digest missing sessions stream line" >&2; fail=1; }
+
           [ "$fail" -eq 0 ] || exit 1
           echo "Platform integration smoke OK"
 

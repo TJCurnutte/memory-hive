@@ -6124,6 +6124,9 @@ mh_digest() {
     # Each line: <mtime>\t<agent>:<kind>\t<abspath>
     _records="$(mktemp -t mh-digest.XXXXXX)"
     _mh_hive_file_list | while IFS= read -r _f; do
+        # raw/ stream files get their own Workstream section below — keep
+        # them out of the per-agent loop so events aren't reported twice.
+        case "$_f" in "$HIVE_DIR/raw/"*) continue ;; esac
         _cls="$(_mh_classify "$_f")"
         [ -n "$_cls" ] || continue
         _mt="$(_mh_mtime_epoch "$_f")"
@@ -6135,15 +6138,50 @@ mh_digest() {
         printf '%s\t%s\t%s\n' "$_mt" "$_cls" "$_f"
     done | sort -nr > "$_records"
 
+    # Ambient workstream files (hive/raw/<source>/YYYY-MM-DD.md) collected
+    # up front: a window can contain only passive capture and still be a
+    # non-empty digest.
+    _amb="$(mktemp -t mh-digest-amb.XXXXXX)"
+    if [ -d "$HIVE_DIR/raw" ]; then
+        find "$HIVE_DIR/raw" -type f \
+            -name '[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9].md' 2>/dev/null \
+            | while IFS= read -r _af; do
+                _amt="$(_mh_mtime_epoch "$_af")"
+                [ -n "$_amt" ] || continue
+                [ "$_amt" -ge "$_since" ] || continue
+                printf '%s\t%s\n' "$_amt" "$_af"
+            done | sort -nr > "$_amb"
+    fi
+
     _since_label="$(_mh_fmt_date "$_since") $(_mh_fmt_time "$_since")"
     _ago="$(_mh_relative_age "$_since" "$_now")"
     printf '\nMemory Hive — digest  (%s, since %s, %s)\n' \
         "$_label" "$_since_label" "$_ago"
     printf '──────────────────────────────────────────────────────\n'
 
-    if [ ! -s "$_records" ]; then
+    if [ ! -s "$_records" ] && [ ! -s "$_amb" ]; then
         printf '\n  Nothing changed in this window.\n\n'
-        rm -f "$_records"
+        rm -f "$_records" "$_amb"
+        return 0
+    fi
+    if [ ! -s "$_records" ]; then
+        # Only ambient activity in this window — skip the agent loop.
+        printf '\nWorkstream (ambient capture)\n'
+        while IFS=$(printf '\t') read -r _amt _af; do
+            [ -n "$_af" ] || continue
+            _asrc="$(basename "$(dirname "$_af")")"
+            _aday="$(basename "$_af" .md)"
+            _aevents="$(grep -c '^- ' "$_af" 2>/dev/null || printf '0')"
+            _alast="$(grep '^- ' "$_af" 2>/dev/null | tail -n 1)"
+            if [ -n "$_alast" ]; then
+                printf '  raw/%s/%s · %s event(s) · last: %s\n' \
+                    "$_asrc" "$_aday" "$_aevents" "$_alast"
+            else
+                printf '  raw/%s/%s · touched\n' "$_asrc" "$_aday"
+            fi
+        done < "$_amb"
+        printf '\n'
+        rm -f "$_records" "$_amb"
         return 0
     fi
 
@@ -6250,6 +6288,28 @@ mh_digest() {
             esac
         done
     done
+
+    # --- Ambient workstream (collected above) -------------------------------
+    # Passive capture from `memory-hive capture` and the sessionEnd hooks.
+    # Not agent writes, so they sit outside the per-agent loop — but "what
+    # happened?" is incomplete without them.
+    if [ -s "$_amb" ]; then
+        printf '\nWorkstream (ambient capture)\n'
+        while IFS=$(printf '\t') read -r _amt _af; do
+            [ -n "$_af" ] || continue
+            _asrc="$(basename "$(dirname "$_af")")"
+            _aday="$(basename "$_af" .md)"
+            _aevents="$(grep -c '^- ' "$_af" 2>/dev/null || printf '0')"
+            _alast="$(grep '^- ' "$_af" 2>/dev/null | tail -n 1)"
+            if [ -n "$_alast" ]; then
+                printf '  raw/%s/%s · %s event(s) · last: %s\n' \
+                    "$_asrc" "$_aday" "$_aevents" "$_alast"
+            else
+                printf '  raw/%s/%s · touched\n' "$_asrc" "$_aday"
+            fi
+        done < "$_amb"
+    fi
+    rm -f "$_amb"
 
     # Tolerate SIGPIPE: users pipe `digest | grep -q ...` and the consumer
     # closes early; with `set -e` we'd otherwise abort here on EPIPE.

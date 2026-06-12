@@ -10,6 +10,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
+- `memory-hive digest` now ends with a "Workstream (ambient capture)"
+  section summarizing `hive/raw/<source>/YYYY-MM-DD.md` activity in the
+  window (event count + newest event per stream), and shows it even when
+  the window contains only passive capture. Raw stream files no longer
+  double-report through the per-agent loop.
 - New `memory-hive uninstall [--apply]` verb: surgically unwires every
   integration the installer created — managed blocks out of all 17
   platform config files (user content preserved; wholly-installer-owned
