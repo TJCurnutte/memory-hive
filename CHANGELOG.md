@@ -6,6 +6,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.5.0] — 2026-06-12 — `The hive speaks MCP`
+
 ### Added
 
 - MCP server: `memory-hive mcp` serves the hive over the Model Context
