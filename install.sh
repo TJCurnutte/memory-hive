@@ -31,6 +31,9 @@
 #   MEMORY_HIVE_SKIP_CLAUDE_HOOKS=1 don't wire the harness hooks (SessionStart
 #                                  hydration + Stop task-end-ritual nudge) into
 #                                  ~/.claude/settings.json
+#   MEMORY_HIVE_SKIP_CURSOR_HOOKS=1 don't wire the Cursor harness hooks (stop
+#                                  ritual nudge + sessionEnd capture) into
+#                                  ~/.cursor/hooks.json
 #   MEMORY_HIVE_ONLY=hermes,cursor comma- or space-separated platform IDs;
 #                                  wire ONLY these and filter every other
 #                                  detected platform out (useful when you
@@ -1048,6 +1051,105 @@ PYHOOKS
     fi
 fi
 
+# --- Cursor harness hooks (stop ritual nudge + sessionEnd capture) ----------
+# Same mechanical layer for Cursor: ~/.cursor/hooks.json (version 1) maps
+# event names to {command} entries. `stop` supports followup_message with
+# Cursor's own loop_count as the loop guard — the moral equivalent of
+# Claude's Stop decision:block — and `sessionEnd` feeds the ambient
+# capture stream. Merge semantics mirror the Claude block: python3 JSON
+# read-modify-write, only entries whose command points at our
+# hooks/cursor-*.sh scripts are ever touched, malformed files are left
+# alone with a warning.
+if [ -d "$HOME/.cursor" ] \
+    && [ -f "$INSTALL_DIR/hooks/cursor-stop.sh" ] \
+    && [ -f "$INSTALL_DIR/hooks/cursor-session-end.sh" ]; then
+    _chooks_filtered=0
+    if [ -n "$_only_list" ]; then
+        case "$_only_list" in
+            *" cursor "*) : ;;  # in the allow-list, proceed
+            *)
+                _mh_record PLATFORM_SKIPPED "cursor-hooks" "Cursor harness hooks filtered by MEMORY_HIVE_ONLY"
+                _chooks_filtered=1
+                ;;
+        esac
+    fi
+    if [ "$_chooks_filtered" -eq 0 ]; then
+        if _mh_platform_is_skipped cursor || [ "${MEMORY_HIVE_SKIP_CURSOR_HOOKS:-0}" = "1" ]; then
+            _mh_record PLATFORM_SKIPPED "cursor-hooks" "Cursor harness hooks skipped by env var"
+        elif ! command -v python3 >/dev/null 2>&1; then
+            _mh_record PLATFORM_SKIPPED "cursor-hooks" "Cursor harness hooks need python3 (not found)"
+            warn "Cursor: python3 not found -- harness hooks not wired (wire by hand per templates/platforms/cursor.md)"
+        else
+            _chooks_file="$HOME/.cursor/hooks.json"
+            if MEMORY_HIVE_CURSOR_HOOKS="$_chooks_file" MEMORY_HIVE_INSTALL="$INSTALL_DIR" python3 - <<'PYCHOOKS'
+import json, os, sys
+
+path = os.environ["MEMORY_HIVE_CURSOR_HOOKS"]
+install = os.environ["MEMORY_HIVE_INSTALL"]
+# Ownership marker is the script path itself: Cursor may argv-split the
+# command, so a trailing comment is not safe here the way it is in
+# settings.json. The cursor-*.sh names are distinctive enough to match.
+stop_cmd = "sh %s/hooks/cursor-stop.sh" % install
+se_cmd = "sh %s/hooks/cursor-session-end.sh" % install
+
+data = {}
+if os.path.exists(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception:
+        sys.exit(3)  # malformed hooks.json -- refuse to touch
+if not isinstance(data, dict):
+    sys.exit(3)
+data.setdefault("version", 1)
+hooks = data.setdefault("hooks", {})
+if not isinstance(hooks, dict):
+    sys.exit(3)
+
+
+def ours(cmd):
+    cmd = str(cmd)
+    return (
+        "/hooks/cursor-stop.sh" in cmd
+        or "/hooks/cursor-session-end.sh" in cmd
+    )
+
+
+def ensure(event, cmd):
+    arr = hooks.setdefault(event, [])
+    if not isinstance(arr, list):
+        sys.exit(3)
+    arr[:] = [
+        e for e in arr
+        if not (isinstance(e, dict) and ours(e.get("command", "")))
+    ]
+    arr.append({"command": cmd, "timeout": 15})
+
+
+ensure("stop", stop_cmd)
+ensure("sessionEnd", se_cmd)
+
+tmp = path + ".memhive.tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+os.replace(tmp, path)
+PYCHOOKS
+            then
+                _mh_record PLATFORM_WIRED "cursor-hooks" "Cursor harness hooks: wired $_chooks_file"
+                if [ -z "$WIRED_TARGETS" ]; then
+                    WIRED_TARGETS="$_chooks_file"
+                else
+                    WIRED_TARGETS="$WIRED_TARGETS $_chooks_file"
+                fi
+                ok "Cursor: harness hooks (stop + sessionEnd) wired into $(printf '%s' "$_chooks_file" | sed -e "s|^$HOME|~|")"
+            else
+                warn "Cursor: could not update $_chooks_file safely -- harness hooks not wired"
+            fi
+        fi
+    fi
+fi
+
 # =============================================================================
 # Phase C + D: Silo scaffolding (default + per-detected-agent)
 # =============================================================================
@@ -1889,6 +1991,8 @@ for _ppid in $_prev_wired; do
                 _pgone_name="Claude Code Agent Skill"
             elif [ "$_ppid" = "claude-hooks" ]; then
                 _pgone_name="Claude Code harness hooks"
+            elif [ "$_ppid" = "cursor-hooks" ]; then
+                _pgone_name="Cursor harness hooks"
             fi
             [ -n "$_pgone_name" ] || _pgone_name="$_ppid"
             _mh_record PLATFORM_GONE "$_ppid" "$_pgone_name: no longer detected (cleaned up with the uninstall)"

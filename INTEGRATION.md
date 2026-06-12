@@ -249,6 +249,15 @@ warns instead.
 Opt out with `MEMORY_HIVE_SKIP_CLAUDE_HOOKS=1` at install time, or disable
 at runtime without uninstalling by exporting `MEMORY_HIVE_HOOKS_DISABLE=1`.
 
+**Cursor gets the same enforcement layer** via `~/.cursor/hooks.json`
+(version 1): a `stop` hook that replies once with a `followup_message`
+when the ritual didn't run — Cursor's own `loop_count` is the loop guard —
+and a `sessionEnd` hook that feeds `hive/raw/sessions/` through
+`memory-hive capture`. The merge only ever touches entries whose command
+points at our `hooks/cursor-*.sh` scripts; malformed files are left alone.
+Opt out with `MEMORY_HIVE_SKIP_CURSOR_HOOKS=1`; the same runtime
+`MEMORY_HIVE_HOOKS_DISABLE=1` kill switch applies.
+
 ### OpenClaw users
 
 If `~/.openclaw/` exists, the installer still writes to
@@ -333,7 +342,8 @@ silos you keep.
 | `MEMORY_HIVE_COPILOT_REPO` | Set to `1` to opt into writing `.github/copilot-instructions.md` in the current repo. |
 | `MEMORY_HIVE_SKIP_CLAUDE_CODE` | Opt out of all Claude Code wiring (managed block, Agent Skill, and harness hooks). Legacy `MEMORY_HIVE_SKIP_CLAUDE_MD=1` is still honored as an alias. |
 | `MEMORY_HIVE_SKIP_CLAUDE_SKILL` | Opt out of installing the Agent Skill only; the managed `CLAUDE.md` block is still written. |
-| `MEMORY_HIVE_SKIP_CLAUDE_HOOKS` | Opt out of wiring the SessionStart/Stop harness hooks into `~/.claude/settings.json`. Runtime equivalent without re-installing: `MEMORY_HIVE_HOOKS_DISABLE=1`. |
+| `MEMORY_HIVE_SKIP_CLAUDE_HOOKS` | Opt out of wiring the SessionStart/Stop/SessionEnd harness hooks into `~/.claude/settings.json`. Runtime equivalent without re-installing: `MEMORY_HIVE_HOOKS_DISABLE=1`. |
+| `MEMORY_HIVE_SKIP_CURSOR_HOOKS` | Opt out of wiring the stop/sessionEnd harness hooks into `~/.cursor/hooks.json`. Same `MEMORY_HIVE_HOOKS_DISABLE=1` runtime kill switch. |
 | `MEMORY_HIVE_AGENT_ID` | Runtime (not install): which silo the harness hooks hydrate from and check the ritual against. Defaults to `main`. |
 | `MEMORY_HIVE_SKIP_OPENCLAW` | Opt out of OpenClaw wiring. |
 | `MEMORY_HIVE_SKIP_NANOCLAW` | Opt out of NanoClaw wiring. |

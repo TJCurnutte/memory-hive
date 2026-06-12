@@ -6,6 +6,22 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+
+- Cursor harness hooks, wired into `~/.cursor/hooks.json` (version 1) at
+  install time — enforcement parity with Claude Code: a `stop` hook
+  replies once with a `followup_message` when a completed conversation
+  has no fresh dated line in the agent's `log.md` (Cursor's `loop_count`
+  is the loop guard; aborted/error runs and short transcripts exempt),
+  and a `sessionEnd` hook feeds `hive/raw/sessions/` through
+  `memory-hive capture` (model + workspace). Fail-open everywhere; the
+  JSON merge touches only entries pointing at our `hooks/cursor-*.sh`
+  scripts and refuses malformed files. Opt out with
+  `MEMORY_HIVE_SKIP_CURSOR_HOOKS=1` (or `MEMORY_HIVE_SKIP_CURSOR=1` for
+  all Cursor wiring); runtime kill switch `MEMORY_HIVE_HOOKS_DISABLE=1`.
+  New doctor check (4f) and CI smoke for the merge (idempotency,
+  user-entry preservation) and all stop/sessionEnd hook paths.
+
 ## [1.5.0] — 2026-06-12 — `The hive speaks MCP`
 
 ### Added

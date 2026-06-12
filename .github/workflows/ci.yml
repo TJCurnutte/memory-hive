@@ -285,6 +285,10 @@ jobs:
           cat > "$FAKE_HOME/.claude/settings.json" <<'JSON'
           {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo user-stop-hook"}]}]}}
           JSON
+          # Same for a pre-existing user hook in Cursor's hooks.json.
+          cat > "$FAKE_HOME/.cursor/hooks.json" <<'JSON'
+          {"version": 1, "hooks": {"stop": [{"command": "echo user-cursor-hook"}]}}
+          JSON
 
           sh install.sh < /dev/null > /tmp/mh-plat.log 2>&1
 
@@ -380,7 +384,7 @@ jobs:
               { echo "FAIL: wired boot block has no 'memory-hive guide' pointer" >&2; fail=1; }
 
           # Harness hooks: shipped + rendered.
-          for hk in session-start.sh stop-ritual.sh session-end.sh; do
+          for hk in session-start.sh stop-ritual.sh session-end.sh cursor-stop.sh cursor-session-end.sh; do
               if [ ! -f "$INSTALL_DIR/hooks/$hk" ]; then
                   echo "FAIL: hook script missing: $INSTALL_DIR/hooks/$hk" >&2; fail=1
               elif grep -q '${HIVE_DIR}' "$INSTALL_DIR/hooks/$hk"; then
@@ -482,6 +486,35 @@ jobs:
           PYMCP
           grep -q 'mcp ci smoke' "$INSTALL_DIR/hive/agents/main/log.md" || { echo "FAIL: mcp hive_log did not append" >&2; fail=1; }
 
+          # Cursor hooks.json merge: idempotent after the re-install above,
+          # version field present, user entry preserved.
+          python3 - "$FAKE_HOME/.cursor/hooks.json" <<'PYCUR' || { echo "FAIL: cursor hooks.json merge check" >&2; fail=1; }
+          import json, sys
+          d = json.load(open(sys.argv[1]))
+          assert d.get("version") == 1, d.get("version")
+          h = d.get("hooks", {})
+          def count(event, frag):
+              return sum(1 for e in h.get(event, [])
+                         if frag in str(e.get("command", "")))
+          assert count("stop", "cursor-stop.sh") == 1
+          assert count("sessionEnd", "cursor-session-end.sh") == 1
+          assert count("stop", "user-cursor-hook") == 1, "user cursor hook lost"
+          print("cursor-hooks-json-ok")
+          PYCUR
+
+          # Cursor stop hook: nudges once on a stale log, respects loop_count
+          # and aborted status; sessionEnd feeds the capture stream.
+          printf -- '- 2001-01-01 — ancient entry\n' > "$INSTALL_DIR/hive/agents/main/log.md"
+          out=$(printf '{"status": "completed", "loop_count": 0, "transcript_path": "/tmp/mh-transcript-long.jsonl"}' | sh "$INSTALL_DIR/hooks/cursor-stop.sh") || { echo "FAIL: cursor-stop exit" >&2; fail=1; }
+          echo "$out" | grep -q '"followup_message"' || { echo "FAIL: cursor-stop did not nudge a stale session" >&2; fail=1; }
+          echo "$out" | grep -q 'memory-hive log' || { echo "FAIL: cursor-stop nudge does not cite the log verb" >&2; fail=1; }
+          out=$(printf '{"status": "completed", "loop_count": 1, "transcript_path": "/tmp/mh-transcript-long.jsonl"}' | sh "$INSTALL_DIR/hooks/cursor-stop.sh") || { echo "FAIL: cursor-stop loop exit" >&2; fail=1; }
+          [ -z "$out" ] || { echo "FAIL: cursor-stop nudged twice despite loop_count" >&2; fail=1; }
+          out=$(printf '{"status": "aborted", "loop_count": 0, "transcript_path": "/tmp/mh-transcript-long.jsonl"}' | sh "$INSTALL_DIR/hooks/cursor-stop.sh") || { echo "FAIL: cursor-stop aborted exit" >&2; fail=1; }
+          [ -z "$out" ] || { echo "FAIL: cursor-stop nudged an aborted run" >&2; fail=1; }
+          printf '{"model": "gpt", "workspace_roots": ["/tmp/ws"]}' | sh "$INSTALL_DIR/hooks/cursor-session-end.sh" || { echo "FAIL: cursor-session-end exit" >&2; fail=1; }
+          grep -q 'cursor session ended | model: gpt | workspace: /tmp/ws' "$CAPF" 2>/dev/null || { echo "FAIL: cursor sessionEnd event not captured" >&2; fail=1; }
+
           [ "$fail" -eq 0 ] || exit 1
           echo "Platform integration smoke OK"
 
@@ -522,6 +555,11 @@ jobs:
           fi
           grep -q "Claude Code harness hooks" /tmp/mh-optout.log || \
               { echo "hooks skip not reported in log"; exit 1; }
+          if [ -f "$FAKE_HOME/.cursor/hooks.json" ] && grep -q "cursor-stop.sh" "$FAKE_HOME/.cursor/hooks.json"; then
+              echo "cursor hooks were wired despite MEMORY_HIVE_SKIP_CURSOR=1"; exit 1
+          fi
+          grep -q "Cursor harness hooks" /tmp/mh-optout.log || \
+              { echo "cursor hooks skip not reported in log"; exit 1; }
           echo "Opt-out smoke OK"
 
       - name: Platform integration smoke — idempotent
