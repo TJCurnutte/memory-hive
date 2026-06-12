@@ -28,8 +28,22 @@ REMOTE_INSTALLER="https://raw.githubusercontent.com/TJCurnutte/memory-hive/main/
 # Prefer the locally-installed install.sh so offline/private forks still work;
 # fall back to curl from GitHub. In both cases, set MEMORY_HIVE_SYNC=1 so
 # install.sh knows this is an update and should refresh shared content.
+#
+# CRITICAL: run the installer from a TEMP COPY, never from
+# $INSTALL_DIR/install.sh directly — the installer refreshes that very file
+# mid-run, and executing a file while it is replaced corrupts the running
+# interpreter (phantom "syntax error near unexpected token").
 if [ -f "$INSTALL_DIR/install.sh" ]; then
-    MEMORY_HIVE_SYNC=1 MEMORY_HIVE_DIR="$INSTALL_DIR" sh "$INSTALL_DIR/install.sh"
+    _tmp_installer="$(mktemp "${TMPDIR:-/tmp}/memory-hive-install.XXXXXX")" \
+        || { printf 'ERROR: mktemp failed\n' >&2; exit 1; }
+    cp "$INSTALL_DIR/install.sh" "$_tmp_installer"
+    if MEMORY_HIVE_SYNC=1 MEMORY_HIVE_DIR="$INSTALL_DIR" sh "$_tmp_installer"; then
+        _rc=0
+    else
+        _rc=$?
+    fi
+    rm -f "$_tmp_installer"
+    exit "$_rc"
 elif command -v curl >/dev/null 2>&1; then
     MEMORY_HIVE_SYNC=1 MEMORY_HIVE_DIR="$INSTALL_DIR" \
         sh -c "$(curl -fsSL "$REMOTE_INSTALLER")"
