@@ -6,6 +6,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.8.0] — 2026-06-12 — `One hive, every machine`
+
+### Added
+
+- Multi-machine hive sync over any private git remote:
+  `memory-hive sync setup <git-url>` turns the hive into its own repo
+  (with a repo-local git identity fallback), `sync push` / `sync pull`
+  move memory between machines, `sync status` shows remote,
+  ahead/behind, and dirty count. Append-only surfaces (silo logs and
+  memory, raw learnings, raw streams, task queue) carry `merge=union`
+  attributes so machines that wrote concurrently merge without
+  conflicts; a second machine joins an existing remote via an
+  unrelated-histories merge where the remote hive is canon. `sync pull`
+  checkpoints first and runs quiet maintenance after, so the recall
+  index follows the new content. Machine-local artifacts (recall index,
+  checkpoints, maintenance timestamp) never sync. Setup refuses to nest
+  the hive repo inside another repository (dev checkouts). CI smoke
+  covers the full two-machine round trip, union convergence, and the
+  nested-repo refusal.
+
+### Changed
+
+- `memory-hive sync` no longer aliases `update` — it is the sync verb
+  now. `update` and `upgrade` keep working unchanged.
+
 ## [1.7.0] — 2026-06-12 — `Clean exits`
 
 ### Added

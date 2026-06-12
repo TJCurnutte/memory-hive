@@ -1759,6 +1759,153 @@ MCPHELP
     MEMORY_HIVE_DIR="$INSTALL_DIR" exec python3 "$_helper"
 }
 
+# memory-hive sync <setup|push|pull|status>
+# Multi-machine hive sync over any private git remote. The hive becomes
+# its own repo (never nested into another): append-only surfaces carry
+# merge=union attributes so two machines logging on the same day merge
+# without conflicts; pull checkpoints first and runs quiet maintenance
+# after, so the recall index follows the new content.
+mh_sync() {
+    _mh_require_install
+    command -v git >/dev/null 2>&1 || _mh_die "git is required for sync"
+    _sub="${1:-status}"
+    [ $# -gt 0 ] && shift
+
+    _sgit() { git -C "$HIVE_DIR" "$@"; }
+    _sync_own_repo() {
+        _tl="$(_sgit rev-parse --show-toplevel 2>/dev/null || :)"
+        [ -n "$_tl" ] || return 1
+        # Compare PHYSICAL paths: macOS tempdirs live behind /var -> /private
+        # symlinks and git prints the resolved path, so a string comparison
+        # against the logical $HIVE_DIR false-negatives on every Mac.
+        _hp="$(cd "$HIVE_DIR" 2>/dev/null && pwd -P)"
+        _tp="$(cd "$_tl" 2>/dev/null && pwd -P)"
+        [ -n "$_hp" ] && [ "$_hp" = "$_tp" ]
+    }
+    _sync_require_own() {
+        _sync_own_repo || _mh_die "hive at $HIVE_DIR is not its own git repo — run \`memory-hive sync setup <git-url>\` first"
+    }
+
+    case "$_sub" in
+        -h|--help|help)
+            cat <<'SYNCHELP'
+Usage: memory-hive sync setup <git-url>   # turn the hive into a synced repo
+       memory-hive sync push              # commit local hive changes and push
+       memory-hive sync pull              # checkpoint, pull, run maintenance
+       memory-hive sync status            # remote, ahead/behind, dirty count
+
+Append-only surfaces (silo logs/memory, raw learnings, raw streams, task
+queue) carry merge=union attributes, so machines that both wrote today
+merge cleanly. Use a PRIVATE remote — the hive is your agents' memory.
+SYNCHELP
+            return 0 ;;
+        setup)
+            _url="${1:-}"
+            [ -n "$_url" ] || _mh_die "usage: memory-hive sync setup <git-url>"
+            if _sgit rev-parse --git-dir >/dev/null 2>&1 && ! _sync_own_repo; then
+                _mh_die "hive at $HIVE_DIR sits inside another git repository ($(_sgit rev-parse --show-toplevel 2>/dev/null)) — refusing to nest a sync repo there"
+            fi
+            if [ ! -d "$HIVE_DIR/.git" ]; then
+                git init -q -b main "$HIVE_DIR" 2>/dev/null \
+                    || { git init -q "$HIVE_DIR" && _sgit symbolic-ref HEAD refs/heads/main; } \
+                    || _mh_die "git init failed in $HIVE_DIR"
+            fi
+            if [ ! -f "$HIVE_DIR/.gitattributes" ]; then
+                cat > "$HIVE_DIR/.gitattributes" <<'GATTR'
+# Append-only hive surfaces: union-merge so two machines that both wrote
+# never conflict; both sides' lines are kept.
+agents/*/log.md merge=union
+agents/*/memory.md merge=union
+learnings/raw/** merge=union
+raw/** merge=union
+tasks/queue.md merge=union
+GATTR
+            fi
+            if [ ! -f "$HIVE_DIR/.gitignore" ]; then
+                # Machine-local artifacts never sync: the recall index is
+                # derived, checkpoints are local safety nets, and the
+                # maintenance timestamp is per-machine.
+                cat > "$HIVE_DIR/.gitignore" <<'GIGN'
+.hivecode/
+.checkpoints/
+.last-maintained
+GIGN
+            fi
+            if _sgit remote get-url origin >/dev/null 2>&1; then
+                _sgit remote set-url origin "$_url"
+            else
+                _sgit remote add origin "$_url"
+            fi
+            # Repo-local identity fallback: machines without a global git
+            # identity (fresh boxes, CI, containers) must still commit.
+            if ! _sgit config user.email >/dev/null 2>&1; then
+                _host="$(hostname 2>/dev/null || uname -n)"
+                _sgit config user.email "memory-hive@$_host"
+                _sgit config user.name "Memory Hive ($_host)"
+            fi
+            _sgit add -A
+            _sgit commit -q -m "hive sync: initial commit from $(hostname 2>/dev/null || uname -n)" 2>/dev/null || :
+            _sgit rev-parse -q --verify HEAD >/dev/null 2>&1 \
+                || _mh_die "initial hive commit failed — check git identity (git config user.email)"
+            if _sgit push -q -u origin HEAD 2>/dev/null; then
+                printf 'sync: hive repo ready, pushed to %s\n' "$_url"
+            else
+                # Remote may already have history (second machine joining):
+                # the two hives have unrelated root commits, so the merge
+                # needs --allow-unrelated-histories. Union attributes keep
+                # both sides of append-only files; for anything else the
+                # existing remote hive is canon (-X theirs).
+                if _sgit pull -q --no-rebase --no-edit \
+                        --allow-unrelated-histories -X theirs origin main 2>/dev/null \
+                    && _sgit push -q -u origin HEAD 2>/dev/null; then
+                    printf 'sync: joined existing hive remote %s\n' "$_url"
+                else
+                    _mh_die "could not push to $_url — check access and that the remote is empty or a hive repo"
+                fi
+            fi
+            ;;
+        push)
+            _sync_require_own
+            _sgit add -A
+            if ! _sgit diff-index --quiet HEAD -- 2>/dev/null; then
+                _sgit commit -q -m "hive sync: $(hostname 2>/dev/null || uname -n) $(date +%Y-%m-%dT%H:%M:%S)"
+            fi
+            _sgit push -q -u origin HEAD || _mh_die "push failed — check the remote"
+            printf 'sync: pushed. %s\n' "$(_sgit log --oneline -1)"
+            ;;
+        pull)
+            _sync_require_own
+            mh_checkpoint --name "pre-sync-$(date +%Y%m%d-%H%M%S)" >/dev/null 2>&1 || :
+            _sgit add -A
+            if ! _sgit diff-index --quiet HEAD -- 2>/dev/null; then
+                _sgit commit -q -m "hive sync: local changes before pull ($(hostname 2>/dev/null || uname -n))"
+            fi
+            _sgit pull --no-rebase --no-edit origin HEAD >/dev/null 2>&1 \
+                || _sgit pull --no-rebase --no-edit >/dev/null 2>&1 \
+                || _mh_die "pull failed — resolve manually with git -C $HIVE_DIR status"
+            mh_maintain --quiet >/dev/null 2>&1 || :
+            printf 'sync: pulled. %s\n' "$(_sgit log --oneline -1)"
+            ;;
+        status)
+            if ! _sync_own_repo; then
+                printf 'sync: not configured (run `memory-hive sync setup <git-url>`)\n'
+                return 0
+            fi
+            _remote="$(_sgit remote get-url origin 2>/dev/null || printf 'none')"
+            _dirty="$(_sgit status --porcelain 2>/dev/null | grep -c . || :)"
+            _ab="$(_sgit rev-list --left-right --count '@{upstream}...HEAD' 2>/dev/null || printf '? ?')"
+            _behind="$(printf '%s' "$_ab" | awk '{print $1}')"
+            _ahead="$(printf '%s' "$_ab" | awk '{print $2}')"
+            printf 'sync: remote %s\n' "$_remote"
+            printf 'sync: %s ahead / %s behind upstream, %s uncommitted change(s)\n' \
+                "$_ahead" "$_behind" "$_dirty"
+            ;;
+        *)
+            _mh_die "unknown sync subcommand: $_sub (setup|push|pull|status)"
+            ;;
+    esac
+}
+
 # memory-hive uninstall [--apply]
 # Surgically unwire every integration the installer created: managed
 # blocks out of all platform config files (user content untouched), our
@@ -2071,6 +2218,10 @@ Write-back (task-end ritual as commands):
 MCP (serve the hive to any MCP client):
   memory-hive mcp            # stdio server: ask_hive, hive_log, hive_learn, hive_capture, hive_guide
   memory-hive mcp --config   # print the client config snippet with real paths
+
+Sync (one hive across machines, any private git remote):
+  memory-hive sync setup <git-url>
+  memory-hive sync push | pull | status
 
 HyperRecall / TokenFS:
   memory-hive recall "query text"
@@ -7327,7 +7478,7 @@ _verb="$1"
 shift
 case "$_verb" in
     status)   mh_status "$@" ;;
-    update|upgrade|sync) mh_update "$@" ;;
+    update|upgrade) mh_update "$@" ;;
     maintain|maintenance) mh_maintain "$@" ;;
     add)      mh_add "$@" ;;
     list|ls)  mh_list ;;
@@ -7363,6 +7514,7 @@ case "$_verb" in
     learn)    mh_learn "$@" ;;
     capture)  mh_capture "$@" ;;
     mcp)      mh_mcp "$@" ;;
+    sync)     mh_sync "$@" ;;
     uninstall) mh_uninstall "$@" ;;
     reflect)  mh_reflect "$@" ;;
     seed)     mh_seed "$@" ;;
