@@ -924,6 +924,30 @@ PLATS
         printf '  %s MCP helper present (`memory-hive mcp` serves any MCP client)\n' "$_D_OK"
     fi
 
+    # --- 4f. Cursor harness hooks (hooks.json wiring) -----------------------
+    # stop ritual nudge + sessionEnd capture, wired by install.sh into
+    # ~/.cursor/hooks.json. Only meaningful when Cursor exists.
+    if [ -d "$HOME/.cursor" ]; then
+        _ch_stop="$INSTALL_DIR/hooks/cursor-stop.sh"
+        _ch_se="$INSTALL_DIR/hooks/cursor-session-end.sh"
+        _ch_json="$HOME/.cursor/hooks.json"
+        if [ ! -f "$_ch_stop" ] || [ ! -f "$_ch_se" ]; then
+            printf '  %s Cursor hook scripts missing under %s/hooks/\n' \
+                "$_D_WARN" "$INSTALL_DIR"
+            printf '     run %s to restore them.\n' "\`sh $INSTALL_DIR/install.sh\`"
+            _warnings=$((_warnings + 1))
+        elif [ ! -f "$_ch_json" ] \
+            || ! grep -q -F "hooks/cursor-stop.sh" "$_ch_json" 2>/dev/null \
+            || ! grep -q -F "hooks/cursor-session-end.sh" "$_ch_json" 2>/dev/null; then
+            printf '  %s Cursor harness hooks not wired in ~/.cursor/hooks.json\n' \
+                "$_D_WARN"
+            printf '     run %s to wire them.\n' "\`sh $INSTALL_DIR/install.sh\`"
+            _warnings=$((_warnings + 1))
+        else
+            printf '  %s Cursor harness hooks wired (stop ritual + sessionEnd capture)\n' "$_D_OK"
+        fi
+    fi
+
     # --- 5. registry AGENTS.md is in sync ----------------------------------
     _reg="$HIVE_DIR/registry/AGENTS.md"
     if [ ! -f "$_reg" ]; then

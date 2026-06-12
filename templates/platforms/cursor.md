@@ -18,6 +18,33 @@ delete the rule from inside Cursor's rule picker — the file stays intact.
 
 Opt out with `MEMORY_HIVE_SKIP_CURSOR=1`.
 
+## Surface 2 — Harness hooks in `~/.cursor/hooks.json`
+
+**Integration:** JSON merge via python3, version-1 hooks file
+
+The rule asks the model to follow the memory contract; the hooks make
+Cursor's agent harness enforce it mechanically:
+
+| Hook event | Script | What it does |
+|---|---|---|
+| `stop` | `~/.memory-hive/hooks/cursor-stop.sh` | When an agent conversation completes without a fresh dated line in the agent's `log.md`, replies once with a `followup_message` telling the agent to run `memory-hive log` / `memory-hive learn`. Cursor's own `loop_count` is the loop guard (nudges only at 0); aborted/error runs and short transcripts are exempt. |
+| `sessionEnd` | `~/.memory-hive/hooks/cursor-session-end.sh` | Ambient capture: appends a timestamped session-ended event (model, workspace) to `hive/raw/sessions/` via `memory-hive capture`. |
+
+Both scripts fail open — missing hive, missing python3, unparseable
+payload all exit 0 silently. The agent id defaults to `main`; set
+`MEMORY_HIVE_AGENT_ID` to target another silo.
+
+**Refresh semantics:** re-installing replaces only entries whose command
+points at our `hooks/cursor-*.sh` scripts. Hooks you wrote yourself are
+untouched; a malformed `hooks.json` is left alone (with a warning).
+
+**Opt out:** `MEMORY_HIVE_SKIP_CURSOR_HOOKS=1` at install time, or export
+`MEMORY_HIVE_HOOKS_DISABLE=1` at runtime to mute the installed hooks.
+`MEMORY_HIVE_SKIP_CURSOR=1` skips both surfaces.
+
+**Doctor coverage:** `memory-hive doctor` warns when the scripts are
+missing or `hooks.json` no longer references them.
+
 ### Legacy `.cursorrules`
 
 The older `.cursorrules` single-file format in project roots is still
