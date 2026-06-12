@@ -664,8 +664,11 @@ jobs:
           DEV="$(mktemp -d)"; git init -q "$DEV"; mkdir -p "$DEV/sub/hive/agents/main"; touch "$DEV/sub/hive/index.md"
           NESTED_OUT="$(HOME="$DEV" MEMORY_HIVE_DIR="$DEV/sub" sh memory-hive sync setup "$BARE/hive.git" 2>&1 || :)"
           echo "$NESTED_OUT" | grep -q 'inside another git repository' || { echo "FAIL: nested refusal missing; got: $NESTED_OUT"; exit 1; }
-          # Doctor shows the sync receipt on a synced hive.
-          HOME="$B" sh "$B/.memory-hive/memory-hive" doctor 2>/dev/null | grep -q 'hive sync configured' || { echo "FAIL: doctor sync receipt missing"; exit 1; }
+          # Doctor shows the sync receipt on a synced hive. Capture first:
+          # grep -q exits at first match and doctor would die on SIGPIPE
+          # under this step's pipefail while printing later sections.
+          DOC_OUT="$(HOME="$B" sh "$B/.memory-hive/memory-hive" doctor 2>/dev/null || :)"
+          echo "$DOC_OUT" | grep -q 'hive sync configured' || { echo "FAIL: doctor sync receipt missing"; exit 1; }
           echo "Hive sync smoke OK"
 
       - name: Platform integration smoke — opt-out
