@@ -6,6 +6,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.6.1] — 2026-06-12 — `Self-update no longer eats itself`
+
+### Fixed
+
+- `memory-hive update` could crash mid-run with phantom syntax errors
+  ("syntax error near unexpected token") and leave a half-applied
+  update. Cause: the installer copied `install.sh` and `memory-hive`
+  over themselves in place while those very files were executing (the
+  PATH shim is a symlink to the same inode), so the running interpreter
+  read the new, longer file at old byte offsets. The recent releases
+  grew both files enough to make this near-deterministic. Fixes:
+  - all helper installs and hook renders now stage to a temp file and
+    `mv` into place — rename keeps the old inode readable for running
+    processes;
+  - `update.sh` executes the installed installer from a temp copy,
+    never from the path being refreshed;
+  - new CI step installs, then self-updates from a deliberately
+    offset-shifted upstream copy and asserts the run completes and the
+    refreshed CLI works (both the direct and the `update.sh` wrapper
+    paths).
+  Affected machines recover with one
+  `curl -fsSL .../install.sh | sh` (or a second `memory-hive update`,
+  which is byte-identical and therefore safe); agent silos were never
+  touched — the crash happened after the preserve/restore step.
+
 ## [1.6.0] — 2026-06-12 — `Cursor falls in line`
 
 ### Added

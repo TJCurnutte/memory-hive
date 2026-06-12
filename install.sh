@@ -209,11 +209,20 @@ fi
 # Install the helper scripts into the install dir so users can run them
 # locally without a curl round-trip. These are tools (not user content) and
 # we always keep them current with upstream.
+#
+# Stage + rename, never cp in place: on the update path THIS process IS
+# $INSTALL_DIR/install.sh, and the CLI that launched it is (or is symlinked
+# to) $INSTALL_DIR/memory-hive. An in-place cp rewrites the bytes under the
+# running interpreter, which then reads the new file at old offsets and
+# dies with phantom syntax errors. rename() just swaps the directory
+# entry — the old inode stays readable until the process exits.
 for helper in create-agent.sh update.sh install.sh check-compliance.sh memory-hive memory_hive_recall.py memory_hive_mcp.py; do
     _src="$TMP_DIR/memory-hive/$helper"
     [ -f "$_src" ] || continue
-    cp "$_src" "$INSTALL_DIR/$helper"
-    chmod +x "$INSTALL_DIR/$helper" 2>/dev/null || true
+    _hstage="$INSTALL_DIR/$helper.memhive.$$"
+    cp "$_src" "$_hstage" || { rm -f "$_hstage"; die "Failed to stage $helper"; }
+    chmod +x "$_hstage" 2>/dev/null || true
+    mv "$_hstage" "$INSTALL_DIR/$helper" || { rm -f "$_hstage"; die "Failed to install $helper"; }
 done
 
 # Install a bare `memory-hive` command into the user's existing PATH when
@@ -700,10 +709,16 @@ if [ -d "$_hooks_src_dir" ]; then
     for _hk in "$_hooks_src_dir"/*.sh; do
         [ -f "$_hk" ] || continue
         _hk_dst="$INSTALL_DIR/hooks/$(basename "$_hk")"
+        # Stage + rename for the same reason as the helper loop: a hook
+        # could be mid-execution while an update refreshes it.
+        _hk_stage="$_hk_dst.memhive.$$"
         if sed -e "s|\${HIVE_DIR}|$_hive_dir_escaped|g" \
                -e "s|\${INSTALL_DIR}|$_install_dir_escaped|g" \
-               "$_hk" > "$_hk_dst" 2>/dev/null; then
-            chmod +x "$_hk_dst" 2>/dev/null || true
+               "$_hk" > "$_hk_stage" 2>/dev/null; then
+            chmod +x "$_hk_stage" 2>/dev/null || true
+            mv "$_hk_stage" "$_hk_dst" 2>/dev/null || rm -f "$_hk_stage"
+        else
+            rm -f "$_hk_stage" 2>/dev/null || true
         fi
     done
 fi

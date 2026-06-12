@@ -518,6 +518,51 @@ jobs:
           [ "$fail" -eq 0 ] || exit 1
           echo "Platform integration smoke OK"
 
+      - name: Self-update smoke (offset-shift regression)
+        shell: bash
+        run: |
+          set -eu
+          FAKE_HOME="$(mktemp -d)"
+          INSTALL_DIR="$(mktemp -d)"
+          export HOME="$FAKE_HOME"
+          export MEMORY_HIVE_DIR="$INSTALL_DIR"
+          export MEMORY_HIVE_REPO="$(pwd)"
+          mkdir -p "$FAKE_HOME/.claude"
+          sh install.sh < /dev/null > /dev/null 2>&1
+
+          # Build a mutated upstream whose install.sh / memory-hive /
+          # update.sh are thousands of bytes longer — every later byte
+          # offset shifts. Updating by executing the INSTALLED installer
+          # while it copies the longer copy over itself used to corrupt the
+          # running interpreter ("syntax error near unexpected token `do'").
+          MUT="$(mktemp -d)"
+          cp -R "$(pwd)/." "$MUT/"
+          for f in install.sh memory-hive update.sh; do
+              python3 - "$MUT/$f" <<'PYPAD'
+          import sys
+          path = sys.argv[1]
+          lines = open(path).readlines()
+          pad = ["# pad-for-offset-shift %04d\n" % i for i in range(200)]
+          lines[1:1] = pad
+          open(path, "w").writelines(lines)
+          PYPAD
+          done
+
+          # The dangerous invocation: the installed installer replacing
+          # itself with the longer upstream copy while executing.
+          MEMORY_HIVE_SYNC=1 MEMORY_HIVE_REPO="$MUT" sh "$INSTALL_DIR/install.sh" < /dev/null > /tmp/mh-selfupdate.log 2>&1 \
+              || { echo "FAIL: self-update crashed"; tail -20 /tmp/mh-selfupdate.log; exit 1; }
+          grep -q "pad-for-offset-shift" "$INSTALL_DIR/install.sh" || { echo "FAIL: install.sh not refreshed"; exit 1; }
+          grep -q "pad-for-offset-shift" "$INSTALL_DIR/memory-hive" || { echo "FAIL: memory-hive not refreshed"; exit 1; }
+          sh "$INSTALL_DIR/memory-hive" status > /dev/null || { echo "FAIL: updated CLI broken"; exit 1; }
+
+          # And the update.sh wrapper (temp-copy execution) survives the
+          # reverse shift back to the shorter upstream copy.
+          sh "$INSTALL_DIR/update.sh" < /dev/null > /tmp/mh-selfupdate2.log 2>&1 \
+              || { echo "FAIL: update.sh wrapper crashed"; tail -20 /tmp/mh-selfupdate2.log; exit 1; }
+          sh "$INSTALL_DIR/memory-hive" status > /dev/null || { echo "FAIL: CLI broken after wrapper update"; exit 1; }
+          echo "Self-update smoke OK"
+
       - name: Platform integration smoke — opt-out
         shell: bash
         run: |
