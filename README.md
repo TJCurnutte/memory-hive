@@ -190,7 +190,7 @@ Normal users should not need these during onboarding. They remain available for 
 <details>
 <summary>Show advanced command families</summary>
 
-**Lifecycle** — `list`, `setup`, `role`, `rename`, `archive`, `register`, `apply`.
+**Lifecycle** — `list`, `setup`, `role`, `rename`, `archive`, `register`, `apply`, `uninstall`.
 
 **Health and maintenance** — `doctor`, `maintain`, `optimize`, `checkpoint`, `diff`.
 
