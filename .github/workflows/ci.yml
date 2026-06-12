@@ -563,6 +563,53 @@ jobs:
           sh "$INSTALL_DIR/memory-hive" status > /dev/null || { echo "FAIL: CLI broken after wrapper update"; exit 1; }
           echo "Self-update smoke OK"
 
+      - name: Uninstall smoke
+        shell: bash
+        run: |
+          set -eu
+          FAKE_HOME="$(mktemp -d)"
+          INSTALL_DIR="$(mktemp -d)"
+          export HOME="$FAKE_HOME"
+          export MEMORY_HIVE_DIR="$INSTALL_DIR"
+          export MEMORY_HIVE_REPO="$(pwd)"
+          mkdir -p "$FAKE_HOME/.claude" "$FAKE_HOME/.cursor" "$FAKE_HOME/.codex"
+          # User-authored content that must survive the uninstall.
+          printf '# My own notes\n\nkeep me\n' > "$FAKE_HOME/.claude/CLAUDE.md"
+          cat > "$FAKE_HOME/.claude/settings.json" <<'JSON'
+          {"hooks": {"Stop": [{"hooks": [{"type": "command", "command": "echo user-stop-hook"}]}]}}
+          JSON
+          cat > "$FAKE_HOME/.cursor/hooks.json" <<'JSON'
+          {"version": 1, "hooks": {"stop": [{"command": "echo user-cursor-hook"}]}}
+          JSON
+          sh install.sh < /dev/null > /dev/null 2>&1
+
+          # Dry-run: reports pending actions, changes nothing.
+          sh "$INSTALL_DIR/memory-hive" uninstall > /tmp/mh-un-dry.log
+          grep -q 'action(s) pending' /tmp/mh-un-dry.log || { echo "FAIL: dry-run reported nothing"; exit 1; }
+          grep -q 'memory-hive:start' "$FAKE_HOME/.claude/CLAUDE.md" || { echo "FAIL: dry-run modified CLAUDE.md"; exit 1; }
+
+          # Apply: blocks stripped, user content and user hooks intact,
+          # wholly-ours files and the skill removed, shim gone.
+          sh "$INSTALL_DIR/memory-hive" uninstall --apply > /tmp/mh-un.log
+          grep -q 'keep me' "$FAKE_HOME/.claude/CLAUDE.md" || { echo "FAIL: user CLAUDE.md content lost"; exit 1; }
+          ! grep -q 'memory-hive:start' "$FAKE_HOME/.claude/CLAUDE.md" || { echo "FAIL: block still in CLAUDE.md"; exit 1; }
+          test ! -f "$FAKE_HOME/.codex/AGENTS.md" || { echo "FAIL: wholly-ours codex AGENTS.md not removed"; exit 1; }
+          test ! -d "$FAKE_HOME/.claude/skills/memory-hive" || { echo "FAIL: skill not removed"; exit 1; }
+          python3 - "$FAKE_HOME/.claude/settings.json" "$FAKE_HOME/.cursor/hooks.json" <<'PYUNCK'
+          import json, sys
+          s = json.load(open(sys.argv[1])); c = json.load(open(sys.argv[2]))
+          txt = json.dumps(s) + json.dumps(c)
+          assert "# memory-hive" not in txt and "cursor-stop.sh" not in txt, "our entries remain"
+          assert "user-stop-hook" in json.dumps(s), "user claude hook lost"
+          assert "user-cursor-hook" in json.dumps(c), "user cursor hook lost"
+          print("uninstall-json-ok")
+          PYUNCK
+          test ! -e "$FAKE_HOME/.local/bin/memory-hive" || { echo "FAIL: shim not removed"; exit 1; }
+          test -d "$INSTALL_DIR/hive/agents/main" || { echo "FAIL: hive data touched"; exit 1; }
+          # Idempotent: second apply finds nothing.
+          sh "$INSTALL_DIR/memory-hive" uninstall --apply | grep -q 'Nothing to unwire' || { echo "FAIL: second uninstall not clean"; exit 1; }
+          echo "Uninstall smoke OK"
+
       - name: Platform integration smoke — opt-out
         shell: bash
         run: |

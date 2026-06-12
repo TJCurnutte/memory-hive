@@ -1759,6 +1759,184 @@ MCPHELP
     MEMORY_HIVE_DIR="$INSTALL_DIR" exec python3 "$_helper"
 }
 
+# memory-hive uninstall [--apply]
+# Surgically unwire every integration the installer created: managed
+# blocks out of all platform config files (user content untouched), our
+# entries out of ~/.claude/settings.json and ~/.cursor/hooks.json, the
+# Agent Skill dir, and PATH shims pointing at this install. Dry-run by
+# default. Hive data is sacred: $HIVE_DIR and $INSTALL_DIR stay put — the
+# receipt ends with the one manual rm for a full purge.
+mh_uninstall() {
+    _apply=0
+    case "${1:-}" in
+        --apply) _apply=1 ;;
+        -h|--help)
+            cat <<'UNHELP'
+Usage: memory-hive uninstall [--apply]
+
+Dry-run by default: prints every unwire action. --apply executes them.
+Removes managed blocks from platform configs, memory-hive entries from
+~/.claude/settings.json and ~/.cursor/hooks.json (your own entries are
+preserved), the Claude Agent Skill, and PATH shims for this install.
+Never touches hive data or the install dir itself.
+UNHELP
+            return 0 ;;
+        "") : ;;
+        *) _mh_die "unknown option: $1 (try --apply or --help)" ;;
+    esac
+    _mode="DRY-RUN"
+    [ "$_apply" -eq 1 ] && _mode="APPLY"
+    printf 'memory-hive uninstall (%s)\n\n' "$_mode"
+    _acted=0
+
+    # --- managed blocks in platform config files ---------------------------
+    _mh_un_strip() {
+        _f="$1"
+        [ -f "$_f" ] || return 0
+        grep -q -F '<!-- memory-hive:start -->' "$_f" 2>/dev/null || return 0
+        _acted=$((_acted + 1))
+        if [ "$_apply" -eq 0 ]; then
+            printf '  would strip managed block: %s\n' "$_f"
+            return 0
+        fi
+        _tmp="$_f.memhive.$$"
+        awk '
+            index($0, "<!-- memory-hive:start -->") { inb = 1; next }
+            inb && index($0, "<!-- memory-hive:end -->") { inb = 0; next }
+            !inb { print }
+        ' "$_f" > "$_tmp" || { rm -f "$_tmp"; printf '  !! failed: %s\n' "$_f"; return 0; }
+        if grep -q '[^[:space:]]' "$_tmp"; then
+            mv "$_tmp" "$_f" && printf '  stripped managed block: %s\n' "$_f"
+        else
+            # Nothing but our block lived here — the file was wholly ours.
+            rm -f "$_tmp" "$_f" && printf '  removed (was only the block): %s\n' "$_f"
+        fi
+    }
+    for _t in \
+        "$HOME/.claude/CLAUDE.md" \
+        "$HOME/.openclaw/CLAUDE.md" \
+        "$HOME/.config/nanoclaw/AGENTS.md" \
+        "$HOME/.hermes/memories/MEMORY.md" \
+        "$HOME/.cursor/rules/memory-hive.mdc" \
+        "$HOME/.continue/rules/memory-hive.md" \
+        "$HOME/.gemini/GEMINI.md" \
+        "$HOME/.goosehints" \
+        "$HOME/.aws/amazonq/rules/memory-hive.md" \
+        "$HOME/.openhands/microagents/memory-hive.md" \
+        "$HOME/.roo/rules/memory-hive.md" \
+        "$HOME/.kilocode/rules/memory-hive.md" \
+        "$HOME/.codeium/windsurf/memories/global_rules.md" \
+        "$HOME/.agents/AGENTS.md" \
+        "$HOME/.config/amp/AGENTS.md" \
+        "$HOME/.codex/AGENTS.md" \
+        "$HOME/.config/opencode/AGENTS.md"; do
+        _mh_un_strip "$_t"
+    done
+
+    # --- hook entries in JSON configs (user entries preserved) -------------
+    if command -v python3 >/dev/null 2>&1; then
+        for _jf in "$HOME/.claude/settings.json" "$HOME/.cursor/hooks.json"; do
+            [ -f "$_jf" ] || continue
+            grep -q -e '# memory-hive' -e '/hooks/cursor-' "$_jf" 2>/dev/null || continue
+            _acted=$((_acted + 1))
+            if [ "$_apply" -eq 0 ]; then
+                printf '  would remove memory-hive hook entries: %s\n' "$_jf"
+                continue
+            fi
+            if MH_JSON="$_jf" python3 - <<'PYUN'
+import json, os, sys
+
+path = os.environ["MH_JSON"]
+try:
+    with open(path, encoding="utf-8") as f:
+        data = json.load(f)
+except Exception:
+    sys.exit(3)
+if not isinstance(data, dict):
+    sys.exit(3)
+hooks = data.get("hooks")
+if not isinstance(hooks, dict):
+    sys.exit(0)
+
+
+def ours(cmd):
+    cmd = str(cmd)
+    return "# memory-hive" in cmd or "/hooks/cursor-stop.sh" in cmd \
+        or "/hooks/cursor-session-end.sh" in cmd
+
+
+for event in list(hooks.keys()):
+    arr = hooks.get(event)
+    if not isinstance(arr, list):
+        continue
+    kept = []
+    for entry in arr:
+        if isinstance(entry, dict) and ours(entry.get("command", "")):
+            continue  # Cursor-style flat entry
+        if isinstance(entry, dict) and isinstance(entry.get("hooks"), list):
+            entry["hooks"] = [
+                h for h in entry["hooks"]
+                if not (isinstance(h, dict) and ours(h.get("command", "")))
+            ]
+            if not entry["hooks"]:
+                continue  # wrapper was wholly ours
+        kept.append(entry)
+    if kept:
+        hooks[event] = kept
+    else:
+        del hooks[event]
+
+tmp = path + ".memhive.tmp"
+with open(tmp, "w", encoding="utf-8") as f:
+    json.dump(data, f, indent=2)
+    f.write("\n")
+os.replace(tmp, path)
+PYUN
+            then
+                printf '  removed memory-hive hook entries: %s\n' "$_jf"
+            else
+                printf '  !! could not safely edit %s — remove entries marked "# memory-hive" by hand\n' "$_jf"
+            fi
+        done
+    fi
+
+    # --- Agent Skill --------------------------------------------------------
+    if [ -d "$HOME/.claude/skills/memory-hive" ]; then
+        _acted=$((_acted + 1))
+        if [ "$_apply" -eq 0 ]; then
+            printf '  would remove Agent Skill: %s\n' "$HOME/.claude/skills/memory-hive"
+        else
+            rm -rf "$HOME/.claude/skills/memory-hive" \
+                && printf '  removed Agent Skill: %s\n' "$HOME/.claude/skills/memory-hive"
+        fi
+    fi
+
+    # --- PATH shims pointing at this install --------------------------------
+    for _shim in "$HOME/.local/bin/memory-hive" "$HOME/bin/memory-hive" "$HOME/.bin/memory-hive"; do
+        [ -e "$_shim" ] || [ -L "$_shim" ] || continue
+        case "$(readlink "$_shim" 2>/dev/null || cat "$_shim" 2>/dev/null)" in
+            *"$INSTALL_DIR"*)
+                _acted=$((_acted + 1))
+                if [ "$_apply" -eq 0 ]; then
+                    printf '  would remove PATH shim: %s\n' "$_shim"
+                else
+                    rm -f "$_shim" && printf '  removed PATH shim: %s\n' "$_shim"
+                fi
+                ;;
+        esac
+    done
+
+    printf '\n'
+    if [ "$_acted" -eq 0 ]; then
+        printf 'Nothing to unwire — no memory-hive integrations found.\n'
+    elif [ "$_apply" -eq 0 ]; then
+        printf '%s action(s) pending. Run `memory-hive uninstall --apply` to execute.\n' "$_acted"
+    else
+        printf 'Unwired. Hive data is untouched at %s.\n' "$HIVE_DIR"
+        printf 'Full removal when ready:  rm -rf %s\n' "$INSTALL_DIR"
+    fi
+}
+
 # memory-hive guide [topic]
 # Print the platform-neutral operating guide rendered with this install's
 # real paths. Same body the Claude Code Agent Skill ships with — this verb
@@ -1865,6 +2043,7 @@ Lifecycle:
   memory-hive archive <name>
   memory-hive register
   memory-hive apply [--force]
+  memory-hive uninstall [--apply]
 
 Health and maintenance:
   memory-hive status
@@ -7124,6 +7303,7 @@ case "$_verb" in
     learn)    mh_learn "$@" ;;
     capture)  mh_capture "$@" ;;
     mcp)      mh_mcp "$@" ;;
+    uninstall) mh_uninstall "$@" ;;
     reflect)  mh_reflect "$@" ;;
     seed)     mh_seed "$@" ;;
     help|-h|--help) mh_help "$@" ;;

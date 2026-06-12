@@ -371,12 +371,15 @@ silos you keep.
 ## Uninstalling
 
 ```bash
-rm -rf ~/.memory-hive
-rm -rf ~/.claude/skills/memory-hive
-# then open ~/.claude/CLAUDE.md and delete the block between
-# <!-- memory-hive:start --> and <!-- memory-hive:end -->
-# and remove the two hook entries marked `# memory-hive` from
-# ~/.claude/settings.json (under hooks.SessionStart and hooks.Stop)
+memory-hive uninstall          # dry-run: list every unwire action
+memory-hive uninstall --apply  # strip managed blocks from all platform
+                               # files, remove our hook entries from
+                               # ~/.claude/settings.json and
+                               # ~/.cursor/hooks.json (yours stay), remove
+                               # the Agent Skill and PATH shims
+rm -rf ~/.memory-hive          # optional final purge — hive data lives here
 ```
 
-That's it. No other files are modified.
+`uninstall` never touches hive data or user-authored content: managed
+blocks are removed between their markers, wholly-installer-owned files are
+deleted, everything else is preserved.
