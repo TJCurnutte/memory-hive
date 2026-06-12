@@ -124,6 +124,44 @@ memory-hive learn --agent <id> "<imperative rule>" --context "<where>" --kind pa
 passes `memory-hive lint` by construction, regardless of which model or
 harness invoked it.
 
+### The MCP server — any MCP client
+
+Tools that speak the Model Context Protocol (Claude Desktop/Code, Cursor,
+Goose, GitHub Copilot, ...) can skip files entirely and get the hive as
+native tools:
+
+```bash
+memory-hive mcp --config   # print this install's client config snippet
+```
+
+```json
+{
+  "mcpServers": {
+    "memory-hive": {
+      "command": "python3",
+      "args": ["~/.memory-hive/memory_hive_mcp.py"]
+    }
+  }
+}
+```
+
+The server (stdio, stdlib-python only) exposes `ask_hive` (ranked, cited
+retrieval over HyperRecall with a plain-search fallback), `hive_log`,
+`hive_learn`, `hive_capture`, and `hive_guide`. Retrieval and write-back
+stay lane-correct because every tool call goes through the same CLI verbs
+documented above. `memory-hive doctor` warns if the helper goes missing.
+
+### Ambient capture — memory without a ritual
+
+`memory-hive capture "<event>" [--source <name>] [--agent <id>]` appends a
+timestamped line to `hive/raw/<source>/YYYY-MM-DD.md` — the Tier-1
+append-only stream from `hive/raw/`'s convention. It is searchable via
+`query`/`recall` immediately and distilled by the curator later. The
+Claude Code SessionEnd hook feeds `hive/raw/sessions/` automatically, so a
+trace of every session exists even when the model never wrote back; other
+harnesses can do the same from cron or their own hook systems by calling
+the verb.
+
 ### Claude Code users
 
 If `~/.claude/` exists, the installer injects a managed fenced block

@@ -380,7 +380,7 @@ jobs:
               { echo "FAIL: wired boot block has no 'memory-hive guide' pointer" >&2; fail=1; }
 
           # Harness hooks: shipped + rendered.
-          for hk in session-start.sh stop-ritual.sh; do
+          for hk in session-start.sh stop-ritual.sh session-end.sh; do
               if [ ! -f "$INSTALL_DIR/hooks/$hk" ]; then
                   echo "FAIL: hook script missing: $INSTALL_DIR/hooks/$hk" >&2; fail=1
               elif grep -q '${HIVE_DIR}' "$INSTALL_DIR/hooks/$hk"; then
@@ -405,10 +405,12 @@ jobs:
               return n
           ss = count("SessionStart", "session-start.sh")
           st = count("Stop", "stop-ritual.sh")
+          se = count("SessionEnd", "session-end.sh")
           user = any("user-stop-hook" in str(k.get("command", ""))
                      for e in h.get("Stop", []) for k in e.get("hooks", []))
           assert ss == 1, "SessionStart memory-hive entries: %d" % ss
           assert st == 1, "Stop memory-hive entries: %d" % st
+          assert se == 1, "SessionEnd memory-hive entries: %d" % se
           assert user, "user Stop hook was lost"
           print("settings-merge-ok")
           PYCHK
@@ -451,6 +453,34 @@ jobs:
           else
               HOME="$FAKE_HOME" sh "$INSTALL_DIR/memory-hive" lint "$LRN" || { echo "FAIL: generated learning is not lint-clean" >&2; fail=1; }
           fi
+
+          # Ambient capture: timestamped event in the raw sessions stream.
+          HOME="$FAKE_HOME" sh "$INSTALL_DIR/memory-hive" capture "ci ambient event" > /dev/null || { echo "FAIL: capture verb exit" >&2; fail=1; }
+          CAPF="$INSTALL_DIR/hive/raw/sessions/$(date +%Y-%m-%d).md"
+          grep -q 'ci ambient event' "$CAPF" 2>/dev/null || { echo "FAIL: capture event not written to $CAPF" >&2; fail=1; }
+          # SessionEnd hook feeds the same stream.
+          printf '{"reason": "exit", "cwd": "/tmp/ci"}' | sh "$INSTALL_DIR/hooks/session-end.sh" || { echo "FAIL: session-end hook exit" >&2; fail=1; }
+          grep -q 'claude-code session ended' "$CAPF" 2>/dev/null || { echo "FAIL: session-end event not captured" >&2; fail=1; }
+
+          # MCP server: initialize, list tools, call hive_log over stdio.
+          printf '%s\n%s\n%s\n' \
+              '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05"}}' \
+              '{"jsonrpc":"2.0","id":2,"method":"tools/list"}' \
+              '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"hive_log","arguments":{"what":"mcp ci smoke"}}}' \
+              | MEMORY_HIVE_DIR="$INSTALL_DIR" python3 "$INSTALL_DIR/memory_hive_mcp.py" > /tmp/mh-mcp.out 2>/dev/null \
+              || { echo "FAIL: mcp server exited non-zero" >&2; fail=1; }
+          python3 - /tmp/mh-mcp.out <<'PYMCP' || { echo "FAIL: mcp responses invalid" >&2; fail=1; }
+          import json, sys
+          lines = [json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+          byid = {m["id"]: m for m in lines}
+          assert byid[1]["result"]["serverInfo"]["name"] == "memory-hive"
+          names = [t["name"] for t in byid[2]["result"]["tools"]]
+          for need in ("ask_hive", "hive_log", "hive_learn", "hive_capture", "hive_guide"):
+              assert need in names, "missing tool: " + need
+          assert byid[3]["result"]["isError"] is False, byid[3]
+          print("mcp-ok")
+          PYMCP
+          grep -q 'mcp ci smoke' "$INSTALL_DIR/hive/agents/main/log.md" || { echo "FAIL: mcp hive_log did not append" >&2; fail=1; }
 
           [ "$fail" -eq 0 ] || exit 1
           echo "Platform integration smoke OK"

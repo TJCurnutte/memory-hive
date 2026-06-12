@@ -82,6 +82,7 @@ make the harness enforce it mechanically:
 |---|---|---|
 | `SessionStart` (matcher `startup\|clear\|compact`) | `~/.memory-hive/hooks/session-start.sh` | Injects a token-budgeted hive bundle + `memory-hive guide` pointer into the session as additional context. Sessions boot hydrated even if the model never reads `CLAUDE.md`. |
 | `Stop` | `~/.memory-hive/hooks/stop-ritual.sh` | When a substantive session ends without a fresh dated line in the agent's `log.md`, blocks once with instructions to run the task-end ritual. `stop_hook_active` prevents loops; short transcripts are exempt. |
+| `SessionEnd` | `~/.memory-hive/hooks/session-end.sh` | Ambient capture: appends a timestamped session-ended event (reason, cwd) to `hive/raw/sessions/` via `memory-hive capture` — passive memory even when no ritual ran. |
 
 Both scripts fail open — missing hive, missing python3, unparseable input
 all exit 0 silently, never breaking a session. The agent id defaults to

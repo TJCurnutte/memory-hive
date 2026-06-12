@@ -206,7 +206,7 @@ fi
 # Install the helper scripts into the install dir so users can run them
 # locally without a curl round-trip. These are tools (not user content) and
 # we always keep them current with upstream.
-for helper in create-agent.sh update.sh install.sh check-compliance.sh memory-hive memory_hive_recall.py; do
+for helper in create-agent.sh update.sh install.sh check-compliance.sh memory-hive memory_hive_recall.py memory_hive_mcp.py; do
     _src="$TMP_DIR/memory-hive/$helper"
     [ -f "$_src" ] || continue
     cp "$_src" "$INSTALL_DIR/$helper"
@@ -977,6 +977,7 @@ install = os.environ["MEMORY_HIVE_INSTALL"]
 # entries, never anything the user wrote.
 ss_cmd = 'sh "%s/hooks/session-start.sh" # memory-hive' % install
 st_cmd = 'sh "%s/hooks/stop-ritual.sh" # memory-hive' % install
+se_cmd = 'sh "%s/hooks/session-end.sh" # memory-hive' % install
 
 data = {}
 if os.path.exists(path):
@@ -995,7 +996,9 @@ if not isinstance(hooks, dict):
 def ours(cmd):
     cmd = str(cmd)
     return "# memory-hive" in cmd and (
-        "/hooks/session-start.sh" in cmd or "/hooks/stop-ritual.sh" in cmd
+        "/hooks/session-start.sh" in cmd
+        or "/hooks/stop-ritual.sh" in cmd
+        or "/hooks/session-end.sh" in cmd
     )
 
 
@@ -1022,6 +1025,7 @@ def ensure(event, matcher, cmd):
 
 ensure("SessionStart", "startup|clear|compact", ss_cmd)
 ensure("Stop", None, st_cmd)
+ensure("SessionEnd", None, se_cmd)
 
 tmp = path + ".memhive.tmp"
 with open(tmp, "w", encoding="utf-8") as f:

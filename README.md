@@ -172,6 +172,8 @@ For the full governance model, see [HIVE_ARCHITECTURE.md](HIVE_ARCHITECTURE.md).
 | **Install-once CLI** | Day-one UX is `install`, `status`, optional `add`, `search`, `recall`, `guide`, `log`, `learn`, and periodic `update`. |
 | **Maintenance wrapper** | `memory-hive maintain` runs registry/citation refresh, recall index maintenance, and the Optimizer pass. |
 | **HyperRecall / TokenFS** | Local SQLite/FTS5 recall index, stable HiveCodes, cited bundles, cache, stale detection, changed-file-only updates, and skill routing. |
+| **MCP server** | `memory-hive mcp` serves the hive to any MCP client (Claude, Cursor, Goose, Copilot): `ask_hive` retrieval plus `hive_log`/`hive_learn`/`hive_capture` write-back — no boot block needed. |
+| **Ambient capture** | `memory-hive capture` + a SessionEnd hook append timestamped workstream events to `hive/raw/` — passive memory that recall and the curator can use even when no ritual ran. |
 | **Prompt Optimizer addon** | Planned Memory Hive addon that compiles rough operator prompts into Hive-backed internal work orders before execution. |
 | **Semver release history** | Versioned GitHub Releases stay readable: `v1.1.0`, `v0.4.1`, and so on. |
 
@@ -196,7 +198,9 @@ Normal users should not need these during onboarding. They remain available for 
 
 **HyperRecall** — `recall query`, `recall bundle`, `recall build`, `recall update`, `recall doctor`, `recall stats`, `hyper`.
 
-**Write-back** — `log`, `learn` (the task-end ritual as commands; lint-valid by construction).
+**Write-back** — `log`, `learn`, `capture` (the task-end ritual and ambient stream as commands; lint-valid by construction).
+
+**MCP** — `mcp`, `mcp --config` (serve ask/log/learn/capture/guide to any MCP client).
 
 **Curator workflow** — `curate`, `promote`, `confidence`, `dedup`, `conflicts`, `stale`, `lint`, `tag`, `tags`, `citations`, `reflect`, `seed`.
 
