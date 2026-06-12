@@ -1,0 +1,62 @@
+# One-shot: cut the v1.6.0 release from a branch push. Same pattern that
+# published v1.3.0-v1.5.0; idempotent, removed once live.
+name: Cut v1.6.0 (one-shot)
+
+on:
+  push:
+    branches:
+      - "claude/busy-cannon-806v4m"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: cut-v160
+  cancel-in-progress: false
+
+jobs:
+  cut:
+    name: Tag + publish v1.6.0
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Create tag and release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: v1.6.0
+          TARGET: 06fdf05de93a1646a1874b5074e00b98df989d47
+        run: |
+          set -eu
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists — nothing to do."
+            exit 0
+          fi
+          VERSION="${TAG#v}"
+          NOTES="$RUNNER_TEMP/notes.md"
+          awk -v v="$VERSION" '
+            $0 ~ "^## \\["v"\\]" { found=1; next }
+            found && /^## \[/ { exit }
+            found { print }
+          ' CHANGELOG.md > "$NOTES"
+          if ! grep -q '[^[:space:]]' "$NOTES"; then
+            echo "No CHANGELOG entry for [$VERSION]" >&2
+            exit 1
+          fi
+          PREV="$(git tag --sort=-v:refname | grep '^v' | grep -v "^${TAG}$" | head -n 1 || true)"
+          if [ -n "$PREV" ]; then
+            {
+              printf '\n\n---\n\n### Commits since %s\n\n' "$PREV"
+              git log --pretty=format:'- %s (%h)' "$PREV..$TARGET"
+              printf '\n'
+            } >> "$NOTES"
+          fi
+          gh release create "$TAG" \
+            --target "$TARGET" \
+            --title "$TAG" \
+            --notes-file "$NOTES"
+          echo "Published $TAG at $TARGET"
