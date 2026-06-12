@@ -615,6 +615,36 @@ jobs:
           sh "$INSTALL_DIR/memory-hive" uninstall --apply | grep -q 'Nothing to unwire' || { echo "FAIL: second uninstall not clean"; exit 1; }
           echo "Uninstall smoke OK"
 
+      - name: Hive sync smoke (two machines, union merge)
+        shell: bash
+        run: |
+          set -eu
+          export MEMORY_HIVE_REPO="$(pwd)"
+          BARE="$(mktemp -d)"; git init -q --bare "$BARE/hive.git"
+          A="$(mktemp -d)"; mkdir -p "$A/.claude"
+          HOME="$A" MEMORY_HIVE_DIR="$A/.memory-hive" sh install.sh < /dev/null > /dev/null 2>&1
+          HOME="$A" sh "$A/.memory-hive/memory-hive" sync setup "$BARE/hive.git" | grep -q 'hive repo ready' || { echo "FAIL: A setup"; exit 1; }
+          HOME="$A" sh "$A/.memory-hive/memory-hive" log "machine A work" > /dev/null
+          HOME="$A" sh "$A/.memory-hive/memory-hive" sync push > /dev/null
+          B="$(mktemp -d)"; mkdir -p "$B/.claude"
+          HOME="$B" MEMORY_HIVE_DIR="$B/.memory-hive" sh install.sh < /dev/null > /dev/null 2>&1
+          HOME="$B" sh "$B/.memory-hive/memory-hive" sync setup "$BARE/hive.git" | grep -q 'joined existing' || { echo "FAIL: B join"; exit 1; }
+          grep -q 'machine A work' "$B/.memory-hive/hive/agents/main/log.md" || { echo "FAIL: B missing A line"; exit 1; }
+          HOME="$B" sh "$B/.memory-hive/memory-hive" log "machine B work" > /dev/null
+          HOME="$A" sh "$A/.memory-hive/memory-hive" log "machine A second" > /dev/null
+          HOME="$B" sh "$B/.memory-hive/memory-hive" sync push > /dev/null
+          HOME="$A" sh "$A/.memory-hive/memory-hive" sync pull > /dev/null
+          grep -q 'machine B work' "$A/.memory-hive/hive/agents/main/log.md" || { echo "FAIL: union lost B line"; exit 1; }
+          grep -q 'machine A second' "$A/.memory-hive/hive/agents/main/log.md" || { echo "FAIL: union lost A line"; exit 1; }
+          HOME="$A" sh "$A/.memory-hive/memory-hive" sync push > /dev/null
+          HOME="$B" sh "$B/.memory-hive/memory-hive" sync pull > /dev/null
+          grep -q 'machine A second' "$B/.memory-hive/hive/agents/main/log.md" || { echo "FAIL: no convergence"; exit 1; }
+          git -C "$B/.memory-hive/hive" ls-files | grep -q '.checkpoints' && { echo "FAIL: checkpoints synced"; exit 1; }
+          # Nested-repo refusal: a hive inside another repo must not sync.
+          DEV="$(mktemp -d)"; git init -q "$DEV"; mkdir -p "$DEV/sub/hive/agents/main"; touch "$DEV/sub/hive/index.md"
+          HOME="$DEV" MEMORY_HIVE_DIR="$DEV/sub" sh memory-hive sync setup "$BARE/hive.git" 2>&1 | grep -q 'inside another git repository' || { echo "FAIL: nested refusal missing"; exit 1; }
+          echo "Hive sync smoke OK"
+
       - name: Platform integration smoke — opt-out
         shell: bash
         run: |

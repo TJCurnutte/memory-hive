@@ -174,6 +174,7 @@ For the full governance model, see [HIVE_ARCHITECTURE.md](HIVE_ARCHITECTURE.md).
 | **HyperRecall / TokenFS** | Local SQLite/FTS5 recall index, stable HiveCodes, cited bundles, cache, stale detection, changed-file-only updates, and skill routing. |
 | **MCP server** | `memory-hive mcp` serves the hive to any MCP client (Claude, Cursor, Goose, Copilot): `ask_hive` retrieval plus `hive_log`/`hive_learn`/`hive_capture` write-back — no boot block needed. |
 | **Ambient capture** | `memory-hive capture` + a SessionEnd hook append timestamped workstream events to `hive/raw/` — passive memory that recall and the curator can use even when no ritual ran. |
+| **Multi-machine sync** | `memory-hive sync setup\|push\|pull\|status` over any private git remote: union-merged append-only surfaces, checkpoint-before-pull, machine-local artifacts excluded. One hive across every box you run agents on. |
 | **Prompt Optimizer addon** | Planned Memory Hive addon that compiles rough operator prompts into Hive-backed internal work orders before execution. |
 | **Semver release history** | Versioned GitHub Releases stay readable: `v1.1.0`, `v0.4.1`, and so on. |
 
