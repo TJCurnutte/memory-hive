@@ -6,6 +6,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [1.6.0] — 2026-06-12 — `Cursor falls in line`
+
 ### Added
 
 - Cursor harness hooks, wired into `~/.cursor/hooks.json` (version 1) at
