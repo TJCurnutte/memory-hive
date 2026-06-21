@@ -23,9 +23,20 @@ REPORT_DIR="${LOOP_REPORT_DIR:-$REPO/reports/memory-hive-loop}"
 
 log() { printf '[loop] %s\n' "$*"; }
 
+_hive_present() {
+    _dir="$1"
+    if [ -d "$_dir/agents" ] || [ -d "$_dir/learnings" ] || [ -f "$_dir/index.md" ]; then
+        return 0
+    fi
+    if [ -d "$_dir/hive/agents" ] || [ -d "$_dir/hive/learnings" ] || [ -f "$_dir/hive/index.md" ]; then
+        return 0
+    fi
+    return 1
+}
+
 # 1. Ensure a hive exists. If none, install a throwaway one from this working
 #    copy so the loop is self-contained (used by CI / first run).
-if [ ! -d "$HIVE_DIR/hive" ]; then
+if ! _hive_present "$HIVE_DIR"; then
     log "no hive at $HIVE_DIR — installing a throwaway one from $REPO"
     mkdir -p "$HIVE_DIR"
     MEMORY_HIVE_REPO="$REPO" \

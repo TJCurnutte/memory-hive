@@ -23,15 +23,22 @@ from pathlib import Path
 from typing import Any
 
 
-def _load_recall(repo_root: Path) -> Any:
-    module_path = repo_root / "memory_hive_recall.py"
-    spec = importlib.util.spec_from_file_location("memory_hive_recall_loop", module_path)
-    if spec is None or spec.loader is None:
-        raise RuntimeError(f"cannot load {module_path}")
-    module = importlib.util.module_from_spec(spec)
-    sys.modules[spec.name] = module
-    spec.loader.exec_module(module)
-    return module
+def _load_recall(repo_root: Path, install_dir: Path | None = None) -> Any:
+    candidates: list[Path] = []
+    if install_dir is not None:
+        candidates.append(install_dir / "memory_hive_recall.py")
+    candidates.append(repo_root / "memory_hive_recall.py")
+    for module_path in candidates:
+        if not module_path.is_file():
+            continue
+        spec = importlib.util.spec_from_file_location("memory_hive_recall_loop", module_path)
+        if spec is None or spec.loader is None:
+            continue
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[spec.name] = module
+        spec.loader.exec_module(module)
+        return module
+    raise RuntimeError(f"cannot load recall helper from {', '.join(str(p) for p in candidates)}")
 
 
 def _refresh_index(recall: Any, hive: Path) -> dict[str, Any]:
@@ -68,12 +75,16 @@ def resolve_hive_root(path: Path) -> Path:
     for candidate in (path, path / "hive"):
         if (candidate / "agents").is_dir() or (candidate / "learnings").is_dir() or (candidate / "index.md").exists():
             return candidate
+    nested = path / "hive"
+    if nested.is_dir():
+        return nested
     return path
 
 
 def collect_usage(repo_root: Path, hive: Path) -> dict[str, Any]:
-    hive = resolve_hive_root(Path(hive).expanduser().resolve())
-    recall = _load_recall(repo_root)
+    install_dir = Path(hive).expanduser().resolve()
+    hive = resolve_hive_root(install_dir)
+    recall = _load_recall(repo_root, install_dir)
     refresh = _refresh_index(recall, hive)
 
     status = recall.index_status(hive)
@@ -211,7 +222,9 @@ def render_markdown(data: dict[str, Any]) -> str:
     lines.append("")
     lines.append(f"- Raw learnings captured: **{lp['raw']}**")
     lines.append(f"- Distilled patterns promoted: **{lp['distilled']}**")
-    lines.append(f"- Promotion ratio (distilled / raw): **{lp['promotion_ratio']}**")
+    ratio = lp["promotion_ratio"]
+    ratio_label = "n/a" if ratio is None else str(ratio)
+    lines.append(f"- Promotion ratio (distilled / raw): **{ratio_label}**")
     lines.append("")
     lines.append("## Health")
     lines.append("")
