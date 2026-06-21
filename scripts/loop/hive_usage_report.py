@@ -160,6 +160,39 @@ def collect_usage(repo_root: Path, hive: Path) -> dict[str, Any]:
     }
 
 
+def compute_trend(current: dict[str, Any], baseline: dict[str, Any]) -> dict[str, Any]:
+    """Deltas between this iteration and the previous one.
+
+    Lets the hourly loop show whether overall use of the hive is improving
+    (more memory captured, more learnings distilled, fewer stale files).
+    """
+    cc, bc = current["corpus"], baseline.get("corpus", {})
+    cl, bl = current["learning_pipeline"], baseline.get("learning_pipeline", {})
+    ch, bh = current["health"], baseline.get("health", {})
+
+    def d(a: Any, b: Any) -> int:
+        return int(a or 0) - int(b or 0)
+
+    cur_agents = {a["agent"] for a in current["platforms"]["per_agent"]}
+    base_agents = {a["agent"] for a in baseline.get("platforms", {}).get("per_agent", [])}
+    new_silos = sorted(a for a in (cur_agents - base_agents) if a not in ("-", ""))
+
+    return {
+        "baseline_generated_at": baseline.get("generated_at"),
+        "files": d(cc.get("files"), bc.get("files")),
+        "chunks": d(cc.get("chunks"), bc.get("chunks")),
+        "est_tokens": d(cc.get("est_tokens"), bc.get("est_tokens")),
+        "raw_learnings": d(cl.get("raw"), bl.get("raw")),
+        "distilled": d(cl.get("distilled"), bl.get("distilled")),
+        "stale_count": d(ch.get("stale_count"), bh.get("stale_count")),
+        "new_silos": new_silos,
+    }
+
+
+def _signed(n: int) -> str:
+    return f"+{n:,}" if n > 0 else f"{n:,}"
+
+
 def _bar(value: int, peak: int, width: int = 24) -> str:
     if peak <= 0:
         return ""
@@ -181,6 +214,24 @@ def render_markdown(data: dict[str, Any]) -> str:
         f"in `{data['index_refresh']['ms']} ms`"
     )
     lines.append("")
+    trend = data.get("trend")
+    if trend:
+        lines.append("## Trend since last run")
+        lines.append("")
+        lines.append(f"- Baseline: `{trend.get('baseline_generated_at')}`")
+        lines.append("")
+        lines.append("| Metric | Δ |")
+        lines.append("|---|---:|")
+        lines.append(f"| Files indexed | {_signed(trend['files'])} |")
+        lines.append(f"| Chunks | {_signed(trend['chunks'])} |")
+        lines.append(f"| Estimated tokens | {_signed(trend['est_tokens'])} |")
+        lines.append(f"| Raw learnings | {_signed(trend['raw_learnings'])} |")
+        lines.append(f"| Distilled patterns | {_signed(trend['distilled'])} |")
+        lines.append(f"| Stale files | {_signed(trend['stale_count'])} |")
+        lines.append("")
+        if trend["new_silos"]:
+            lines.append("- New silos: " + ", ".join(f"`{s}`" for s in trend["new_silos"]))
+            lines.append("")
     lines.append("## Corpus")
     lines.append("")
     lines.append("| Metric | Value |")
@@ -234,6 +285,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--json", dest="json_path")
     parser.add_argument("--markdown", dest="md_path")
+    parser.add_argument(
+        "--baseline",
+        dest="baseline_path",
+        help="prior snapshot JSON to diff against for a trend section",
+    )
     args = parser.parse_args(argv)
 
     repo_root = Path(args.repo).resolve()
@@ -243,6 +299,16 @@ def main(argv: list[str] | None = None) -> int:
         return 2
 
     data = collect_usage(repo_root, hive)
+
+    if args.baseline_path:
+        baseline_file = Path(args.baseline_path)
+        if baseline_file.is_file():
+            try:
+                baseline = json.loads(baseline_file.read_text(encoding="utf-8"))
+                data["trend"] = compute_trend(data, baseline)
+            except (json.JSONDecodeError, KeyError, OSError):
+                pass
+
     md = render_markdown(data)
 
     if args.json_path:

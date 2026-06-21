@@ -59,6 +59,40 @@ class LoopUsageReportTests(unittest.TestCase):
         self.assertIn("## Memory footprint per platform / agent", md)
         self.assertIn("## Learning pipeline", md)
 
+    def test_compute_trend_reports_deltas_and_new_silos(self):
+        current = self.report.collect_usage(REPO_ROOT, self.base)
+        baseline = {
+            "generated_at": "2026-06-21T00:00:00+00:00",
+            "corpus": {
+                "files": current["corpus"]["files"] - 2,
+                "chunks": current["corpus"]["chunks"] - 5,
+                "est_tokens": current["corpus"]["est_tokens"] - 50,
+            },
+            "learning_pipeline": {"raw": 0, "distilled": 0},
+            "health": {"stale_count": 3},
+            "platforms": {"per_agent": [{"agent": "main"}]},
+        }
+        trend = self.report.compute_trend(current, baseline)
+        self.assertEqual(trend["files"], 2)
+        self.assertEqual(trend["chunks"], 5)
+        self.assertEqual(trend["est_tokens"], 50)
+        self.assertEqual(trend["raw_learnings"], current["learning_pipeline"]["raw"])
+        self.assertEqual(trend["stale_count"], -3)
+        self.assertIn("hermes", trend["new_silos"])
+        self.assertNotIn("-", trend["new_silos"])
+
+    def test_render_includes_trend_section_when_present(self):
+        data = self.report.collect_usage(REPO_ROOT, self.base)
+        data["trend"] = {
+            "baseline_generated_at": "2026-06-21T00:00:00+00:00",
+            "files": 1, "chunks": 2, "est_tokens": 3,
+            "raw_learnings": 1, "distilled": 0, "stale_count": 0,
+            "new_silos": ["codex"],
+        }
+        md = self.report.render_markdown(data)
+        self.assertIn("## Trend since last run", md)
+        self.assertIn("`codex`", md)
+
 
 if __name__ == "__main__":
     unittest.main()

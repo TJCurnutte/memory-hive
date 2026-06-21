@@ -12,7 +12,10 @@ the overall use of the hive** and records what changed.
    citation refresh, recall-index maintenance, and the curator Optimizer.
 3. Regenerates a usage-analytics snapshot (`scripts/loop/hive_usage_report.py`):
    corpus size, per-platform/agent memory footprint, recall-index health,
-   raw→distilled learning pipeline, and stale signal.
+   raw→distilled learning pipeline, and stale signal. When a previous snapshot
+   exists it also diffs against it and adds a **"Trend since last run"** section
+   (Δ files / chunks / tokens / learnings / stale, plus newly-added silos), so
+   each hourly run shows whether overall use of the hive is improving.
 
 Snapshots land in `reports/memory-hive-loop/` (`latest.md`, `latest.json`, plus
 timestamped history). The script is deterministic, idempotent, and **never

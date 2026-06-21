@@ -49,11 +49,16 @@ sh "$REPO/memory-hive" maintain </dev/null >/dev/null 2>&1 || log "maintain skip
 ts="$(date -u +%Y%m%dT%H%M%SZ)"
 mkdir -p "$REPORT_DIR"
 log "writing usage snapshot for $ts"
-python3 "$REPO/scripts/loop/hive_usage_report.py" \
-    --repo "$REPO" \
-    --hive "$HIVE_DIR" \
+
+# Diff against the previous run (latest.json is still the prior snapshot here —
+# it is only overwritten after this generation step) so the report shows trends.
+set -- --repo "$REPO" --hive "$HIVE_DIR" \
     --json "$REPORT_DIR/usage-$ts.json" \
     --markdown "$REPORT_DIR/usage-$ts.md"
+if [ -f "$REPORT_DIR/latest.json" ]; then
+    set -- "$@" --baseline "$REPORT_DIR/latest.json"
+fi
+python3 "$REPO/scripts/loop/hive_usage_report.py" "$@"
 
 cp "$REPORT_DIR/usage-$ts.json" "$REPORT_DIR/latest.json"
 cp "$REPORT_DIR/usage-$ts.md" "$REPORT_DIR/latest.md"
