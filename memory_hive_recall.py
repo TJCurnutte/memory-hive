@@ -761,7 +761,10 @@ def compact_snippet(text: str) -> str:
             cells = [c.strip() for c in stripped.strip("|").split("|")]
             if all(c and set(c) <= set("-: ") for c in cells):
                 continue  # markdown table separator row: pure formatting
-            out.append("| " + " | ".join(cells) + " |")
+            padded = "| " + " | ".join(cells) + " |"
+            collapsed = _WS_RUN_RE.sub(" ", stripped)
+            # Never let re-padding inflate an already-tight row.
+            out.append(padded if len(padded) <= len(collapsed) else collapsed)
             continue
         if _is_heading(line) or _is_log_line(line):
             flush()

@@ -52,6 +52,19 @@ class CompactSnippetTests(unittest.TestCase):
         compact = self.recall.compact_snippet(raw)
         self.assertEqual(compact, "alpha beta gamma delta epsilon zeta")
 
+    def test_compaction_never_increases_length(self):
+        # A token-efficiency pass must not inflate any snippet, including
+        # already-tight tables with no cell padding.
+        samples = [
+            "|a|b|\n|c|d|",
+            "| padded | row |\n|--------|-----|\n| x | y |",
+            "## H\n\nwrapped\nprose\nlines\n\n- bullet\n  continuation\n",
+            "```\n| not a table |\n--- not sep ---\n```",
+            "",
+        ]
+        for s in samples:
+            self.assertLessEqual(len(self.recall.compact_snippet(s)), len(s), msg=repr(s))
+
 
 class BundleDedupeTests(unittest.TestCase):
     def setUp(self):
