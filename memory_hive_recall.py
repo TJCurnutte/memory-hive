@@ -718,16 +718,101 @@ def _estimated_tokens(text: str) -> int:
     return int(math.ceil(len(text) / 4))
 
 
-def bundle(hive_root: str | os.PathLike[str], text: str, *, max_tokens: int = 1200, for_agent: str | None = None) -> BundleResult:
+_WS_RUN_RE = re.compile(r"[ \t]{2,}")
+
+
+def compact_snippet(text: str) -> str:
+    """Strip token-wasting formatting from a recall snippet without losing terms.
+
+    Recall bundles are billed by the token, but Markdown carries a lot of
+    non-informative overhead: wrapped prose lines, indented bullet
+    continuations, table cell padding, separator rows, and trailing/again-blank
+    lines. This reflows that overhead away while preserving every query-relevant
+    word (and fenced code blocks verbatim), so recall is unchanged but the
+    rendered snippet is cheaper.
+    """
+    out: list[str] = []
+    current = ""
+    in_code = False
+
+    def flush() -> None:
+        nonlocal current
+        if current.strip():
+            out.append(_WS_RUN_RE.sub(" ", current.strip()))
+        current = ""
+
+    for line in text.split("\n"):
+        if line.lstrip().startswith("```"):
+            flush()
+            in_code = not in_code
+            out.append(line.rstrip())
+            continue
+        if in_code:
+            out.append(line.rstrip())
+            continue
+        stripped = line.strip()
+        if not stripped:
+            flush()
+            if out and out[-1] != "":
+                out.append("")
+            continue
+        if stripped.startswith("|"):
+            flush()
+            cells = [c.strip() for c in stripped.strip("|").split("|")]
+            if all(c and set(c) <= set("-: ") for c in cells):
+                continue  # markdown table separator row: pure formatting
+            out.append("| " + " | ".join(cells) + " |")
+            continue
+        if _is_heading(line) or _is_log_line(line):
+            flush()
+            out.append(_WS_RUN_RE.sub(" ", stripped))
+            continue
+        if _is_bullet(line):
+            flush()
+            current = stripped  # bullet starts a logical line; continuations join it
+            continue
+        current = f"{current} {stripped}" if current else stripped
+    flush()
+    while out and out[0] == "":
+        out.pop(0)
+    while out and out[-1] == "":
+        out.pop()
+    return "\n".join(out)
+
+
+def _token_set(text: str) -> frozenset[str]:
+    return frozenset(w.lower() for w in WORD_RE.findall(text))
+
+
+def _is_near_duplicate(tokens: frozenset[str], seen: list[frozenset[str]], threshold: float = 0.85) -> bool:
+    """Jaccard near-duplicate check; redundant copies add tokens, not recall."""
+    if not tokens:
+        return False
+    for prev in seen:
+        union = len(tokens | prev)
+        if union and len(tokens & prev) / union >= threshold:
+            return True
+    return False
+
+
+def bundle(hive_root: str | os.PathLike[str], text: str, *, max_tokens: int = 1200, for_agent: str | None = None, compact: bool = True, dedupe: bool = True) -> BundleResult:
     results = query(hive_root, text, limit=20, for_agent=for_agent)
     lines = [f"HiveCode Recall Bundle: {text}"]
     kept: list[QueryResult] = []
+    seen: list[frozenset[str]] = []
     for r in results:
-        entry = f"\n[{r.code}] {r.citation.rel_path}:{r.citation.start_line}-{r.citation.end_line}\n{r.snippet.strip()}\n"
+        snippet = compact_snippet(r.snippet) if compact else r.snippet.strip()
+        if dedupe:
+            tokens = _token_set(snippet)
+            if _is_near_duplicate(tokens, seen):
+                continue
+        entry = f"\n[{r.code}] {r.citation.rel_path}:{r.citation.start_line}-{r.citation.end_line}\n{snippet}\n"
         candidate = "\n".join(lines) + entry
         if _estimated_tokens(candidate) <= max_tokens:
             lines.append(entry.strip())
             kept.append(r)
+            if dedupe:
+                seen.append(tokens)
         elif not kept:
             budget_chars = max(0, max_tokens * 4 - len("\n".join(lines)) - 120)
             clipped = entry[:budget_chars].rstrip()
