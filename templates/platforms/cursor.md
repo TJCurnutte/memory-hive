@@ -7,6 +7,12 @@
 Cursor reads user-level rules from `~/.cursor/rules/*.mdc`. The installer
 writes a single `memory-hive.mdc` file containing the managed block.
 
+## v2 orchestration
+
+Cursor agents must follow Workflow 0 from the shared guide before every
+substantive prompt. Use agent-id `cursor`; when fanning out workers, prefer
+Grok and Cursor/Composer family models when Cursor exposes them.
+
 MDC rules are always-on unless you attach scoping metadata. The file the
 installer writes has no glob scope, so the hive instructions apply to
 every project you open in Cursor.

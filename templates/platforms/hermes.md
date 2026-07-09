@@ -9,6 +9,13 @@ Hermes Agent (Nous Research) layers its system prompt as
 the managed block into `MEMORY.md` so every session loads the hive and repeats
 a small visible hive pull before substantive prompts/tasks.
 
+## v2 orchestration
+
+Hermes agents must follow Workflow 0 from the shared guide before every
+substantive prompt. Keep the platform's configured agent id; when fanning out
+workers from a host that exposes them, prefer Grok and Cursor/Composer family
+models before Claude/Codex fallbacks.
+
 Markers: `<!-- memory-hive:start -->` / `<!-- memory-hive:end -->`.
 Hermes caps `MEMORY.md` at ~2,200 characters by default
 (`memory_char_limit` in `~/.hermes/config.yaml`) — the block is about

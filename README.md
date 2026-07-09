@@ -43,6 +43,27 @@ Everything starts as local Markdown under `~/.memory-hive`. The optional HyperRe
 curl -fsSL https://hive.neural-forge.io/install.sh | sh
 ```
 
+## v2.0.0 Orchestration
+
+Workflow 0 runs before every substantive prompt unless the prompt opts out
+with `no-optimize`, `skip prompt optimize`, `MEMORY_HIVE_NO_OPTIMIZE`, or
+`<!-- mh:no-optimize -->`: platform detect → prompt-optimize → HyperRecall
+bundle → skills ensure → orchestrate. The IDE-selected model stays the
+planner; worker lanes prefer Grok and Cursor/Composer family models when
+available.
+
+Measured on this machine, 2026-07-09:
+
+| Baseline | Tokens into agent turn | Notes |
+|----------|------------------------|-------|
+| Naive full-boot corpus | 139,614 | index+registry+knowledge+distilled+silo heads |
+| v0.3.2-style HyperRecall bundle | 1,190 | `recall bundle` max 1200 |
+| v2.0.0 optimize+bundle | 1,005 | prompt-optimize + budgeted bundle |
+
+That is a 99.28% token reduction and 138.9× efficiency vs the naive full-boot
+baseline (`naive_tokens / v2_tokens`), with the claim methodology recorded by
+`memory-hive bench suite --json`.
+
 That first run does the work users previously had to stitch together by hand:
 
 - creates `~/.memory-hive`

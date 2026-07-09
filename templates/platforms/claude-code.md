@@ -4,6 +4,13 @@ Claude Code gets three Memory Hive surfaces installed together: a managed
 boot block (always-on contract), an Agent Skill (on-demand depth), and
 harness hooks (mechanical enforcement).
 
+## v2 orchestration
+
+Claude Code agents must follow Workflow 0 from the shared guide before every
+substantive prompt. Keep the platform's configured agent id; when fanning out
+workers from a host that exposes them, prefer Grok and Cursor/Composer family
+models before Claude/Codex fallbacks.
+
 ---
 
 ## Surface 1 — Managed block in `~/.claude/CLAUDE.md`

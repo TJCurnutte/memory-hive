@@ -693,11 +693,46 @@ def resolve_code(hive_root: str | os.PathLike[str], code: str) -> ResolveResult:
         row = con.execute("""SELECT ch.id AS chunk_id, co.code, co.checksum, ch.text, ch.start_line, ch.end_line, ch.start_byte, ch.end_byte, f.rel_path, f.kind, f.agent
                              FROM codes co JOIN chunks ch ON ch.id=co.chunk_id JOIN files f ON f.id=ch.file_id WHERE co.code=?""", (code,)).fetchone()
     if row is None:
-        raise KeyError(code)
+        return _resolve_path_lines(hive_root, code)
     path = Path(hive_root).resolve() / row["rel_path"]
     current = path.read_bytes()[int(row["start_byte"]):int(row["end_byte"])]
     stale = _sha256(current) != row["checksum"]
     return ResolveResult(int(row["chunk_id"]), code, _citation(row), _redact(current.decode("utf-8", errors="replace")), "STALE" if stale else "OK", "Rebuild the HiveCode index before using this citation." if stale else "Citation is current.", stale)
+
+
+def _resolve_path_lines(hive_root: str | os.PathLike[str], code: str) -> ResolveResult:
+    root = Path(hive_root).resolve()
+    match = re.match(r"^(.+):(\d+)(?:-(\d+))?$", code)
+    if match is None:
+        raise KeyError(code)
+    raw_path, start_raw, end_raw = match.groups()
+    start_line = int(start_raw)
+    end_line = int(end_raw or start_raw)
+    if start_line <= 0 or end_line < start_line:
+        raise KeyError(code)
+
+    path = Path(raw_path).expanduser()
+    if not path.is_absolute():
+        path = root / raw_path
+    path = path.resolve()
+    try:
+        rel_path = path.relative_to(root).as_posix()
+    except ValueError as exc:
+        raise KeyError(code) from exc
+    if not path.exists() or not path.is_file():
+        raise KeyError(code)
+
+    raw = path.read_bytes()
+    offsets = _line_offsets(raw)
+    line_count = len(raw.splitlines())
+    if start_line > line_count:
+        raise KeyError(code)
+    end_line = min(end_line, line_count)
+    start_byte, end_byte = _span(offsets, len(raw), start_line, end_line)
+    kind, agent = classify_file(rel_path)
+    text = raw[start_byte:end_byte].decode("utf-8", errors="replace")
+    citation = Citation(rel_path, start_line, end_line, start_byte, end_byte, agent, kind)
+    return ResolveResult(0, code, citation, _redact(text), "OK", "Citation is current.", False)
 
 
 def query_json(hive_root: str | os.PathLike[str], text: str, *, limit: int = 5, for_agent: str | None = None, use_fts: bool = True) -> dict[str, object]:
@@ -783,9 +818,28 @@ def _parse_skill_frontmatter(text: str) -> dict[str, str]:
     return meta
 
 
+def _default_skill_roots() -> list[tuple[str, Path]]:
+    return [
+        ("hermes", Path(os.environ.get("HERMES_SKILLS_DIR") or (Path.home() / ".hermes" / "skills"))),
+        ("cursor", Path.home() / ".cursor" / "skills"),
+        ("claude", Path.home() / ".claude" / "skills"),
+        ("codex", Path.home() / ".codex" / "skills"),
+        ("agents", Path.home() / ".agents" / "skills"),
+    ]
+
+
 def build_skill_index(hive_root: str | os.PathLike[str], *, skills_root: str | os.PathLike[str] | None = None) -> dict[str, int]:
     root = Path(hive_root).resolve()
-    skills = Path(skills_root or os.environ.get("HERMES_SKILLS_DIR") or (Path.home() / ".hermes" / "skills")).resolve()
+    if skills_root is not None:
+        skill_roots = [(Path(skills_root).expanduser().resolve().name, Path(skills_root).expanduser().resolve())]
+    else:
+        skill_roots = []
+        seen: set[Path] = set()
+        for label, path in _default_skill_roots():
+            resolved = path.expanduser().resolve()
+            if resolved.exists() and resolved not in seen:
+                seen.add(resolved)
+                skill_roots.append((label, resolved))
     with _connect_existing(root) as con:
         con.execute("DELETE FROM skills")
         try:
@@ -793,14 +847,16 @@ def build_skill_index(hive_root: str | os.PathLike[str], *, skills_root: str | o
         except sqlite3.OperationalError:
             pass
         count = 0
-        if skills.exists():
+        for label, skills in skill_roots:
+            if not skills.exists():
+                continue
             for path in sorted(skills.rglob("SKILL.md")):
                 text = path.read_text(encoding="utf-8")
                 meta = _parse_skill_frontmatter(text)
                 name = meta.get("name") or path.parent.name
-                desc = meta.get("description", "")
+                desc = f"[{label}] {meta.get('description', '')}".strip()
                 tags = meta.get("tags", "")
-                rel = path.relative_to(skills).as_posix()
+                rel = f"{label}/{path.relative_to(skills).as_posix()}"
                 sha = _sha256(text.encode("utf-8"))
                 cur = con.execute("INSERT INTO skills(name, rel_path, description, tags, text, sha256) VALUES(?, ?, ?, ?, ?, ?)", (name, rel, desc, tags, text, sha))
                 try:
@@ -868,6 +924,10 @@ def main(argv: list[str] | None = None) -> int:
     b.add_argument("--for-agent")
     b.add_argument("--json", action="store_true")
     b.add_argument("--cache", action="store_true")
+    e = sub.add_parser("expand")
+    e.add_argument("code")
+    e.add_argument("--hive")
+    e.add_argument("--json", action="store_true")
     sk = sub.add_parser("skills")
     sk.add_argument("action", choices=["build", "query"])
     sk.add_argument("query", nargs="?")
@@ -899,6 +959,13 @@ def main(argv: list[str] | None = None) -> int:
             else:
                 print(bundle(hive, ns.query, max_tokens=ns.max_tokens, for_agent=ns.for_agent).text)
             return 0
+        elif ns.cmd == "expand":
+            resolved = resolve_code(hive, ns.code)
+            if ns.json:
+                print(json.dumps(asdict(resolved), sort_keys=True))
+            else:
+                print(resolved.text)
+            return 0
         elif ns.cmd == "skills":
             if ns.action == "build":
                 payload = build_skill_index(hive, skills_root=ns.skills_root)
@@ -912,6 +979,10 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     except FileNotFoundError as exc:
         print(str(exc), file=sys.stderr)
+        return 2
+    except KeyError as exc:
+        missing = exc.args[0] if exc.args else "citation"
+        print(f"not found: {missing}", file=sys.stderr)
         return 2
 
 

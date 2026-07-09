@@ -6,6 +6,20 @@ Memory Hive is the durable memory layer on this machine. Markdown under
 installer could wire a shim). Work directly with files when reading or
 appending; use CLI verbs for search, recall, and curation.
 
+## Workflow 0 — Orchestrate (every substantive prompt)
+
+Unless the user prompt itself contains an opt-out marker
+(`no-optimize`, `skip prompt optimize`, `MEMORY_HIVE_NO_OPTIMIZE`,
+or `<!-- mh:no-optimize -->`), run this preflight before answering:
+
+1. `memory-hive platform detect --json` — know which IDE/runtime you are on.
+2. `memory-hive prompt-optimize "<user prompt>"` — replace your working prompt with the optimized form.
+3. `memory-hive recall bundle "<optimized prompt>" --for <id> --max-tokens 1200 --cache` — hydrate with HyperRecall, not a full hive dump.
+4. `memory-hive skills ensure "<optimized prompt>"` — match and install helpful local skills.
+5. `memory-hive orchestrate "<optimized prompt>"` — emit the plan JSON, then fan out with Task/subagents.
+
+Model preference for workers: prefer Grok and Cursor/Composer family models when the host IDE exposes them; fall back to Claude/Codex only when needed. The IDE-selected model is always the planner/orchestrator.
+
 ## Path map
 
 | Path | What it is | Who writes |
@@ -32,12 +46,13 @@ approval) before writing anywhere.
 Pull the smallest useful slice, with visible reads so the operator can
 audit that memory informed the work:
 
-1. Read `${HIVE_DIR}/index.md`.
-2. Read your `agents/<id>/memory.md` and recent `agents/<id>/log.md` entries.
-3. Add `knowledge/HUMAN_CONTEXT.md` when user preferences matter, and
+1. Prefer `memory-hive recall bundle "<prompt>" --for <id> --max-tokens 1200 --cache`.
+2. Expand specific HiveCodes with `memory-hive recall expand <code>` when the bundle points at needed detail.
+3. Read `${HIVE_DIR}/index.md` and your `agents/<id>/memory.md` / recent `agents/<id>/log.md` entries only when targeted recall is unavailable or insufficient.
+4. Add `knowledge/HUMAN_CONTEXT.md` when user preferences matter, and
    `learnings/distilled/patterns.md` / `mistakes.md` before risky or
    familiar-shaped work.
-4. Add `tasks/queue.md` when coordinating with other agents.
+5. Add `tasks/queue.md` when coordinating with other agents.
 
 Re-pull the relevant slice per turn for cross-session or operational
 prompts — hydration is not a one-time boot step.
@@ -48,10 +63,15 @@ Pick the cheapest verb that answers the question:
 
 | Need | Command |
 |---|---|
+| Optimize inbound prompt | `memory-hive prompt-optimize "..."` |
+| Orchestration plan | `memory-hive orchestrate "..."` |
+| Skill routing | `memory-hive skills ensure "..."` |
 | Simple term match | `memory-hive search "term"` |
 | Filtered match (silo/kind/regex) | `memory-hive query "term" --silo <id> --kind log` |
 | Ranked, cited context for a task | `memory-hive recall "task context"` |
-| Token-budgeted boot bundle | `memory-hive bundle --for <id> --max-tokens 2000` |
+| Token-budgeted boot bundle | `memory-hive recall bundle "task context" --for <id> --max-tokens 1200 --cache` |
+| Expand a HiveCode | `memory-hive recall expand <code>` |
+| Benchmark claims | `memory-hive bench suite --json` |
 
 `recall` builds or updates its index automatically — never rebuild by hand.
 Cite what you used (file paths) when the operator asks what memory informed

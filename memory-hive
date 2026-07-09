@@ -79,6 +79,19 @@ _mh_recall_helper() {
     return 1
 }
 
+# _mh_orchestrate_helper -> prints the installed orchestration helper path.
+_mh_orchestrate_helper() {
+    if [ -f "$INSTALL_DIR/memory_hive_orchestrate.py" ]; then
+        printf '%s' "$INSTALL_DIR/memory_hive_orchestrate.py"
+        return 0
+    fi
+    if [ -n "$SCRIPT_DIR" ] && [ -f "$SCRIPT_DIR/memory_hive_orchestrate.py" ]; then
+        printf '%s' "$SCRIPT_DIR/memory_hive_orchestrate.py"
+        return 0
+    fi
+    return 1
+}
+
 _mh_recall_arg_hive() {
     _fallback="$1"
     shift
@@ -123,6 +136,7 @@ mh_recall() {
 Usage:
   memory-hive recall "query text"             # search with automatic index maintenance
   memory-hive recall bundle "query text"      # prompt-ready cited bundle
+  memory-hive recall expand <code|path:lines> # expand a citation
 
 Advanced/debug:
   memory-hive recall build|update|doctor|stats|gc|bench [--json]
@@ -133,7 +147,7 @@ RECALLHELP
 
     _cmd="query"
     case "$1" in
-        build|update|doctor|stats|gc|bench|query|bundle|skills)
+        build|update|doctor|stats|gc|bench|query|bundle|expand|skills)
             _cmd="$1"
             shift
             ;;
@@ -2189,12 +2203,17 @@ Normal path:
   memory-hive add <name> --role coder Add another agent silo
   memory-hive search "term"           Search the hive
   memory-hive recall "query text"     Retrieve cited context; index is maintained automatically
+  memory-hive prompt-optimize "task"  Compress and structure a prompt before work
+  memory-hive platform detect --json  Detect the active agent platform/runtime
+  memory-hive orchestrate "task"      Build a v2 lane plan for substantive work
+  memory-hive skills ensure "task"    Match/install relevant local skills
   memory-hive guide [topic]           Print the agent operating guide (paths, write-back, lane rules)
   memory-hive log "did X"             Task-end ritual: append today's dated line to your silo log
   memory-hive learn "rule" --context "where"   Write a lint-valid raw learning to the shared pool
 
 That's it for day-one use. Agents read the hive on boot, write back after work,
-and `memory-hive update` handles periodic maintenance.
+and Workflow 0 runs platform detect -> prompt optimize -> HyperRecall bundle
+-> skills ensure -> orchestrate unless the prompt opts out.
 
 Advanced/debug:
   memory-hive help --advanced
@@ -2251,12 +2270,20 @@ HyperRecall / TokenFS:
   memory-hive recall "query text"
   memory-hive recall query "query text" [--json]
   memory-hive recall bundle "query text" [--for-agent <agent>] [--json]
+  memory-hive recall expand <code|path:lines> [--json]
   memory-hive recall build --json
   memory-hive recall update --json
   memory-hive recall doctor --json
   memory-hive recall stats --json
   memory-hive hyper ...
   Derived index: hive/.hivecode/index.sqlite
+
+Orchestration:
+  memory-hive prompt-optimize "task" [--json]
+  memory-hive platform detect [--json]
+  memory-hive orchestrate "task" [--json]
+  memory-hive skills match|ensure|build ...
+  memory-hive bench suite [--json]
 
 Curator workflow:
   memory-hive curate [--dry-run|--apply]
@@ -7491,6 +7518,80 @@ EOF
 }
 
 
+mh_prompt_optimize() {
+    _helper="$(_mh_orchestrate_helper)" || _mh_die "memory_hive_orchestrate.py helper missing under $INSTALL_DIR"
+    MEMORY_HIVE_DIR="$HIVE_DIR" INSTALL_DIR="$INSTALL_DIR" python3 "$_helper" prompt-optimize "$@"
+}
+
+mh_platform_detect() {
+    case "${1:-}" in
+        detect) shift ;;
+    esac
+    _helper="$(_mh_orchestrate_helper)" || _mh_die "memory_hive_orchestrate.py helper missing under $INSTALL_DIR"
+    MEMORY_HIVE_DIR="$HIVE_DIR" INSTALL_DIR="$INSTALL_DIR" python3 "$_helper" platform-detect "$@"
+}
+
+mh_orchestrate() {
+    _helper="$(_mh_orchestrate_helper)" || _mh_die "memory_hive_orchestrate.py helper missing under $INSTALL_DIR"
+    MEMORY_HIVE_DIR="$HIVE_DIR" INSTALL_DIR="$INSTALL_DIR" python3 "$_helper" orchestrate "$@"
+}
+
+mh_skills() {
+    case "${1:-}" in
+        build)
+            shift
+            mh_recall skills build "$@"
+            ;;
+        match)
+            shift
+            _helper="$(_mh_orchestrate_helper)" || _mh_die "memory_hive_orchestrate.py helper missing under $INSTALL_DIR"
+            MEMORY_HIVE_DIR="$HIVE_DIR" INSTALL_DIR="$INSTALL_DIR" python3 "$_helper" skills-match "$@"
+            ;;
+        install|ensure)
+            _action="$1"
+            shift
+            _helper="$(_mh_orchestrate_helper)" || _mh_die "memory_hive_orchestrate.py helper missing under $INSTALL_DIR"
+            if [ "$_action" = "install" ]; then
+                MEMORY_HIVE_DIR="$HIVE_DIR" INSTALL_DIR="$INSTALL_DIR" python3 "$_helper" skills-ensure "$@"
+            else
+                MEMORY_HIVE_DIR="$HIVE_DIR" INSTALL_DIR="$INSTALL_DIR" python3 "$_helper" skills-ensure "$@"
+            fi
+            ;;
+        -h|--help|"")
+            cat <<'SKILLSHELP'
+Usage:
+  memory-hive skills match <query>
+  memory-hive skills install <query>
+  memory-hive skills ensure <query>
+  memory-hive skills build
+SKILLSHELP
+            ;;
+        *)
+            _mh_die "Unknown skills subcommand: $1 (try memory-hive skills --help)"
+            ;;
+    esac
+}
+
+mh_bench() {
+    case "${1:-}" in
+        suite)
+            shift
+            _helper="$(_mh_orchestrate_helper)" || _mh_die "memory_hive_orchestrate.py helper missing under $INSTALL_DIR"
+            MEMORY_HIVE_DIR="$HIVE_DIR" INSTALL_DIR="$INSTALL_DIR" python3 "$_helper" bench-suite "$@"
+            ;;
+        -h|--help|"")
+            cat <<'BENCHHELP'
+Usage:
+  memory-hive bench suite [--json]
+BENCHHELP
+            ;;
+        *)
+            _mh_die "Unknown bench subcommand: $1 (try memory-hive bench --help)"
+            ;;
+    esac
+}
+
+
 # --- dispatch ----------------------------------------------------------------
 
 if [ $# -eq 0 ]; then
@@ -7528,6 +7629,11 @@ case "$_verb" in
     conflicts) mh_conflicts "$@" ;;
     query|search) mh_query "$@" ;;
     recall|hyper) mh_recall "$@" ;;
+    prompt-optimize|prompt_optimize) mh_prompt_optimize "$@" ;;
+    platform|platform-detect|platform_detect) mh_platform_detect "$@" ;;
+    orchestrate) mh_orchestrate "$@" ;;
+    skills)   mh_skills "$@" ;;
+    bench)    mh_bench "$@" ;;
     lint)     mh_lint "$@" ;;
     digest)   mh_digest "$@" ;;
     curate)   mh_curate "$@" ;;

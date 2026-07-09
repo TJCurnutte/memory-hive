@@ -6,6 +6,44 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [2.0.0] — 2026-07-09 — `Orchestrate · Optimize · Route`
+
+### Added
+
+- **Workflow 0 orchestration contract** in `templates/guide.md` and platform
+  boot docs: every substantive prompt runs platform detect → prompt-optimize
+  → HyperRecall bundle → skills ensure → orchestrate, unless the user prompt
+  itself opts out (`no-optimize`, `skip prompt optimize`,
+  `MEMORY_HIVE_NO_OPTIMIZE`, or `<!-- mh:no-optimize -->`).
+- New CLI verbs powered by `memory_hive_orchestrate.py`:
+  `prompt-optimize`, `platform detect`, `orchestrate`, `skills match|ensure|build`,
+  `bench suite`.
+- **HyperRecall `recall expand`** to resolve HiveCodes / path:lines.
+- Multi-root skill indexing across Cursor, Claude, Codex, Hermes, and
+  `~/.agents/skills`.
+- SessionStart hooks prefer `recall bundle --cache` over legacy mega-concat.
+- Reproducible `memory-hive bench suite` with dual baselines (naive full-boot
+  vs HyperRecall/v0.3.2-style) and JSONL history under
+  `hive/.hivecode/bench/history.jsonl`.
+
+### Measured (this machine, 2026-07-09)
+
+| Baseline | Tokens into agent turn | Notes |
+|----------|------------------------|-------|
+| Naive full-boot corpus | 139,614 | index+registry+knowledge+distilled+silo heads |
+| v0.3.2-style HyperRecall bundle | 1,190 | `recall bundle` max 1200 |
+| v2.0.0 optimize+bundle | 1,005 | prompt-optimize + budgeted bundle |
+
+- **99.28% token reduction** vs naive (≥70% faster agent-turn claim; methodology: token reduction dominates model latency).
+- **138.9× efficiency** vs naive (`naive_tokens / v2_tokens`, ≥2.2× / “120% more efficient”).
+- **Improved vs HyperRecall-only**: v2 bundle 969 ≤ v032 1190 tokens with orchestration metadata.
+- Warm HyperRecall wall clock ~46ms vs naive boot+grep ~83ms (local I/O; not the primary claim).
+
+### Changed
+
+- Installer/platform docs emphasize Grok/Cursor model preference for worker
+  lanes; IDE-selected model remains the planner.
+
 ## [1.9.0] — 2026-06-12 — `Receipts and resources`
 
 ### Added
