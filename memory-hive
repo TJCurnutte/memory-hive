@@ -1441,11 +1441,16 @@ mh_status() {
         _mh_die "Memory Hive is not installed at $INSTALL_DIR. Run the installer first."
     fi
 
+    _full=0
+    case "${1:-}" in
+        --full) _full=1; shift ;;
+    esac
+
     _agent_count="$(_mh_count_agent_silos_in "$_agents")"
     _raw_count="$(_mh_count_markdown_files "$_hive/learnings/raw")"
     _distilled_count="$(_mh_count_markdown_files "$_hive/learnings/distilled")"
-    _stale_count="0"
-    if [ -d "$HIVE_DIR" ]; then
+    _stale_count="skipped (fast)"
+    if [ "$_full" -eq 1 ] && [ -d "$HIVE_DIR" ]; then
         _stale_count="$(mh_stale --count 2>/dev/null | tr -dc '0-9' || printf '0')"
         [ -n "$_stale_count" ] || _stale_count=0
     fi
@@ -1459,8 +1464,8 @@ mh_status() {
         _helper_state="ready"
     fi
 
-    _doctor_status="not-run"
-    if [ -d "$HIVE_DIR" ]; then
+    _doctor_status="fast"
+    if [ "$_full" -eq 1 ] && [ -d "$HIVE_DIR" ]; then
         _doctor_tmp="$(mktemp -t mh-status-doctor.XXXXXX)"
         set +e
         mh_doctor > "$_doctor_tmp" 2>&1
@@ -2195,25 +2200,27 @@ mh_help() {
 
     if [ "$_advanced" -eq 0 ]; then
         cat <<'EOF'
-memory-hive — local-first memory for agent teams.
+memory-hive — local-first memory for any agent, model, IDE, or harness.
 
-Normal path:
-  memory-hive                         Show status (also the default with no args)
-  memory-hive update                  Refresh Memory Hive and run maintenance
+Three commands cover day-one use:
+  memory-hive                         Show fast status (default with no args)
+  memory-hive do "task"               Start work: optimize, recall, skills, plan, cohort
+  memory-hive done --agent <name>     Finish work: log + optional learning
+
+More:
+  memory-hive status --full           Full status including doctor/stale check
+  memory-hive cohort "task"           Generate a 25-agent swarm plan
   memory-hive add <name> --role coder Add another agent silo
   memory-hive search "term"           Search the hive
-  memory-hive recall "query text"     Retrieve cited context; index is maintained automatically
-  memory-hive prompt-optimize "task"  Compress and structure a prompt before work
-  memory-hive platform detect --json  Detect the active agent platform/runtime
-  memory-hive orchestrate "task"      Build a v2 lane plan for substantive work
+  memory-hive recall "query text"     Retrieve cited context
+  memory-hive prompt-optimize "task"  Compress and structure a prompt
   memory-hive skills ensure "task"    Match/install relevant local skills
-  memory-hive guide [topic]           Print the agent operating guide (paths, write-back, lane rules)
-  memory-hive log "did X"             Task-end ritual: append today's dated line to your silo log
-  memory-hive learn "rule" --context "where"   Write a lint-valid raw learning to the shared pool
+  memory-hive guide [topic]           Print the agent operating guide
+  memory-hive log "did X"             Append today's dated line to your silo log
+  memory-hive learn "rule" --context "where"   Write a lint-valid raw learning
+  memory-hive update                  Refresh Memory Hive and run maintenance
 
-That's it for day-one use. Agents read the hive on boot, write back after work,
-and Workflow 0 runs platform detect -> prompt optimize -> HyperRecall bundle
--> skills ensure -> orchestrate unless the prompt opts out.
+Everything else is still available under the hood.
 
 Advanced/debug:
   memory-hive help --advanced
@@ -7536,6 +7543,26 @@ mh_orchestrate() {
     MEMORY_HIVE_DIR="$HIVE_DIR" INSTALL_DIR="$INSTALL_DIR" python3 "$_helper" orchestrate "$@"
 }
 
+mh_do() {
+    _helper="$(_mh_orchestrate_helper)" || _mh_die "memory_hive_orchestrate.py helper missing under $INSTALL_DIR"
+    MEMORY_HIVE_DIR="$HIVE_DIR" INSTALL_DIR="$INSTALL_DIR" python3 "$_helper" do "$@"
+}
+
+mh_done() {
+    _helper="$(_mh_orchestrate_helper)" || _mh_die "memory_hive_orchestrate.py helper missing under $INSTALL_DIR"
+    MEMORY_HIVE_DIR="$HIVE_DIR" INSTALL_DIR="$INSTALL_DIR" python3 "$_helper" done "$@"
+}
+
+mh_cohort() {
+    _helper="$(_mh_orchestrate_helper)" || _mh_die "memory_hive_orchestrate.py helper missing under $INSTALL_DIR"
+    MEMORY_HIVE_DIR="$HIVE_DIR" INSTALL_DIR="$INSTALL_DIR" python3 "$_helper" cohort "$@"
+}
+
+mh_status_fast() {
+    _helper="$(_mh_orchestrate_helper)" || _mh_die "memory_hive_orchestrate.py helper missing under $INSTALL_DIR"
+    MEMORY_HIVE_DIR="$HIVE_DIR" INSTALL_DIR="$INSTALL_DIR" python3 "$_helper" status-fast "$@"
+}
+
 mh_skills() {
     case "${1:-}" in
         build)
@@ -7602,6 +7629,10 @@ fi
 _verb="$1"
 shift
 case "$_verb" in
+    do|run)   mh_do "$@" ;;
+    done|finish) mh_done "$@" ;;
+    cohort)   mh_cohort "$@" ;;
+    status-fast) mh_status_fast "$@" ;;
     status)   mh_status "$@" ;;
     update|upgrade) mh_update "$@" ;;
     maintain|maintenance) mh_maintain "$@" ;;

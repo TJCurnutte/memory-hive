@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Prompt orchestration helpers for Memory Hive v2.0.0.
+"""Prompt orchestration helpers for Memory Hive v3.0.0.
 
 Stdlib-only utilities that sit beside ``memory_hive_recall.py`` and compose
 prompt optimization, platform detection, recall bundles, skill routing, and a
@@ -19,7 +19,7 @@ import sys
 import time
 from typing import Any
 
-VERSION = "2.0.0"
+VERSION = "3.0.0"
 DEFAULT_QUERY = "orchestrate agent memory hydration and skill routing"
 
 OPT_OUT_MARKERS = (
@@ -156,8 +156,79 @@ def _critical_lines(text: str, *, limit: int = 10) -> list[str]:
     return critical
 
 
+def _strip_leading_filler(text: str) -> str:
+    """Remove politeness/filler from the start of the prompt recursively."""
+    patterns = (
+        r"(?i)^\s*(?:please[,]?\s+)",
+        r"(?i)^\s*(?:can|could|would)\s+you[,]?\s+",
+        r"(?i)^\s*(?:can|could|would)\s+you\s+please[,]?\s+",
+        r"(?i)^\s*i\s+was\s+wondering\s+if\s+",
+        r"(?i)^\s*i\s+(?:think|believe)\s+",
+        r"(?i)^\s*(?:maybe|perhaps|just)\s+",
+    )
+    cleaned = text
+    changed = True
+    while changed:
+        changed = False
+        for pattern in patterns:
+            new_cleaned = re.sub(pattern, "", cleaned, count=1)
+            if new_cleaned != cleaned:
+                cleaned = new_cleaned
+                changed = True
+                break
+    return cleaned.strip()
+
+
+def _extract_code_blocks(text: str) -> list[str]:
+    blocks: list[str] = []
+    for match in re.finditer(r"```[\s\S]*?```", text):
+        blocks.append(match.group(0))
+    return blocks
+
+
+def _sentences(text: str) -> list[str]:
+    return [s.strip() for s in re.split(r"(?<=[.!?])\s+", text) if s.strip()]
+
+
+def _classify_sentence(sentence: str) -> str | None:
+    s = sentence.lower()
+    constraint_kws = (
+        "must ", "must:", "only ", "only use", "do not", "don't", "never",
+        "always", "without", "with ", "using ", "stdlib", "no database",
+        "no api", "env ", "shebang", "no ", "except ", "but not",
+    )
+    output_kws = (
+        "output", "return a", "format:", "json", "markdown", "yaml",
+        "html", " as ", "produce ", "generate ", "print ", "log ",
+    )
+    success_kws = (
+        "success", "verify", "test ", "return ", "measure", "compute",
+        "append", "write", "make executable", "deploy", "push", "commit",
+        "validate", "ensure ", "check ",
+    )
+    for kw in constraint_kws:
+        if kw in s:
+            return "constraint"
+    for kw in output_kws:
+        if kw in s:
+            return "output"
+    for kw in success_kws:
+        if kw in s:
+            return "success"
+    return None
+
+
+def _is_goal_sentence(sentence: str) -> bool:
+    return any(v in sentence.lower() for v in (
+        "refactor", "build", "implement", "create", "write", "fix",
+        "update", "add", "remove", "ship", "make", "generate", "produce",
+        "do ", "do,", "do.", "solve", "handle", "process", "convert",
+        "migrate", "upgrade", "simplify", "optimize", "design",
+    ))
+
+
 def prompt_optimize(text: str) -> dict[str, object]:
-    """Return a deterministic optimized prompt payload."""
+    """Return a structured, intent-preserving optimized prompt."""
     original = text
     tokens_before = _estimated_tokens(original)
     if _contains_opt_out(text):
@@ -167,32 +238,55 @@ def prompt_optimize(text: str) -> dict[str, object]:
             "optimized": original,
             "tokens_before": tokens_before,
             "tokens_after": tokens_before,
+            "reduction_pct": 0.0,
         }
 
-    cleaned = _strip_filler(text)
-    goal = _first_sentence(cleaned) or "Complete the requested task."
-    constraints = _infer_bullets(
-        cleaned,
-        ("must", "only", "do not", "don't", "without", "stdlib", "use ", "match", "return", "exit", "env", "shebang"),
-    )
-    success = _infer_bullets(
-        cleaned,
-        ("success", "verify", "test", "return", "print", "exit", "measure", "compute", "append", "write", "make executable"),
-    )
-    critical = _critical_lines(original)
+    cleaned = _strip_leading_filler(text)
+    code_blocks = _extract_code_blocks(cleaned)
+    text_for_sentences = cleaned
+    for block in code_blocks:
+        text_for_sentences = text_for_sentences.replace(block, "")
+    sentences = _sentences(text_for_sentences)
+
+    constraints: list[str] = []
+    outputs: list[str] = []
+    success: list[str] = []
+    request: list[str] = []
+    goal = ""
+    goal_set = False
+
+    for sentence in sentences:
+        if sentence.startswith("```"):
+            continue
+        category = _classify_sentence(sentence)
+        is_goal = _is_goal_sentence(sentence)
+        if not goal_set and is_goal:
+            goal = sentence
+            goal_set = True
+            continue
+        if category == "constraint":
+            constraints.append(sentence)
+        elif category == "output":
+            outputs.append(sentence)
+        elif category == "success":
+            success.append(sentence)
+        else:
+            request.append(sentence)
+
+    if not goal:
+        goal = sentences[0] if sentences else "Complete the requested task."
 
     parts = [f"GOAL: {goal}"]
     if constraints:
-        parts.append("CONSTRAINTS:\n" + "\n".join(f"- {item}" for item in constraints))
+        parts.append("CONSTRAINTS:\n" + "\n".join(f"- {s}" for s in constraints))
+    if outputs:
+        parts.append("OUTPUT:\n" + "\n".join(f"- {s}" for s in outputs))
     if success:
-        parts.append("SUCCESS CRITERIA:\n" + "\n".join(f"- {item}" for item in success))
-    if critical:
-        parts.append("CRITICAL USER INTENT:\n" + "\n".join(f"- {item}" for item in critical))
-    if cleaned and cleaned != goal:
-        parts.append("REQUEST DETAILS:\n" + cleaned)
-    parts.append(
-        "Memory Hive preflight: run platform detect, recall bundle, skills ensure, orchestrate."
-    )
+        parts.append("SUCCESS CRITERIA:\n" + "\n".join(f"- {s}" for s in success))
+    if request:
+        parts.append("REQUEST DETAILS:\n" + "\n".join(f"- {s}" for s in request))
+    if code_blocks:
+        parts.append("EXAMPLES / CODE:\n" + "\n\n".join(code_blocks))
 
     optimized = "\n\n".join(parts).strip()
     tokens_after = _estimated_tokens(optimized)
@@ -411,7 +505,9 @@ def _template_matches(query: str, limit: int) -> list[dict[str, object]]:
 
 
 def skills_ensure(hive, query: str, *, install: bool = True, limit: int = 5) -> dict[str, object]:
-    """Match skills and copy missing well-known local templates when requested."""
+    """Match skills and copy missing well-known local templates to every
+    installed agent platform so the skill works no matter which IDE/model
+    the user switches to."""
     matched = skills_match(hive, query, limit=limit)
     installed: list[dict[str, str]] = []
     installed_names = _installed_skill_names()
@@ -423,13 +519,19 @@ def skills_ensure(hive, query: str, *, install: bool = True, limit: int = 5) -> 
             if name.lower() in installed_names or rel_path.lower() in installed_names:
                 continue
             source = Path(str(template["source"]))
-            dest_root = _primary_skill_root(create=True)
-            dest = dest_root / rel_path
-            if source.exists() and not dest.exists():
-                shutil.copytree(source, dest)
-                installed.append({"name": name, "path": str(dest)})
-                installed_names.add(name.lower())
-                installed_names.add(rel_path.lower())
+            # Install to the primary root (creating it if needed) and any
+            # other already-existing platform roots.
+            targets = [_primary_skill_root(create=True)]
+            for other in skills_roots():
+                if other not in targets:
+                    targets.append(other)
+            for dest_root in targets:
+                dest = dest_root / rel_path
+                if source.exists() and not dest.exists():
+                    shutil.copytree(source, dest)
+                    installed.append({"name": name, "path": str(dest)})
+            installed_names.add(name.lower())
+            installed_names.add(rel_path.lower())
 
     if installed:
         matched = skills_match(hive, query, limit=limit)
@@ -615,8 +717,196 @@ def _read_text_arg(value: str | None, file_value: str | None) -> str:
 def _print_payload(payload: object, *, as_json: bool) -> None:
     if as_json:
         print(json.dumps(_jsonable(payload), sort_keys=True))
+    elif isinstance(payload, (dict, list)):
+        print(json.dumps(_jsonable(payload), indent=2, sort_keys=True))
     else:
         print(payload)
+
+
+def _agent_dir(root: Path, agent_id: str) -> Path:
+    d = root / "agents" / agent_id
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _raw_dir(root: Path, agent_id: str) -> Path:
+    d = root / "learnings" / "raw" / agent_id
+    d.mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _slugify(text: str) -> str:
+    s = re.sub(r"[^\w\s-]", "", text).strip().lower()
+    return re.sub(r"[-\s]+", "-", s)[:80]
+
+
+def _now_iso() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def status_fast(hive=None):
+    root = _hive_root(hive)
+    agents_dir = root / "agents"
+    raw_dir = root / "learnings" / "raw"
+    distilled_dir = root / "learnings" / "distilled"
+    index_db = root / ".hivecode" / "index.sqlite"
+
+    def count_dirs(path: Path) -> int:
+        if not path.exists():
+            return 0
+        return sum(1 for p in path.iterdir() if p.is_dir())
+
+    def count_files(path: Path) -> int:
+        if not path.exists():
+            return 0
+        return sum(1 for p in path.rglob("*") if p.is_file())
+
+    last_maintained = None
+    last_file = root / ".last-maintained"
+    if last_file.exists():
+        last_maintained = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(last_file.stat().st_mtime))
+
+    return {
+        "version": VERSION,
+        "hive": str(root),
+        "index_ready": index_db.exists(),
+        "agents": count_dirs(agents_dir),
+        "raw_learnings": count_files(raw_dir),
+        "distilled_learnings": count_files(distilled_dir),
+        "last_maintained": last_maintained,
+        "healthy": index_db.exists(),
+    }
+
+
+def done_work(hive, agent_id, log_line=None, learn_rule=None, context=None, kind=None):
+    if not agent_id:
+        raise SystemExit("--agent is required")
+    root = _hive_root(hive)
+    result: dict[str, Any] = {"agent": agent_id, "logged": False, "learned": False}
+
+    if log_line:
+        log_path = _agent_dir(root, agent_id) / "log.md"
+        date = time.strftime("%Y-%m-%d", time.gmtime())
+        with log_path.open("a", encoding="utf-8") as fh:
+            fh.write(f"- {date} — {log_line}\n")
+        result["log_path"] = str(log_path)
+        result["logged"] = True
+
+    if learn_rule:
+        raw_dir = _raw_dir(root, agent_id)
+        slug = _slugify(learn_rule)
+        date = time.strftime("%Y-%m-%d", time.gmtime())
+        filename = f"{date}-{slug}.md"
+        title = re.split(r"\.\s+", learn_rule.strip(), 1)[0]
+        if len(title) > 80:
+            title = title[:77] + "..."
+        frontmatter = f"---\ndate: {date}\nagent: {agent_id}\ncontext: {context or 'memory-hive done'}\nconfidence: high\nkind: {kind or 'insight'}\n---\n\n"
+        body = f"# {title}\n\n## Generalizable rule\n\n{learn_rule}\n\n## Context\n\n{context or 'memory-hive done'}\n"
+        path = raw_dir / filename
+        path.write_text(frontmatter + body, encoding="utf-8")
+        result["learning_path"] = str(path)
+        result["learned"] = True
+
+    return result
+
+
+def cohort_plan(task: str, agent_id: str | None = None, size: int = 25) -> dict[str, object]:
+    lanes = _infer_lanes(task)
+    templates = [
+        ("Planner", "general", "Decompose the task into milestones and assign work."),
+        ("Code Agent 1", "code", "Implement the primary feature."),
+        ("Code Agent 2", "code", "Implement a secondary feature or module."),
+        ("Code Agent 3", "code", "Implement integration glue."),
+        ("Code Agent 4", "code", "Implement the CLI or API surface."),
+        ("Code Agent 5", "code", "Implement helper libraries or utilities."),
+        ("Review Agent 1", "review", "Review Code Agent 1 output for correctness and style."),
+        ("Review Agent 2", "review", "Review Code Agent 2 output."),
+        ("Review Agent 3", "review", "Review Code Agent 3 output."),
+        ("Review Agent 4", "review", "Review Code Agent 4 output."),
+        ("Research Agent 1", "research", "Survey existing code, dependencies, and conventions."),
+        ("Research Agent 2", "research", "Find prior art and examples in the codebase."),
+        ("Research Agent 3", "research", "Verify external libraries and APIs."),
+        ("Writer", "write", "Produce user-facing docs and release notes."),
+        ("Docs Agent", "docs", "Write inline docs and README updates."),
+        ("QA Agent", "qa", "Write and run tests; report failures."),
+        ("Security Agent", "security", "Check for secrets, injection, and unsafe defaults."),
+        ("Integration Agent", "integration", "Wire components together and run integration checks."),
+        ("Quality Director", "quality", "Audit all outputs against the GOAL and CONSTRAINTS."),
+        ("Release Agent", "release", "Prepare commit, tag, and deployment artifacts."),
+        ("Ops Agent", "ops", "Verify CI/CD, build, and production readiness."),
+        ("Product Agent", "product", "Validate the result solves the user problem."),
+        ("Design Agent", "design", "Review UX, naming, and output formatting."),
+        ("Integrator", "general", "Merge all sub-agent outputs into the final deliverable."),
+        ("Swarm Lead", "general", "Coordinate the 25 agents and resolve conflicts."),
+    ]
+    roles = []
+    for i, (name, lane, focus) in enumerate(templates[:size], 1):
+        roles.append({
+            "id": i,
+            "name": name,
+            "lane": lane,
+            "focus": focus,
+            "prompt": f"You are {name} on a {size}-agent swarm. Task: {task}\nPrimary lane: {lane}\nYour focus: {focus}\nUse the Memory Hive recall bundle for context. Produce concise, validated output.",
+        })
+
+    manifest_lines = ["| # | Role | Lane | Focus |", "|---|---|---|---|"]
+    for r in roles:
+        manifest_lines.append(f"| {r['id']} | {r['name']} | {r['lane']} | {r['focus']} |")
+    manifest = "\n".join(manifest_lines)
+
+    swarm_prompt = f"""You are a swarm coordinator. The user task is:
+{task}
+
+Lanes: {', '.join(lanes)}
+
+Spawn subagents using your IDE's primitives (Devin run_subagent, Claude Tasks, Cursor composer, etc.) with the following manifest:
+
+{manifest}
+
+For each agent, pass its prompt and the Memory Hive recall bundle. After all agents report, the Integrator merges outputs. Stop when SUCCESS CRITERIA are met.
+"""
+
+    return {
+        "version": VERSION,
+        "task": task,
+        "agent": agent_id,
+        "lanes": lanes,
+        "team_size": len(roles),
+        "roles": roles,
+        "manifest": manifest,
+        "swarm_prompt": swarm_prompt,
+    }
+
+
+def do_work(text: str, hive, max_tokens: int = 1200, agent_id: str | None = None, cohort: bool = False) -> dict[str, object]:
+    root = _hive_root(hive)
+    detected = platform_detect()
+    agent_id = agent_id or str(detected["agent_id"])
+    optimized = prompt_optimize(text)
+    optimized_text = str(optimized["optimized"])
+
+    recall = _ensure_recall_index(root)
+    bundle_payload = recall.bundle_json(root, optimized_text, max_tokens=max_tokens, for_agent=agent_id, cache=True)
+    skills_payload = skills_ensure(root, optimized_text, install=True, limit=5)
+    plan = orchestrate(text, platform=detected["primary"])
+
+    result: dict[str, Any] = {
+        "version": VERSION,
+        "agent": agent_id,
+        "platform": detected["primary"],
+        "optimized": optimized,
+        "bundle": {
+            "estimated_tokens": bundle_payload.get("estimated_tokens"),
+            "max_tokens": bundle_payload.get("max_tokens"),
+            "results": len(bundle_payload.get("results", [])),
+            "cache_hit": bundle_payload.get("cache_hit", False),
+        },
+        "skills": list(dict.fromkeys(str(s.get("name")) for s in skills_payload.get("matched", [])))[:5],
+        "plan": plan,
+    }
+    if cohort:
+        result["cohort"] = cohort_plan(text, agent_id)
+    return result
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -656,6 +946,35 @@ def main(argv: list[str] | None = None) -> int:
     bench.add_argument("--hive")
     bench.add_argument("--max-tokens", type=int, default=1200)
 
+    do = sub.add_parser("do")
+    do.add_argument("text", nargs="?")
+    do.add_argument("--file")
+    do.add_argument("--hive")
+    do.add_argument("--agent")
+    do.add_argument("--max-tokens", type=int, default=1200)
+    do.add_argument("--cohort", action="store_true")
+    do.add_argument("--json", action="store_true")
+
+    done = sub.add_parser("done")
+    done.add_argument("--agent", required=True)
+    done.add_argument("--hive")
+    done.add_argument("--log")
+    done.add_argument("--learn")
+    done.add_argument("--context")
+    done.add_argument("--kind", default="insight")
+    done.add_argument("--json", action="store_true")
+
+    cohort = sub.add_parser("cohort")
+    cohort.add_argument("text", nargs="?")
+    cohort.add_argument("--file")
+    cohort.add_argument("--agent")
+    cohort.add_argument("--size", type=int, default=25)
+    cohort.add_argument("--json", action="store_true")
+
+    status = sub.add_parser("status-fast")
+    status.add_argument("--hive")
+    status.add_argument("--json", action="store_true")
+
     ns = parser.parse_args(argv)
 
     if ns.cmd == "prompt-optimize":
@@ -674,6 +993,19 @@ def main(argv: list[str] | None = None) -> int:
         _print_payload(payload, as_json=ns.json)
     elif ns.cmd == "bench-suite":
         _print_payload(bench_suite(_hive_root(ns.hive), max_tokens=ns.max_tokens), as_json=ns.json)
+    elif ns.cmd == "do":
+        text = _read_text_arg(ns.text, ns.file)
+        payload = do_work(text, _hive_root(ns.hive), max_tokens=ns.max_tokens, agent_id=ns.agent, cohort=ns.cohort)
+        _print_payload(payload, as_json=ns.json)
+    elif ns.cmd == "done":
+        payload = done_work(_hive_root(ns.hive), agent_id=ns.agent, log_line=ns.log, learn_rule=ns.learn, context=ns.context, kind=ns.kind)
+        _print_payload(payload, as_json=ns.json)
+    elif ns.cmd == "cohort":
+        text = _read_text_arg(ns.text, ns.file)
+        payload = cohort_plan(text, agent_id=ns.agent, size=ns.size)
+        _print_payload(payload, as_json=ns.json)
+    elif ns.cmd == "status-fast":
+        _print_payload(status_fast(_hive_root(ns.hive)), as_json=ns.json)
     else:
         parser.error("unknown command")
     return 0
