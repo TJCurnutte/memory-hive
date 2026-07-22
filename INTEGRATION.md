@@ -31,6 +31,7 @@ content outside the markers is never touched.
 | Roo Code | `~/.roo/` | auto-inject | `~/.roo/rules/memory-hive.md` |
 | Kilo Code | `~/.kilocode/` | auto-inject | `~/.kilocode/rules/memory-hive.md` |
 | Windsurf (Codeium) | `~/.codeium/windsurf/` | auto-inject | `~/.codeium/windsurf/memories/global_rules.md` |
+| Devin | `~/.config/devin/`, `~/.local/share/devin/`, `~/.devin/`, or `~/Library/Application Support/Devin/` | auto-inject | `~/.config/devin/AGENTS.md` |
 | Zed | `~/.config/zed/` | manual | `~/.config/zed/settings.json` |
 | Warp | `~/.warp/` | auto-inject | `~/.agents/AGENTS.md` |
 | Sourcegraph Amp | `~/.config/amp/` or `amp` on PATH | auto-inject | `~/.config/amp/AGENTS.md` |
@@ -380,6 +381,7 @@ silos you keep.
 | `MEMORY_HIVE_SKIP_ROO_CODE` | Opt out of Roo Code wiring. |
 | `MEMORY_HIVE_SKIP_KILO_CODE` | Opt out of Kilo Code wiring. |
 | `MEMORY_HIVE_SKIP_WINDSURF` | Opt out of Windsurf (Codeium) wiring. |
+| `MEMORY_HIVE_SKIP_DEVIN` | Opt out of Devin wiring. |
 | `MEMORY_HIVE_SKIP_ZED` | Suppress the Zed manual-setup note. |
 | `MEMORY_HIVE_SKIP_WARP` | Opt out of Warp wiring. |
 | `MEMORY_HIVE_SKIP_AMP` | Opt out of Sourcegraph Amp wiring. |
