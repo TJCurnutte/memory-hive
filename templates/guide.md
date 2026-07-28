@@ -20,6 +20,18 @@ or `<!-- mh:no-optimize -->`), run this preflight before answering:
 
 Model preference for workers: prefer Grok and Cursor/Composer family models when the host IDE exposes them; fall back to Claude/Codex only when needed. The IDE-selected model is always the planner/orchestrator.
 
+## /cohort — 25-agent swarm
+
+For large tasks that need parallel specialist agents, use the cohort workflow:
+
+1. `memory-hive cohort "<task>" --agent <id> [--size 25] [--json]` — get a 25-role plan with lanes, prompts, and a swarm manifest.
+2. Fan out one subagent per role using your IDE's native subagent mechanism (Devin `run_subagent`, Claude Code Tasks, Cursor Composer, etc.).
+3. Feed each subagent its role prompt plus the recall bundle.
+4. Have the Integrator and Swarm Lead merge outputs.
+5. Stop when success criteria are met.
+
+The cohort skill is installed into every detected platform root by `memory-hive skills ensure cohort`. See `templates/skills/cohort/SKILL.md` for the full contract.
+
 ## Path map
 
 | Path | What it is | Who writes |

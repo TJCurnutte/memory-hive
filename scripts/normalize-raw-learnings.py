@@ -11,11 +11,13 @@ Does not move files between agent directories and does not overwrite existing fi
 from __future__ import annotations
 
 import argparse
+import os
 import re
 from pathlib import Path
 from datetime import date
 
-RAW = Path('/Users/curnutte/.memory-hive/hive/learnings/raw')
+_hive = os.environ.get("MEMORY_HIVE_DIR") or (Path.home() / ".memory-hive")
+RAW = Path(_hive).expanduser().resolve() / "hive" / "learnings" / "raw"
 FILENAME_RE = re.compile(r'^\d{4}-[01]\d-[0-3]\d-.+[a-z0-9]\.md$')
 DATE_RE = re.compile(r'\d{4}-[01]\d-[0-3]\d')
 

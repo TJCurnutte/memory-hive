@@ -187,18 +187,31 @@ TOOLS = [
 
 def call_tool(name, args):
     if name == "ask_hive":
-        q = args["question"]
+        q = args.get("question")
+        if not q:
+            return False, "missing required parameter: question"
         ok, out = run_cli(["recall", q])
         if not ok:
             ok, out = run_cli(["query", q])
+            if ok:
+                out = "[fallback: query]\n" + out
         return ok, out
     if name == "hive_log":
-        cmd = ["log", args["what"]]
+        what = args.get("what")
+        if not what:
+            return False, "missing required parameter: what"
+        cmd = ["log", what]
         if args.get("agent"):
             cmd += ["--agent", args["agent"]]
         return run_cli(cmd)
     if name == "hive_learn":
-        cmd = ["learn", args["rule"], "--context", args["context"]]
+        rule = args.get("rule")
+        context = args.get("context")
+        if not rule:
+            return False, "missing required parameter: rule"
+        if not context:
+            return False, "missing required parameter: context"
+        cmd = ["learn", rule, "--context", context]
         if args.get("kind"):
             cmd += ["--kind", args["kind"]]
         if args.get("confidence"):
@@ -210,7 +223,10 @@ def call_tool(name, args):
             return run_cli(cmd, stdin_text=args["body"])
         return run_cli(cmd)
     if name == "hive_capture":
-        cmd = ["capture", args["event"]]
+        event = args.get("event")
+        if not event:
+            return False, "missing required parameter: event"
+        cmd = ["capture", event]
         if args.get("source"):
             cmd += ["--source", args["source"]]
         if args.get("agent"):
@@ -277,9 +293,13 @@ def read_resource(uri):
     elif uri.startswith("hive://knowledge/"):
         name = os.path.basename(uri[len("hive://knowledge/"):])
         path = os.path.join(HIVE_DIR, "knowledge", name)
+        if not os.path.abspath(path).startswith(os.path.abspath(HIVE_DIR)):
+            raise ValueError("invalid resource path")
     elif uri.startswith("hive://distilled/"):
         name = os.path.basename(uri[len("hive://distilled/"):])
         path = os.path.join(HIVE_DIR, "learnings", "distilled", name)
+        if not os.path.abspath(path).startswith(os.path.abspath(HIVE_DIR)):
+            raise ValueError("invalid resource path")
     else:
         raise ValueError("unknown resource: %s" % uri)
     with open(path, encoding="utf-8", errors="replace") as f:
@@ -303,7 +323,12 @@ def main():
             continue
         try:
             msg = json.loads(line)
-        except Exception:
+        except json.JSONDecodeError:
+            sys.stdout.write(json.dumps({
+                "jsonrpc": "2.0", "id": None,
+                "error": {"code": -32700, "message": "Parse error"},
+            }) + "\n")
+            sys.stdout.flush()
             continue
         msg_id = msg.get("id")
         method = msg.get("method", "")

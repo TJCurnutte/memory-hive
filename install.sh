@@ -75,7 +75,16 @@ info "Installing Memory Hive to ${BOLD}${INSTALL_DIR}${RESET}"
 # --- fetch repo --------------------------------------------------------------
 
 TMP_DIR="$(mktemp -d 2>/dev/null || mktemp -d -t memory-hive)"
-trap 'rm -rf "$TMP_DIR"' EXIT INT TERM
+AGENTS_BACKUP=""
+_mh_rollback() {
+    # Restore agent silos if install failed after moving them.
+    if [ -n "$AGENTS_BACKUP" ] && [ -d "$AGENTS_BACKUP" ] && [ ! -d "$AGENTS_DIR" ]; then
+        mkdir -p "$(dirname "$AGENTS_DIR")" 2>/dev/null || true
+        mv "$AGENTS_BACKUP" "$AGENTS_DIR" 2>/dev/null || true
+    fi
+    rm -rf "$TMP_DIR"
+}
+trap '_mh_rollback' EXIT INT TERM
 
 if [ -n "${MEMORY_HIVE_REPO:-}" ] && [ -d "$MEMORY_HIVE_REPO/hive" ]; then
     info "Using local repo at $MEMORY_HIVE_REPO (MEMORY_HIVE_REPO override)"
@@ -99,7 +108,7 @@ mkdir -p "$INSTALL_DIR" || die "Could not create $INSTALL_DIR"
 mkdir -p "$HIVE_DIR"    || die "Could not create $HIVE_DIR"
 
 # Preserve existing agent silos: stash them, copy hive/, then restore.
-AGENTS_BACKUP=""
+# AGENTS_BACKUP is declared before the trap so the rollback handler can see it.
 if [ -d "$AGENTS_DIR" ]; then
     AGENTS_BACKUP="$TMP_DIR/agents-backup"
     info "Preserving existing agent silos in $AGENTS_DIR"
@@ -686,6 +695,15 @@ _skill_doc_dst="$INSTALL_DIR/templates/skills/memory-hive/SKILL.md"
 if [ -f "$_skill_src" ]; then
     mkdir -p "$(dirname "$_skill_doc_dst")" 2>/dev/null || true
     cp "$_skill_src" "$_skill_doc_dst" 2>/dev/null || true
+fi
+
+# Ship the cohort skill template too — it's installed into every detected
+# agent platform root by `memory-hive skills ensure cohort`.
+_cohort_src="$TMP_DIR/memory-hive/templates/skills/cohort/SKILL.md"
+_cohort_doc_dst="$INSTALL_DIR/templates/skills/cohort/SKILL.md"
+if [ -f "$_cohort_src" ]; then
+    mkdir -p "$(dirname "$_cohort_doc_dst")" 2>/dev/null || true
+    cp "$_cohort_src" "$_cohort_doc_dst" 2>/dev/null || true
 fi
 
 # Ship the UNRENDERED platform-neutral guide too. Unlike the docs above,

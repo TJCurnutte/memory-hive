@@ -5535,29 +5535,34 @@ _mh_lint_one() {
         }
     ' "$_f" 2>/dev/null)"
 
-    # Pluck values in a single awk pass. Field values may contain '=', so
-    # we match key by prefix and emit the rest verbatim. Eval'ing the
-    # output keeps us to one fork per file instead of seven.
-    _shvars="$(printf '%s\n' "$_parsed" | awk '
-        BEGIN { fopen=0; fclose=0; h1=""; fdate=""; fagent=""; fctx=""; fconf="" }
-        /^FM_OPEN=/  { fopen  = substr($0, 9) }
-        /^FM_CLOSE=/ { fclose = substr($0, 10) }
-        /^H1=/       { if (h1 == "") h1 = substr($0, 4) }
-        /^FM_date=/        { if (fdate  == "") fdate  = substr($0, 9) }
-        /^FM_agent=/       { if (fagent == "") fagent = substr($0, 10) }
-        /^FM_context=/     { if (fctx   == "") fctx   = substr($0, 12) }
-        /^FM_confidence=/  { if (fconf  == "") fconf  = substr($0, 15) }
-        END {
-            # Quote with single quotes; escape any embedded single quotes
-            # so eval is safe against frontmatter values containing quotes.
-            gsub(/'\''/, "'\''\\'\'\''", fdate)
-            gsub(/'\''/, "'\''\\'\'\''", fagent)
-            gsub(/'\''/, "'\''\\'\'\''", fctx)
-            gsub(/'\''/, "'\''\\'\'\''", fconf)
-            printf "_fm_open='\''%s'\''\n_fm_close='\''%s'\''\n_h1='\''%s'\''\n_fm_date='\''%s'\''\n_fm_agent='\''%s'\''\n_fm_context='\''%s'\''\n_fm_confidence='\''%s'\''\n", fopen, fclose, h1, fdate, fagent, fctx, fconf
-        }
-    ')"
-    eval "$_shvars"
+    # Parse frontmatter values directly into shell vars without eval.
+    # awk emits key=value lines; we read them with IFS= to avoid word splitting.
+    _fm_open=0; _fm_close=0; _h1=""; _fm_date=""; _fm_agent=""; _fm_context=""; _fm_confidence=""
+    while IFS='=' read -r _k _v; do
+        case "$_k" in
+            _fm_open) _fm_open="$_v" ;;
+            _fm_close) _fm_close="$_v" ;;
+            _h1) _h1="$_v" ;;
+            _fm_date) _fm_date="$_v" ;;
+            _fm_agent) _fm_agent="$_v" ;;
+            _fm_context) _fm_context="$_v" ;;
+            _fm_confidence) _fm_confidence="$_v" ;;
+        esac
+    done <<ENDFM
+$(printf '%s\n' "$_parsed" | awk '
+    BEGIN { fopen=0; fclose=0; h1=""; fdate=""; fagent=""; fctx=""; fconf="" }
+    /^FM_OPEN=/  { fopen  = substr($0, 9) }
+    /^FM_CLOSE=/ { fclose = substr($0, 10) }
+    /^H1=/       { if (h1 == "") h1 = substr($0, 4) }
+    /^FM_date=/        { if (fdate  == "") fdate  = substr($0, 9) }
+    /^FM_agent=/       { if (fagent == "") fagent = substr($0, 10) }
+    /^FM_context=/     { if (fctx   == "") fctx   = substr($0, 12) }
+    /^FM_confidence=/  { if (fconf  == "") fconf  = substr($0, 15) }
+    END {
+        printf "_fm_open=%s\n_fm_close=%s\n_h1=%s\n_fm_date=%s\n_fm_agent=%s\n_fm_context=%s\n_fm_confidence=%s\n", fopen, fclose, h1, fdate, fagent, fctx, fconf
+    }
+')
+ENDFM
 
     # File size in bytes (portable across macOS + Linux).
     _bytes="$(wc -c < "$_f" 2>/dev/null | tr -d ' ')"
@@ -7324,7 +7329,8 @@ _mh_seed_substitute() {
         cp "$_src" "$_dst"
         return 0
     fi
-    _sed_prog=""
+    # Use awk for substitution — safer than sed for user-controlled markers.
+    _awk_prog=""
     _IFS_save="$IFS"
     IFS='
 '
@@ -7336,14 +7342,17 @@ _mh_seed_substitute() {
             ''|*[!0-9]*) continue ;;
         esac
         _date="$(_mh_seed_relative_date "$_n")"
-        _sed_prog="${_sed_prog}s/${_m}/${_date}/g;"
+        # Escape any awk metacharacters in marker and date (unlikely but safe).
+        _m_esc="$(printf '%s' "$_m" | sed 's/[\/&]/\\&/g')"
+        _d_esc="$(printf '%s' "$_date" | sed 's/[\/&]/\\&/g')"
+        _awk_prog="${_awk_prog}{gsub(/$_m_esc/,\"$_d_esc\");}"
     done
     IFS="$_IFS_save"
-    if [ -z "$_sed_prog" ]; then
+    if [ -z "$_awk_prog" ]; then
         cp "$_src" "$_dst"
         return 0
     fi
-    sed "$_sed_prog" "$_src" > "$_dst"
+    awk "$_awk_prog" "$_src" > "$_dst"
 }
 
 # _mh_seed_create_silo <agent> <role>
@@ -7575,14 +7584,9 @@ mh_skills() {
             MEMORY_HIVE_DIR="$HIVE_DIR" INSTALL_DIR="$INSTALL_DIR" python3 "$_helper" skills-match "$@"
             ;;
         install|ensure)
-            _action="$1"
             shift
             _helper="$(_mh_orchestrate_helper)" || _mh_die "memory_hive_orchestrate.py helper missing under $INSTALL_DIR"
-            if [ "$_action" = "install" ]; then
-                MEMORY_HIVE_DIR="$HIVE_DIR" INSTALL_DIR="$INSTALL_DIR" python3 "$_helper" skills-ensure "$@"
-            else
-                MEMORY_HIVE_DIR="$HIVE_DIR" INSTALL_DIR="$INSTALL_DIR" python3 "$_helper" skills-ensure "$@"
-            fi
+            MEMORY_HIVE_DIR="$HIVE_DIR" INSTALL_DIR="$INSTALL_DIR" python3 "$_helper" skills-ensure "$@"
             ;;
         -h|--help|"")
             cat <<'SKILLSHELP'

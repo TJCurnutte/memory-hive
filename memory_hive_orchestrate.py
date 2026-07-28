@@ -50,6 +50,14 @@ LANE_KEYWORDS = {
     "write": ("write", "draft", "copy", "email", "post", "narrative", "voice"),
     "bench": ("bench", "benchmark", "measure", "speed", "tokens", "performance", "efficiency"),
     "docs": ("docs", "documentation", "readme", "guide", "manual", "changelog", "spec"),
+    "qa": ("qa", "test", "testing", "verify", "validation", "acceptance", "check"),
+    "security": ("security", "vulnerability", "exploit", "injection", "xss", "csrf", "auth", "permission", "encrypt"),
+    "integration": ("integration", "integrate", "merge", "connect", "api", "webhook", "sync", "import"),
+    "quality": ("quality", "lint", "style", "format", "convention", "standard", "consistency"),
+    "release": ("release", "deploy", "publish", "ship", "push", "tag", "version", "rollout"),
+    "ops": ("ops", "operations", "monitor", "alert", "log", "metric", "health", "uptime", "infrastructure"),
+    "product": ("product", "feature", "roadmap", "spec", "requirement", "user story", "priority", "mvp"),
+    "design": ("design", "ui", "ux", "layout", "visual", "aesthetic", "style", "css", "responsive", "landing"),
 }
 
 FILLER_REPLACEMENTS = (
@@ -78,16 +86,26 @@ def _install_dir() -> Path:
     return Path(os.environ.get("INSTALL_DIR") or (Path.home() / ".memory-hive")).expanduser().resolve()
 
 
-def _jsonable(value: Any) -> Any:
-    if is_dataclass(value):
-        return _jsonable(asdict(value))
-    if isinstance(value, Path):
-        return str(value)
-    if isinstance(value, dict):
-        return {str(k): _jsonable(v) for k, v in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(v) for v in value]
-    return value
+def _jsonable(value: Any, _seen: set[int] | None = None) -> Any:
+    if _seen is None:
+        _seen = set()
+    obj_id = id(value)
+    if obj_id in _seen:
+        return "<circular>"
+    if is_dataclass(value) or isinstance(value, (dict, list, tuple)):
+        _seen.add(obj_id)
+    try:
+        if is_dataclass(value):
+            return _jsonable(asdict(value), _seen)
+        if isinstance(value, Path):
+            return str(value)
+        if isinstance(value, dict):
+            return {str(k): _jsonable(v, _seen) for k, v in value.items()}
+        if isinstance(value, (list, tuple)):
+            return [_jsonable(v, _seen) for v in value]
+        return value
+    finally:
+        _seen.discard(obj_id)
 
 
 def _contains_opt_out(text: str) -> bool:
@@ -306,7 +324,7 @@ def platform_detect() -> dict[str, object]:
     home = Path.home()
     platforms = [name for name, rel in PLATFORM_PATHS if (home / rel).exists()]
     primary = next((name for name in PRIMARY_ORDER if name in platforms), platforms[0] if platforms else "main")
-    agent_id = os.environ.get("MEMORY_HIVE_AGENT_ID") or ("cursor" if "cursor" in platforms else "main")
+    agent_id = os.environ.get("MEMORY_HIVE_AGENT_ID") or (primary if platforms else "main")
     return {
         "platforms": platforms,
         "primary": primary,
@@ -415,7 +433,9 @@ def _ensure_recall_index(hive: str | os.PathLike[str]):
     else:
         try:
             recall.update_index(root)
-        except Exception:
+        except (FileNotFoundError, sqlite3.Error, OSError) as exc:
+            import sys
+            print(f"memory-hive: index update failed ({exc}), rebuilding", file=sys.stderr)
             recall.build_index(root, force=True)
     return recall
 
@@ -470,7 +490,9 @@ def skills_match(hive, query: str, limit: int = 5) -> list[dict[str, object]]:
     # Multi-root index (None) — do not rebuild from a single primary root every call.
     try:
         existing = recall.query_skills(root, query, limit=limit)
-    except Exception:
+    except (FileNotFoundError, sqlite3.Error, OSError) as exc:
+        import sys
+        print(f"memory-hive: skill query failed ({exc})", file=sys.stderr)
         existing = []
     if not existing:
         recall.build_skill_index(root, skills_root=None)
@@ -481,11 +503,17 @@ def skills_match(hive, query: str, limit: int = 5) -> list[dict[str, object]]:
 def _installed_skill_names() -> set[str]:
     names: set[str] = set()
     for root in skills_roots():
-        for skill_file in root.rglob("SKILL.md"):
-            text = skill_file.read_text(encoding="utf-8", errors="replace")
-            meta = _parse_skill_frontmatter(text)
-            names.add((meta.get("name") or skill_file.parent.name).lower())
-            names.add(skill_file.parent.name.lower())
+        try:
+            for skill_file in root.rglob("SKILL.md"):
+                try:
+                    text = skill_file.read_text(encoding="utf-8", errors="replace")
+                    meta = _parse_skill_frontmatter(text)
+                    names.add((meta.get("name") or skill_file.parent.name).lower())
+                except (OSError, UnicodeDecodeError):
+                    pass
+                names.add(skill_file.parent.name.lower())
+        except OSError:
+            continue
     return names
 
 
@@ -572,10 +600,13 @@ def _naive_boot_corpus(root: Path) -> str:
                 parts.append(text)
     distilled = root / "learnings" / "distilled"
     if distilled.is_dir():
-        for path in sorted(distilled.rglob("*.md")):
-            text = _read_if_exists(path)
-            if text:
-                parts.append(text)
+        try:
+            for path in sorted(distilled.rglob("*.md")):
+                text = _read_if_exists(path)
+                if text:
+                    parts.append(text)
+        except OSError:
+            pass
     agents = root / "agents"
     if agents.is_dir():
         for agent_dir in sorted(p for p in agents.iterdir() if p.is_dir() and not p.name.startswith("_")):
@@ -759,7 +790,10 @@ def status_fast(hive=None):
     def count_files(path: Path) -> int:
         if not path.exists():
             return 0
-        return sum(1 for p in path.rglob("*") if p.is_file())
+        try:
+            return sum(1 for p in path.rglob("*") if p.is_file())
+        except OSError:
+            return 0
 
     last_maintained = None
     last_file = root / ".last-maintained"

@@ -445,7 +445,7 @@ def _delete_indexed_file(con: sqlite3.Connection, rel_path: str) -> int:
     return len(chunk_ids)
 
 
-def build_index(hive_root: str | os.PathLike[str], *, force: bool = False, incremental: bool = False) -> BuildResult:
+def build_index(hive_root: str | os.PathLike[str], *, force: bool = False) -> BuildResult:
     root = Path(hive_root).resolve()
     db_path = _db_path(root)
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -455,8 +455,8 @@ def build_index(hive_root: str | os.PathLike[str], *, force: bool = False, incre
     used_codes: dict[str, int] = {}
     with sqlite3.connect(str(db_path)) as con:
         fts5 = _init_db(con)
-        con.execute("INSERT INTO meta(key, value) VALUES('schema_version', '1')")
-        con.execute("INSERT INTO meta(key, value) VALUES('fts5', ?)", (fts5,))
+        con.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('schema_version', '1')")
+        con.execute("INSERT OR REPLACE INTO meta(key, value) VALUES('fts5', ?)", (fts5,))
         now = int(time.time())
         for path in iter_markdown_files(root):
             record, file_chunks, file_codes = _index_markdown_file(con, root, path, used_codes=used_codes, fts5=fts5, indexed_at=now)
@@ -596,12 +596,34 @@ def update_index(hive_root: str | os.PathLike[str]) -> dict[str, int | str]:
 
 
 def gc_index(hive_root: str | os.PathLike[str]) -> dict[str, int]:
+    """Remove stale entries from the index without destroying the whole index."""
     root = Path(hive_root).resolve()
     stale = doctor(root)["stale_files"]
     removed = 0
-    if stale:
-        removed = len(stale)
+    if not stale:
+        return {"removed_files": 0}
+    try:
+        conn = _connect_existing(root)
+        for stale_path in stale:
+            # Remove chunks for this file path
+            rows = conn.execute(
+                "SELECT id FROM chunks WHERE path = ?", (str(stale_path),)
+            ).fetchall()
+            chunk_ids = [r[0] for r in rows]
+            for cid in chunk_ids:
+                try:
+                    conn.execute("DELETE FROM fts WHERE rowid = ?", (cid,))
+                except sqlite3.OperationalError:
+                    pass
+                conn.execute("DELETE FROM tokens WHERE chunk_id = ?", (cid,))
+            conn.execute("DELETE FROM chunks WHERE path = ?", (str(stale_path),))
+            removed += 1
+        conn.commit()
+        conn.close()
+    except Exception:
+        # Fall back to full rebuild if incremental cleanup fails
         build_index(root, force=True)
+        removed = len(stale)
     return {"removed_files": removed}
 
 

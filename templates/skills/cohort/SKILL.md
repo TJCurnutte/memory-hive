@@ -34,7 +34,6 @@ The Memory Hive CLI owns the plan; your harness owns the fan-out. No vendor lock
 Run:
 
 ```bash
-memory-hive do "refactor the CLI to three commands and ship v3" --agent devin --cohort
 memory-hive cohort "refactor the CLI to three commands and ship v3" --agent devin
 ```
 
