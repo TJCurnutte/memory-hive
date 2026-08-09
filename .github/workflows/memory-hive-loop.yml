@@ -1,0 +1,48 @@
+# Memory Hive self-iteration loop.
+#
+# Runs ONE improvement iteration every hour: maintenance pass + fresh usage
+# analytics. It is opt-in — it only takes effect once this file is merged to a
+# branch GitHub schedules from (default branch). It never commits, pushes, or
+# merges; the snapshot is published as a build artifact for review.
+#
+# Disable by deleting this file or commenting out the `schedule` block.
+name: Memory Hive loop
+
+on:
+  schedule:
+    # Top of every hour (UTC). GitHub may delay scheduled runs under load.
+    - cron: "0 * * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: read
+
+concurrency:
+  group: memory-hive-loop
+  cancel-in-progress: false
+
+jobs:
+  iterate:
+    name: one improvement iteration
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run one iteration
+        env:
+          MEMORY_HIVE_DIR: ${{ runner.temp }}/memory-hive
+          LOOP_REPORT_DIR: ${{ github.workspace }}/reports/memory-hive-loop
+        run: sh scripts/loop/loop_iteration.sh
+
+      - name: Show snapshot
+        if: always()
+        run: cat reports/memory-hive-loop/latest.md || true
+
+      - name: Upload usage snapshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: memory-hive-usage-snapshot
+          path: reports/memory-hive-loop/
+          if-no-files-found: warn
