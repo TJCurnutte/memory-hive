@@ -225,7 +225,7 @@ fi
 # running interpreter, which then reads the new file at old offsets and
 # dies with phantom syntax errors. rename() just swaps the directory
 # entry — the old inode stays readable until the process exits.
-for helper in create-agent.sh update.sh install.sh check-compliance.sh memory-hive memory_hive_recall.py memory_hive_mcp.py; do
+for helper in create-agent.sh update.sh install.sh check-compliance.sh memory-hive memory_hive_recall.py memory_hive_mcp.py memory_hive_orchestrate.py; do
     _src="$TMP_DIR/memory-hive/$helper"
     [ -f "$_src" ] || continue
     _hstage="$INSTALL_DIR/$helper.memhive.$$"
