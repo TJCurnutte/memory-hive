@@ -2468,6 +2468,32 @@ mh_apply() {
 
 # _mh_classify <abspath> → prints `agent:kind` to stdout, or empty to skip.
 # Maps a hive file path to (who did it, what kind of write it was).
+# _mh_promote_extract_frontmatter <file> <field> -> prints the value of
+# <field> from the file's frontmatter block (the YAML between the first two
+# '---' lines), or nothing if the file/field is absent. One awk fork per call.
+# (This helper was previously CALLED at six sites -- promote eligibility,
+# cluster-kind checks, best-file picking, and curate's promotions loop --
+# but never DEFINED: standalone curate died rc=127 at its first call, and
+# inside optimize's errexit-suppressed context every call degenerated into a
+# full PATH search, costing ~17s per curate pass.)
+_mh_promote_extract_frontmatter() {
+    _f="$1"; _field="$2"
+    [ -n "$_f" ] && [ -n "$_field" ] || return 0
+    [ -f "$_f" ] || return 0
+    awk -v field="$_field" '
+        NR == 1 && $0 != "---" { exit }
+        NR == 1 { infm = 1; next }
+        infm && /^---[[:space:]]*$/ { exit }
+        infm && index($0, field ":") == 1 {
+            v = substr($0, length(field) + 2)
+            sub(/^[[:space:]]+/, "", v)
+            sub(/[[:space:]]+$/, "", v)
+            if (v != "") print v
+            exit
+        }
+    ' "$_f" 2>/dev/null
+}
+
 _mh_classify() {
     _p="$1"
     # Normalize: strip HIVE_DIR prefix so we operate on relative paths.
@@ -4359,55 +4385,187 @@ LINTHELP
     : > "$_LINT_ERR_FILE"
     : > "$_LINT_WARN_FILE"
 
-    _files=0
-    _files_with_issues=0
-    _first_block=1
-    while IFS= read -r _f; do
-        [ -n "$_f" ] || continue
-        _files=$((_files + 1))
-
-        # Derive agent-from-path: only when file lives under raw/<agent>/.
-        # If the file sits directly under raw/ (no agent subdir), agent_path
-        # is empty and the agent-match check is skipped.
-        _agent_path=""
-        case "$_f" in
-            "$_raw_dir"/*/*)
-                _rest="${_f#"$_raw_dir"/}"
-                _agent_path="${_rest%%/*}"
+    # ---- batched lint -------------------------------------------------
+    # One wc pass collects exact byte sizes for every file (replaces the
+    # per-file `wc -c` fork). One xargs|awk pass performs ALL schema checks
+    # (identical rules to _mh_lint_one) and emits issue blocks. The shell
+    # read-loop below only renders blocks and tallies counts -- zero forks.
+    _lint_raw="$_tmpdir/rawout"
+    _lint_sizes="$_tmpdir/sizes"
+    tr '\n' '\0' < "$_list" | xargs -0 wc -c > "$_lint_sizes" 2>/dev/null
+    tr '\n' '\0' < "$_list" | xargs -0 awk -v sizesfile="$_lint_sizes" \
+        -v rawdir="$_raw_dir" -v instdir="$INSTALL_DIR" -v fixmode="$_fix" '
+        BEGIN {
+            while ((getline line < sizesfile) > 0) {
+                if (match(line, /^ *[0-9]+/)) {
+                    sz = substr(line, 1, RLENGTH); gsub(/ /, "", sz)
+                    p = substr(line, RLENGTH + 1); sub(/^ +/, "", p)
+                    SIZE[p] = sz + 0
+                }
+            }
+            close(sizesfile)
+        }
+        function flush_file(   base, nb, ok, k, needquote, msg, nseg, segs) {
+            filecount++
+            n = 0
+            base = FILENAME
+            if ((k = index(base, "/")) > 0) {  # keep only last segment
+                while ((k = index(base, "/")) > 0) base = substr(base, k + 1)
+            }
+            # 1. frontmatter open/close
+            if (fm_open != 1) {
+                emit("error", "frontmatter: file does not start with `---`")
+            } else if (fm_close == 0) {
+                emit("error", "frontmatter: missing closing `---`")
+            }
+            # 2. required fields
+            if (fm_open == 1) {
+                if (fdate == "")  emit("error", "frontmatter: missing required field `date`")
+                if (fagent == "") emit("error", "frontmatter: missing required field `agent`")
+                if (fctx == "")   emit("error", "frontmatter: missing required field `context`")
+                if (fconf == "")  emit("error", "frontmatter: missing required field `confidence`")
+            }
+            # 3. date sanity
+            if (fdate != "") {
+                ok = (fdate ~ /^[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]$/)
+                if (!ok) {
+                    emit("error", "frontmatter: `date` must be YYYY-MM-DD (got `" fdate "`)")
+                } else {
+                    mm = substr(fdate, 6, 2) + 0; dd = substr(fdate, 9, 2) + 0
+                    if (mm < 1 || mm > 12 || dd < 1 || dd > 31) {
+                        emit("error", "frontmatter: `date` not a valid YYYY-MM-DD (`" fdate "`)")
+                    }
+                }
+            }
+            # 4. agent vs parent dir
+            if (fagent != "" && apath != "") {
+                if (fagent != apath) {
+                    emit("error", "frontmatter: `agent: " fagent "` does not match parent directory `" apath "`")
+                }
+            }
+            # 5. confidence values
+            if (fconf != "") {
+                if (fconf != "low" && fconf != "medium" && fconf != "high") {
+                    emit("warn", "frontmatter: `confidence` should be low|medium|high (got `" fconf "`)")
+                }
+            }
+            # 6. filename convention
+            nb = tolower(base)
+            gsub(/_/, "-", nb)
+            gsub(/-+/, "-", nb)
+            ok = (base ~ /^[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]-.*[a-z0-9].*\.md$/)
+            if (!ok) {
+                msg = "filename does not match <YYYY-MM-DD>-<slug>.md convention"
+                if (fixmode == 1 && nb != base) {
+                    if (nb ~ /^[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]-.*[a-z0-9].*\.md$/) {
+                        print "FIX|" FILENAME "|" nb
+                        hadfix = 1
+                        n++
+                        return_from_fix = 1
+                    } else {
+                        emit("warn", msg)
+                    }
+                } else {
+                    emit("warn", msg)
+                }
+            }
+            # 7. H1 after frontmatter
+            if (fm_open == 1 && h1 == "") {
+                emit("warn", "content: no H1 (`# Title`) found after frontmatter")
+            }
+            # 8. size cap
+            sz = SIZE[FILENAME] + 0
+            if (sz >= 51200) {
+                emit("warn", "file size " sz " bytes exceeds 50KB hygiene cap")
+            }
+            if (n > 0) withissues++
+        }
+        function emit(level, msg) {
+            print "ISS|" level "|" msg
+            if (level == "error") errtot++; else warntot++
+            n++
+        }
+        FNR == 1 {
+            if (fpath != "") flush_file()
+            fpath = FILENAME
+            fm_open = 0; fm_close = 0; h1 = ""
+            fdate = ""; fagent = ""; fctx = ""; fconf = ""
+            in_fm = 0; hadfix = 0; n = 0
+            apath = ""
+            if (index(FILENAME, rawdir "/") == 1) {
+                rest = substr(FILENAME, length(rawdir) + 2)
+                if ((k = index(rest, "/")) > 0) apath = substr(rest, 1, k - 1)
+            }
+        }
+        {
+            if (FNR == 1 && $0 == "---") { in_fm = 1; fm_open = 1; next }
+            if (in_fm == 1) {
+                if ($0 == "---") { in_fm = 0; fm_close = FNR; next }
+                if (match($0, /^[A-Za-z_][A-Za-z0-9_-]*[[:space:]]*:[[:space:]]*/)) {
+                    key = substr($0, 1, RLENGTH); val = substr($0, RLENGTH + 1)
+                    sub(/[[:space:]]*:[[:space:]]*$/, "", key)
+                    klow = tolower(key)
+                    sub(/[[:space:]]+$/, "", val)
+                    if (substr(val, 1, 1) == "\"" && substr(val, length(val), 1) == "\"") {
+                        val = substr(val, 2, length(val) - 2)
+                    }
+                    if (klow == "date" && fdate == "") fdate = val
+                    else if (klow == "agent" && fagent == "") fagent = val
+                    else if (klow == "context" && fctx == "") fctx = val
+                    else if (klow == "confidence" && fconf == "") fconf = val
+                }
+                next
+            }
+            if (fm_open == 1 && h1 == "") {
+                if (match($0, /^#[[:space:]]+/)) h1 = FNR
+            }
+        }
+        END {
+            if (fpath != "") flush_file()
+            print "ENDC|" errtot + 0 " " warntot + 0 " " withissues + 0 " " filecount + 0
+        }' > "$_lint_raw" 2>/dev/null || :
+    _files="$(wc -l < "$_list" | tr -d ' ')"
+    _err_count=0; _warn_count=0; _files_with_issues=0
+    _block_open=0; _first_block=1
+    _shell_warn_extra=0
+    while IFS='|' read -r _t _a _rest; do
+        case "$_t" in
+            BLOCK)
+                if [ "$_first_block" -eq 1 ]; then
+                    _first_block=0
+                else
+                    printf '\n'
+                fi
+                printf '%s\n' "$_a"
+                _files_with_issues=$((_files_with_issues + 1))
+                ;;
+            ISS)
+                printf '  %-7s %s\n' "$_a" "$_rest"
+                ;;
+            FIX)
+                _dir="${_a%/*}"
+                _old="${_a##*/}"
+                if [ -e "$_dir/$_rest" ]; then
+                    printf '  %-7s %s\n' "warn" "filename does not match <YYYY-MM-DD>-<slug>.md (auto-fix target \`$_rest\` already exists)"
+                    _warn_count=$((_warn_count + 1))
+                elif mv "$_a" "$_dir/$_rest" 2>/dev/null; then
+                    printf '  %-7s %s\n' "fixed" "renamed \`$_old\` -> \`$_rest\`"
+                else
+                    printf '  %-7s %s\n' "warn" "filename does not match <YYYY-MM-DD>-<slug>.md (rename failed)"
+                    _warn_count=$((_warn_count + 1))
+                fi
+                ;;
+            ENDC)
+                set -- $_a $_rest
+                _err_count="$1"
+                _warn_count=$((_warn_count + $2))
+                _files_with_issues="$3"
                 ;;
         esac
+    done < "$_lint_raw"
+    rm -f "$_lint_raw" "$_lint_sizes"
 
-        _out="$(_mh_lint_one "$_f" "$_agent_path" "$_fix")"
-        if [ -n "$_out" ]; then
-            _files_with_issues=$((_files_with_issues + 1))
-            # Tally per-issue: count error/warn lines emitted for this file.
-            _ne=$(printf '%s\n' "$_out" | grep -c '^error|' || true)
-            _nw=$(printf '%s\n' "$_out" | grep -c '^warn|'  || true)
-            [ -n "$_ne" ] || _ne=0
-            [ -n "$_nw" ] || _nw=0
-            printf '%s\n' "$_ne" >> "$_LINT_ERR_FILE"
-            printf '%s\n' "$_nw" >> "$_LINT_WARN_FILE"
-            # Display path: relative to install root if possible.
-            _disp="$_f"
-            case "$_f" in
-                "$INSTALL_DIR"/*) _disp="${_f#"$INSTALL_DIR"/}" ;;
-            esac
-            if [ "$_first_block" -eq 1 ]; then
-                _first_block=0
-            else
-                printf '\n'
-            fi
-            printf '%s\n' "$_disp"
-            printf '%s\n' "$_out" | while IFS='|' read -r _lvl _msg; do
-                [ -n "$_lvl" ] || continue
-                printf '  %-7s %s\n' "$_lvl" "$_msg"
-            done
-        fi
-    done < "$_list"
-
-    # Sum the per-file counts. awk handles the empty-file case cleanly.
-    _err_count="$(awk '{s+=$1} END{print s+0}' "$_LINT_ERR_FILE" 2>/dev/null)"
-    _warn_count="$(awk '{s+=$1} END{print s+0}' "$_LINT_WARN_FILE" 2>/dev/null)"
+    # (counts arrive from the batched awk's ENDC line inside the loop above)
     [ -n "$_err_count" ]  || _err_count=0
     [ -n "$_warn_count" ] || _warn_count=0
 
