@@ -1502,6 +1502,26 @@ mh_status() {
     printf '  memory-hive help --advanced    # show internal/debug commands\n'
 }
 
+# mh_add was dropped by an update (dispatch referenced it, function was missing — 2026-11-02 fix).
+mh_add() {
+    _mh_require_install
+    _agent="${1:-}"
+    [ -n "$_agent" ] || _mh_die "usage: memory-hive add <agent-id>"
+    _dir="$AGENTS_DIR/$_agent"
+    if [ -d "$_dir" ]; then
+        echo "silo already exists: $_dir"
+        return 0
+    fi
+    mkdir -p "$_dir"
+    printf '# %s — activity log\n\n' "$_agent" > "$_dir/log.md"
+    printf '# %s — working context\n\n' "$_agent" > "$_dir/context.md"
+    printf '# %s — durable memory\n\n' "$_agent" > "$_dir/memory.md"
+    echo "Created agent silo: $_dir"
+    echo "  log.md     — append-only activity log"
+    echo "  context.md — current working context"
+    echo "  memory.md  — durable memory"
+}
+
 mh_maintain() {
     _mh_require_install
     _quiet=0
@@ -3393,25 +3413,102 @@ EOF
     _tuples="$INSTALL_DIR/.dedup-tuples.$$"
     : > "$_tuples"
 
-    _file_count=0
-    for _agent_dir in "$_raw_root"/*; do
-        [ -d "$_agent_dir" ] || continue
-        _agent="$(basename "$_agent_dir")"
-        for _f in "$_agent_dir"/*.md; do
-            [ -f "$_f" ] || continue
-            _file_count=$((_file_count + 1))
-            _title="$(_mh_dedup_title "$_f")"
-            _norm="$(_mh_dedup_normalize "$_title")"
-            [ -n "$_norm" ] || continue
-            if [ "$_across_agents" -eq 1 ]; then
-                _scope="*"
-            else
-                _scope="$_agent"
-            fi
-            _rel="${_f#"$HIVE_DIR"/}"
-            printf '%s\t%s\t%s\n' "$_scope|$_norm" "$_rel" "$_f" >> "$_tuples"
-        done
-    done
+    # Batched tuple build: one find|xargs|awk pass extracts every file's title
+    # (identical semantics to _mh_dedup_title: first non-empty H1, else the
+    # slug fallback -- date prefix stripped, - and _ become spaces), then one
+    # awk pass normalizes every title (identical semantics to
+    # _mh_dedup_normalize: lowercase tokens, drop length<=1, padded-stoplist
+    # substring test, sort-unique via insertion sort, space-joined). This
+    # replaces the former per-file pipeline (~3 forks per file) with a fixed
+    # handful of processes total. Scans exactly one level of agent dirs,
+    # matching the previous glob; skips dotfiles; NUL-safe for odd paths.
+    _titles="$INSTALL_DIR/.dedup-titles.$$"
+    find "$_raw_root" -mindepth 2 -maxdepth 2 -name '*.md' -type f ! -name '.*' -print0 \
+        | xargs -0 awk '
+            FNR==1 {
+                if (path != "") {
+                    if (title == "") {
+                        t = path
+                        sub(/.*\//, "", t)
+                        sub(/\.md$/, "", t)
+                        sub(/^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-/, "", t)
+                        gsub(/[-_]/, " ", t)
+                        title = t
+                    }
+                    print agent "\t" path "\t" title
+                }
+                path = FILENAME
+                title = ""
+                n = split(FILENAME, segs, "/")
+                agent = segs[n-1]
+            }
+            /^# / && title == "" {
+                line = $0
+                sub(/^# +/, "", line)
+                sub(/[[:space:]]+$/, "", line)
+                if (line != "") title = line
+            }
+            END {
+                if (path != "") {
+                    if (title == "") {
+                        t = path
+                        sub(/.*\//, "", t)
+                        sub(/\.md$/, "", t)
+                        sub(/^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-/, "", t)
+                        gsub(/[-_]/, " ", t)
+                        title = t
+                    }
+                    print agent "\t" path "\t" title
+                }
+            }' > "$_titles" 2>/dev/null
+    _file_count=$(wc -l < "$_titles" | tr -d '[:space:]')
+
+    _stoplist="$(_mh_dedup_stopwords | tr '\n' ' ')"
+    awk -F'\t' -v stop=" $_stoplist " -v scopemode="$_across_agents" -v hivedir="$HIVE_DIR" '
+        BEGIN {
+            gsub(/ +/, " ", stop)
+            k = split(stop, STOP, " ")
+        }
+        {
+            path = $2
+            title = $3
+            if (path == "" || title == "") next
+            if (index(path, hivedir "/") == 1) {
+                rel = substr(path, length(hivedir) + 2)
+            } else {
+                rel = path
+            }
+            scope = (scopemode == 1) ? "*" : $1
+            gsub(/[^a-zA-Z0-9]/, " ", title)
+            m = split(title, w, /[ ]+/)
+            ntok = 0
+            for (i = 1; i <= m; i++) {
+                lw = tolower(w[i])
+                if (length(w[i]) > 1 && index(stop, " " lw " ") == 0) {
+                    ntok++
+                    toks[ntok] = lw
+                }
+            }
+            for (i = 2; i <= ntok; i++) {
+                v = toks[i]
+                j = i - 1
+                while (j >= 1 && toks[j] > v) {
+                    toks[j+1] = toks[j]
+                    j--
+                }
+                toks[j+1] = v
+            }
+            out = ""
+            prev = ""
+            for (i = 1; i <= ntok; i++) {
+                if (toks[i] != prev) {
+                    out = (out == "") ? toks[i] : out " " toks[i]
+                    prev = toks[i]
+                }
+            }
+            if (out != "") printf "%s|%s\t%s\t%s\n", scope, out, rel, path
+        }' "$_titles" >> "$_tuples"
+    rm -f "$_titles"
 
     if [ "$_file_count" -eq 0 ]; then
         rm -f "$_tuples"
@@ -3435,8 +3532,7 @@ EOF
 
     _flush_cluster() {
         [ -n "$_cur_key" ] || return 0
-        _count=$(printf '%s\n' "$_cur_files" | grep -c .)
-        [ "$_count" -ge 2 ] || return 0
+        [ "${_cur_count:-0}" -ge 2 ] || return 0
 
         if [ "$_strict" -eq 1 ]; then
             _kept_files=""
@@ -3485,11 +3581,13 @@ $_line"
             _cur_key="$_key"
             _cur_files="$_rel"
             _cur_paths="$_abs"
+            _cur_count=1
         else
             _cur_files="$_cur_files
 $_rel"
             _cur_paths="$_cur_paths
 $_abs"
+            _cur_count=$((_cur_count + 1))
         fi
     done < "$_sorted"
     _flush_cluster
