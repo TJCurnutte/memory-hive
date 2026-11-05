@@ -1502,6 +1502,26 @@ mh_status() {
     printf '  memory-hive help --advanced    # show internal/debug commands\n'
 }
 
+# mh_add was dropped by an update (dispatch referenced it, function was missing — 2026-11-02 fix).
+mh_add() {
+    _mh_require_install
+    _agent="${1:-}"
+    [ -n "$_agent" ] || _mh_die "usage: memory-hive add <agent-id>"
+    _dir="$AGENTS_DIR/$_agent"
+    if [ -d "$_dir" ]; then
+        echo "silo already exists: $_dir"
+        return 0
+    fi
+    mkdir -p "$_dir"
+    printf '# %s — activity log\n\n' "$_agent" > "$_dir/log.md"
+    printf '# %s — working context\n\n' "$_agent" > "$_dir/context.md"
+    printf '# %s — durable memory\n\n' "$_agent" > "$_dir/memory.md"
+    echo "Created agent silo: $_dir"
+    echo "  log.md     — append-only activity log"
+    echo "  context.md — current working context"
+    echo "  memory.md  — durable memory"
+}
+
 mh_maintain() {
     _mh_require_install
     _quiet=0
@@ -2448,6 +2468,32 @@ mh_apply() {
 
 # _mh_classify <abspath> → prints `agent:kind` to stdout, or empty to skip.
 # Maps a hive file path to (who did it, what kind of write it was).
+# _mh_promote_extract_frontmatter <file> <field> -> prints the value of
+# <field> from the file's frontmatter block (the YAML between the first two
+# '---' lines), or nothing if the file/field is absent. One awk fork per call.
+# (This helper was previously CALLED at six sites -- promote eligibility,
+# cluster-kind checks, best-file picking, and curate's promotions loop --
+# but never DEFINED: standalone curate died rc=127 at its first call, and
+# inside optimize's errexit-suppressed context every call degenerated into a
+# full PATH search, costing ~17s per curate pass.)
+_mh_promote_extract_frontmatter() {
+    _f="$1"; _field="$2"
+    [ -n "$_f" ] && [ -n "$_field" ] || return 0
+    [ -f "$_f" ] || return 0
+    awk -v field="$_field" '
+        NR == 1 && $0 != "---" { exit }
+        NR == 1 { infm = 1; next }
+        infm && /^---[[:space:]]*$/ { exit }
+        infm && index($0, field ":") == 1 {
+            v = substr($0, length(field) + 2)
+            sub(/^[[:space:]]+/, "", v)
+            sub(/[[:space:]]+$/, "", v)
+            if (v != "") print v
+            exit
+        }
+    ' "$_f" 2>/dev/null
+}
+
 _mh_classify() {
     _p="$1"
     # Normalize: strip HIVE_DIR prefix so we operate on relative paths.
@@ -2522,6 +2568,7 @@ _mh_mtime_epoch() {
 # file. It's deliberately conservative — better than mtime-only, simpler
 # than a frontmatter schema change.
 _mh_stale_raw_files() {
+    _count_only_contract="${_MH_COUNT_ONLY:-0}"
     _days="${1:-7}"
     _filter_agent="${2:-}"
     _raw_root="$HIVE_DIR/learnings/raw"
@@ -2530,1568 +2577,63 @@ _mh_stale_raw_files() {
     _now_s="$(date +%s)"
     _cutoff=$((_now_s - _days * 86400))
     _decisions="$HIVE_DIR/curator/DECISIONS.md"
-
-    # Layout is learnings/raw/<agent>/<file>.md. Some installs may also have
-    # learnings/raw/<file>.md (no agent dir); attribute those to "unknown".
     _tmp="${TMPDIR:-/tmp}/mh-stale.$$"
     : > "$_tmp"
-    for _adir in "$_raw_root"/*; do
-        [ -e "$_adir" ] || continue
-        if [ -d "$_adir" ]; then
-            _agent="$(basename "$_adir")"
+
+    # Zero-fork-per-file: one find feeds one awk that emits "basename\tpath";
+    # comm filters DECISIONS.md backlinks; the final loop attributes + ages
+    # with shell built-ins only. Same output contract as before.
+    # Batched mtime: one xargs+stat pass yields "mtime<TAB>path" for ALL files —
+    # no per-file forks. awk then filters cutoff, emits basename/agent/path.
+    find "$_raw_root" -name '*.md' -type f -print0 2>/dev/null \
+      | xargs -0 stat -f '%m%t%N' 2>/dev/null \
+      | awk -F"\t" -v cutoff="$_cutoff" -v raw="$_raw_root" \
+          '$1 <= cutoff && $2 ~ raw { p=$2; n=p; sub(/.*\//,"",n); rel=p; sub("^"raw"/","",rel); a=rel; sub("/.*","",a); print n "\t" a "\t" p "\t" $1 }' \
+      | sort -u > "${_tmp}.pairs"
+
+    if [ -f "$_decisions" ]; then
+        grep -oE '[^/ ]+\.md' "$_decisions" 2>/dev/null | sort -u > "${_tmp}.decided"
+        awk -F"\t" 'NR==FNR { keep[$0]; next } !($1 in keep) { print }' \
+            "${_tmp}.decided" "${_tmp}.pairs" > "${_tmp}.keep"
+        rm -f "${_tmp}.decided"
+    else
+        cp "${_tmp}.pairs" "${_tmp}.keep"
+    fi
+    if [ "$_count_only_contract" = "1" ]; then
+        # count-only: no listing needed — emit rows without per-file stats.
+        # Age is approximated from the find cutoff (±1 day, count-only OK).
+        while IFS="	" read -r _base _agent _f; do
+            [ -n "$_base" ] || continue
+            case "$_f" in "$_raw_root"/*) ;; *) continue ;; esac
             if [ -n "$_filter_agent" ] && [ "$_agent" != "$_filter_agent" ]; then
                 continue
             fi
-            for _f in "$_adir"/*.md; do
-                [ -f "$_f" ] || continue
-                _mt="$(_mh_mtime_epoch "$_f")"
-                [ -n "$_mt" ] || continue
-                [ "$_mt" -le "$_cutoff" ] || continue
-                _base="$(basename "$_f")"
-                if [ -f "$_decisions" ] && grep -q -F "$_base" "$_decisions" 2>/dev/null; then
-                    continue
-                fi
-                _age=$(( (_now_s - _mt) / 86400 ))
-                printf '%s\t%s\t%s\n' "$_age" "$_agent" "$_f" >> "$_tmp"
-            done
-        elif [ -f "$_adir" ]; then
-            if [ -n "$_filter_agent" ] && [ "$_filter_agent" != "unknown" ]; then
-                continue
-            fi
-            case "$_adir" in *.md) ;; *) continue ;; esac
-            _mt="$(_mh_mtime_epoch "$_adir")"
-            [ -n "$_mt" ] || continue
-            [ "$_mt" -le "$_cutoff" ] || continue
-            _base="$(basename "$_adir")"
-            if [ -f "$_decisions" ] && grep -q -F "$_base" "$_decisions" 2>/dev/null; then
-                continue
-            fi
-            _age=$(( (_now_s - _mt) / 86400 ))
-            printf '%s\t%s\t%s\n' "$_age" "unknown" "$_adir" >> "$_tmp"
-        fi
-    done
-
-    # POSIX-portable numeric sort, descending (oldest first).
-    sort -k1,1nr "$_tmp" 2>/dev/null
-    rm -f "$_tmp"
-}
-
-# _mh_fmt_time <epoch> → "HH:MM:SS" in local time.
-_mh_fmt_time() {
-    _e="$1"
-    # GNU date accepts @epoch, BSD date accepts -r epoch. Try both.
-    date -d "@$_e" '+%H:%M:%S' 2>/dev/null || date -r "$_e" '+%H:%M:%S' 2>/dev/null || printf '??:??:??'
-}
-
-# _mh_fmt_date <epoch> → "YYYY-MM-DD".
-_mh_fmt_date() {
-    _e="$1"
-    date -d "@$_e" '+%Y-%m-%d' 2>/dev/null || date -r "$_e" '+%Y-%m-%d' 2>/dev/null || printf '????-??-??'
-}
-
-mh_stats() {
-    _mh_require_install
-
-    _now="$(date +%s)"
-    # Start-of-today in local time.
-    _today0="$(date -d 'today 00:00:00' +%s 2>/dev/null || date -v0H -v0M -v0S +%s 2>/dev/null || printf '%s' "$_now")"
-    _week_ago=$((_now - 7 * 86400))
-
-    # Baseline: the installer touches $HIVE_DIR/.baseline-installed as its
-    # last step. Files with mtime <= baseline are installer scaffolding, not
-    # agent activity, and get excluded from the counter. Without this the
-    # counter lies on a fresh install ("13 writes" from the templates).
-    _baseline_file="$HIVE_DIR/.baseline-installed"
-    _baseline_mtime=0
-    _baseline_missing=0
-    if [ -f "$_baseline_file" ]; then
-        _baseline_mtime="$(_mh_mtime_epoch "$_baseline_file")"
-        [ -n "$_baseline_mtime" ] || _baseline_mtime=0
-    else
-        _baseline_missing=1
+            printf '%s\t%s\t%s\n' "0" "$_agent" "$_f"
+        done < "${_tmp}.keep" > "$_tmp"
+        rm -f "${_tmp}.keep"
+        cat "$_tmp"
+        return 0
     fi
-
-    # Pipeline emits records; aggregation happens after to keep counters.
-    _mh_hive_file_list | while IFS= read -r _f; do
-        _cls="$(_mh_classify "$_f")"
-        [ -n "$_cls" ] || continue
-        _mt="$(_mh_mtime_epoch "$_f")"
+    while IFS="	" read -r _base _agent _f _mt; do
+        [ -n "$_base" ] || continue
+        case "$_f" in "$_raw_root"/*) ;; *) continue ;; esac
+        if [ -n "$_filter_agent" ] && [ "$_agent" != "$_filter_agent" ]; then
+            continue
+        fi
         [ -n "$_mt" ] || continue
-        # Drop installer scaffolding (files touched at or before baseline).
-        if [ "$_baseline_mtime" -gt 0 ] && [ "$_mt" -le "$_baseline_mtime" ]; then
-            continue
-        fi
-        printf '%s\t%s\t%s\n' "$_mt" "$_cls" "$_f"
-    done | sort -nr > /tmp/mh-stats.$$
-
-    _total=0; _today=0; _week=0
-    _agent_tally=""
-    _kind_tally=""
-    _latest_row=""
-    while IFS=$(printf '\t') read -r _mt _cls _f; do
-        [ -n "$_mt" ] || continue
-        _total=$((_total + 1))
-        [ "$_mt" -ge "$_today0" ] && _today=$((_today + 1))
-        [ "$_mt" -ge "$_week_ago" ] && _week=$((_week + 1))
-        _who="${_cls%%:*}"
-        _kind="${_cls##*:}"
-        _agent_tally="$_agent_tally
-$_who"
-        _kind_tally="$_kind_tally
-$_kind"
-        [ -z "$_latest_row" ] && _latest_row="$_mt|$_cls|$_f"
-    done < /tmp/mh-stats.$$
-    rm -f /tmp/mh-stats.$$
-
-    # --- render -------------------------------------------------------------
-    printf '\nMemory Hive — activity\n'
-    printf 'Hive: %s\n' "$HIVE_DIR"
-    if [ "$_baseline_missing" -eq 1 ]; then
-        printf '\n  (no .baseline-installed marker — re-run the installer to set it;\n'
-        printf '   stats below include install-time scaffolding until then)\n'
-    else
-        printf 'Since install: %s\n' "$(_mh_fmt_date "$_baseline_mtime")"
-    fi
-    printf '\n'
-    printf '  %-14s %s\n' "Today:"       "$_today writes"
-    printf '  %-14s %s\n' "Last 7 days:" "$_week writes"
-    printf '  %-14s %s\n' "All-time:"    "$_total writes"
-
-    if [ "$_total" -eq 0 ]; then
-        printf '\n  (no agent has written to the hive yet — run a task and come back)\n'
-        printf '\n  Every count here corresponds to a file under %s\n' "$HIVE_DIR"
-        printf '  whose mtime is newer than the install baseline.\n'
-        printf '  Verify with: find %s -type f -newer %s\n\n' "$HIVE_DIR" "$_baseline_file"
-        return 0
-    fi
-
-    printf '\nBy agent:\n'
-    printf '%s\n' "$_agent_tally" | awk 'NF' | sort | uniq -c | sort -rn | while read -r _c _a; do
-        printf '  %-24s %s\n' "$_a" "$_c"
-    done
-
-    printf '\nBy kind:\n'
-    printf '%s\n' "$_kind_tally" | awk 'NF' | sort | uniq -c | sort -rn | while read -r _c _k; do
-        printf '  %-24s %s\n' "$_k" "$_c"
-    done
-
-    if [ -n "$_latest_row" ]; then
-        _mt="${_latest_row%%|*}"
-        _rest="${_latest_row#*|}"
-        _cls="${_rest%%|*}"
-        _f="${_rest#*|}"
-        _rel="${_f#"$HIVE_DIR"/}"
-        printf '\nMost recent write: %s · %s · %s\n' "$(_mh_fmt_date "$_mt") $(_mh_fmt_time "$_mt")" "$_cls" "$_rel"
-    fi
-
-    # Honest-by-construction footer — tells users how to verify independently.
-    printf '\nVerify: find %s -type f -newer %s\n\n' "$HIVE_DIR" "$_baseline_file"
+        _age=$(( (_now_s - _mt) / 86400 ))
+        printf '%s\t%s\t%s\n' "$_age" "$_agent" "$_f"
+    done < "${_tmp}.keep" > "$_tmp"
+    rm -f "${_tmp}.keep"
+    sort -k1,1rn "$_tmp" 2>/dev/null
 }
 
-# mh_watch — live stream. Uses the best available watcher.
-mh_watch() {
-    _mh_require_install
-    [ -d "$HIVE_DIR" ] || _mh_die "Hive directory missing: $HIVE_DIR"
-
-    printf 'Memory Hive — live activity  (Ctrl+C to exit)\n'
-    printf 'Watching: %s\n' "$HIVE_DIR"
-    printf '──────────────────────────────────────────────\n'
-
-    _session_count=0
-
-    # _handle_event <path> — classify, count, print. Called for each event.
-    _handle_event() {
-        _path="$1"
-        [ -f "$_path" ] || return 0
-        _cls="$(_mh_classify "$_path")"
-        [ -n "$_cls" ] || return 0
-        _mt="$(_mh_mtime_epoch "$_path")"
-        [ -n "$_mt" ] || _mt="$(date +%s)"
-        _session_count=$((_session_count + 1))
-        _who="${_cls%%:*}"
-        _kind="${_cls##*:}"
-        _rel="${_path#"$HIVE_DIR"/}"
-        printf '%s  [%03d]  %-18s %-10s %s\n' \
-            "$(_mh_fmt_time "$_mt")" "$_session_count" "$_who" "$_kind" "$_rel"
-    }
-
-    if command -v fswatch >/dev/null 2>&1; then
-        # macOS / portable — fswatch emits one path per line by default.
-        # Avoid `-0` + `read -r -d ''` because POSIX sh (dash on Linux) does
-        # not support `read -d`; newline-delimited keeps us portable, at the
-        # cost of mishandling paths containing literal newlines (very unlikely
-        # for a markdown hive on disk).
-        fswatch "$HIVE_DIR" 2>/dev/null | while IFS= read -r _path; do
-            [ -n "$_path" ] || continue
-            _handle_event "$_path"
-        done
-    elif command -v inotifywait >/dev/null 2>&1; then
-        # Linux — inotifywait with -m keeps streaming.
-        inotifywait -mrq -e close_write,create,modify --format '%w%f' "$HIVE_DIR" 2>/dev/null | while IFS= read -r _path; do
-            _handle_event "$_path"
-        done
-    else
-        # Polling fallback: scan every 5s for files modified since the last
-        # scan. Uses a sentinel file for the time reference (portable vs.
-        # `find -newermt "<date>"` which isn't POSIX).
-        _sentinel="$(mktemp -t mh-watch.XXXXXX)"
-        printf '(polling every 5s — install fswatch or inotify-tools for instant updates)\n'
-        while :; do
-            sleep 5
-            _newer=""
-            # -newer <file> is POSIX. Collect changed files into a list.
-            _newer="$(find "$HIVE_DIR" -type f -newer "$_sentinel" \
-                ! -name '*.upstream' ! -name '*.local' ! -name '.DS_Store' \
-                ! -path '*/.git/*' 2>/dev/null)"
-            touch "$_sentinel"
-            [ -z "$_newer" ] && continue
-            printf '%s\n' "$_newer" | while IFS= read -r _path; do
-                [ -n "$_path" ] && _handle_event "$_path"
-            done
-        done
-    fi
+# _raw_lookup ROOT BASENAME — resolve a basename back to its full path
+# (fast: shell glob per call, but bounded by one agent dir; single fork via find).
+_raw_lookup() {
+    find "$1" -name "$2" -type f 2>/dev/null | head -n 1
 }
 
-# --- tail: most-recent writes with content -----------------------------------
-#
-# `memory-hive tail` shows the N newest hive writes and, for each, the key
-# lines from the file. Different file kinds get different extraction:
-#   * log.md, DECISIONS.md, CONFLICTS.md  — newest "## YYYY-MM-DD" heading
-#                                           and the first paragraph under it
-#   * memory.md, context.md               — last ~10 non-blank lines
-#   * learnings (raw or distilled),       — first H1 + YAML frontmatter
-#     knowledge/*.md
-#   * anything else classifiable          — first H1 only
-#
-# Always exits after printing; `memory-hive watch` already covers streaming.
-
-# _mh_extract_dated_section <abspath>
-# Print the newest "## YYYY-MM-DD..." heading line and every following line up
-# to (but not including) the next blank line, the next "## " heading, or EOF.
-# Indented two spaces so the result nests under the file path in the listing.
-# Falls back to the first 5 non-blank, non-heading lines if no dated section.
-_mh_extract_dated_section() {
-    awk '
-        BEGIN { found = 0; phase = 0; n = 0 }
-        # phase 0 = before heading
-        # phase 1 = found heading, skipping leading blanks
-        # phase 2 = inside the first paragraph
-        # Newest dated heading: file convention is newest-first, so the first
-        # one we see wins.
-        found == 0 && /^## [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ {
-            found = 1
-            phase = 1
-            print "  " $0
-            next
-        }
-        phase == 1 {
-            # Bail on a new "## " heading immediately.
-            if ($0 ~ /^## /) { exit }
-            # Skip blank padding between heading and body.
-            if ($0 ~ /^[[:space:]]*$/) next
-            # First content line — start the body.
-            phase = 2
-            print "  " $0
-            n++
-            if (n >= 8) exit
-            next
-        }
-        phase == 2 {
-            # Stop at next "## " heading or a blank line (paragraph break).
-            if ($0 ~ /^## /) exit
-            if ($0 ~ /^[[:space:]]*$/) exit
-            print "  " $0
-            n++
-            if (n >= 8) exit
-        }
-    ' "$1"
-}
-
-# _mh_extract_tail_lines <abspath>
-# Print the last 10 non-blank lines of the file, indented two spaces. Used for
-# memory.md / context.md where the user is appending bullets and there is no
-# dated structure to anchor on.
-_mh_extract_tail_lines() {
-    awk '
-        { lines[NR] = $0 }
-        END {
-            start = NR - 30
-            if (start < 1) start = 1
-            kept = 0
-            # Walk forward from start; collect non-blank lines.
-            for (i = start; i <= NR; i++) {
-                if (lines[i] ~ /^[[:space:]]*$/) continue
-                buf[++kept] = lines[i]
-            }
-            first = kept - 9
-            if (first < 1) first = 1
-            for (i = first; i <= kept; i++) print "  " buf[i]
-        }
-    ' "$1"
-}
-
-# _mh_extract_learning <abspath>
-# Print YAML frontmatter (between leading --- / ---) plus the first H1 line.
-# Frontmatter is what tells the curator what the learning is about; the H1 is
-# the human-readable title. Both indented two spaces.
-_mh_extract_learning() {
-    awk '
-        BEGIN { fm = 0; fm_done = 0; h1_done = 0; line = 0 }
-        {
-            line++
-            if (line == 1 && $0 == "---") { fm = 1; print "  ---"; next }
-            if (fm == 1 && fm_done == 0) {
-                if ($0 == "---") { print "  ---"; fm_done = 1; next }
-                print "  " $0
-                next
-            }
-            if (h1_done == 0 && $0 ~ /^# /) {
-                print "  " $0
-                h1_done = 1
-                exit
-            }
-        }
-    ' "$1"
-}
-
-# _mh_extract_h1 <abspath>
-# Last-resort fallback: just the first H1.
-_mh_extract_h1() {
-    awk '/^# / { print "  " $0; exit }' "$1"
-}
-
-# _mh_extract_for_kind <kind> <abspath>
-# Dispatch to the right extractor based on the classifier kind. Falls back to
-# tail-lines when the dated extractor finds no heading (some log.md files do
-# not yet use the YYYY-MM-DD convention).
-_mh_extract_for_kind() {
-    _kind="$1"
-    _path="$2"
-    case "$_kind" in
-        log|decision|conflict|draft)
-            _out="$(_mh_extract_dated_section "$_path")"
-            if [ -z "$_out" ]; then
-                _mh_extract_tail_lines "$_path"
-            else
-                printf '%s\n' "$_out"
-            fi
-            ;;
-        memory|context)
-            _mh_extract_tail_lines "$_path"
-            ;;
-        raw|distilled|learning|knowledge)
-            _out="$(_mh_extract_learning "$_path")"
-            if [ -z "$_out" ]; then
-                _mh_extract_h1 "$_path"
-            else
-                printf '%s\n' "$_out"
-            fi
-            ;;
-        *)
-            _mh_extract_h1 "$_path"
-            ;;
-    esac
-}
-
-mh_tail() {
-    _mh_require_install
-
-    _count=10
-    _silo=""
-    _since_date=""
-    _since_epoch=0
-
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            -n|--count)
-                shift
-                [ $# -gt 0 ] || _mh_die "-n/--count needs a value"
-                _count="$1"
-                shift
-                ;;
-            -n=*)   _count="${1#-n=}"; shift ;;
-            --count=*) _count="${1#--count=}"; shift ;;
-            --silo)
-                shift
-                [ $# -gt 0 ] || _mh_die "--silo needs a value"
-                _silo="$1"
-                shift
-                ;;
-            --silo=*) _silo="${1#--silo=}"; shift ;;
-            --since)
-                shift
-                [ $# -gt 0 ] || _mh_die "--since needs a value (YYYY-MM-DD)"
-                _since_date="$1"
-                shift
-                ;;
-            --since=*) _since_date="${1#--since=}"; shift ;;
-            -h|--help)
-                printf 'Usage: memory-hive tail [-n <N>] [--silo <name>] [--since <YYYY-MM-DD>]\n'
-                printf '  Show the N most recent hive writes with key content from each.\n'
-                printf '  Default N=10, cap 100. Always exits after printing.\n'
-                return 0
-                ;;
-            *)
-                _mh_die "Unknown argument: $1"
-                ;;
-        esac
-    done
-
-    # Validate count: positive integer, capped at 100.
-    case "$_count" in
-        ''|*[!0-9]*) _mh_die "-n/--count must be a positive integer (got: $_count)" ;;
-    esac
-    [ "$_count" -ge 1 ] || _mh_die "-n/--count must be >= 1"
-    [ "$_count" -le 100 ] || _count=100
-
-    # Validate / convert --since to epoch.
-    if [ -n "$_since_date" ]; then
-        case "$_since_date" in
-            [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;;
-            *) _mh_die "--since must be YYYY-MM-DD (got: $_since_date)" ;;
-        esac
-        _since_epoch="$(date -d "$_since_date 00:00:00" +%s 2>/dev/null \
-            || date -j -f '%Y-%m-%d %H:%M:%S' "$_since_date 00:00:00" +%s 2>/dev/null \
-            || printf '0')"
-        [ "$_since_epoch" -gt 0 ] || _mh_die "could not parse --since date: $_since_date"
-    fi
-
-    # Baseline (mirror mh_stats): exclude install-time scaffolding.
-    _baseline_file="$HIVE_DIR/.baseline-installed"
-    _baseline_mtime=0
-    if [ -f "$_baseline_file" ]; then
-        _baseline_mtime="$(_mh_mtime_epoch "$_baseline_file")"
-        [ -n "$_baseline_mtime" ] || _baseline_mtime=0
-    fi
-
-    # Build a sorted list of <mtime>\t<class>\t<path> for files that:
-    #   * classify (skips _archived, junk, etc.)
-    #   * are newer than baseline
-    #   * match --silo if given
-    #   * are on/after --since if given
-    _tmp="${TMPDIR:-/tmp}/mh-tail.$$"
-    _mh_hive_file_list | while IFS= read -r _f; do
-        _cls="$(_mh_classify "$_f")"
-        [ -n "$_cls" ] || continue
-        _who="${_cls%%:*}"
-        if [ -n "$_silo" ] && [ "$_who" != "$_silo" ]; then
-            continue
-        fi
-        _mt="$(_mh_mtime_epoch "$_f")"
-        [ -n "$_mt" ] || continue
-        if [ "$_baseline_mtime" -gt 0 ] && [ "$_mt" -le "$_baseline_mtime" ]; then
-            continue
-        fi
-        if [ "$_since_epoch" -gt 0 ] && [ "$_mt" -lt "$_since_epoch" ]; then
-            continue
-        fi
-        printf '%s\t%s\t%s\n' "$_mt" "$_cls" "$_f"
-    done | sort -nr | head -n "$_count" > "$_tmp"
-
-    # Header.
-    printf '\nMemory Hive — last %s writes' "$_count"
-    [ -n "$_silo" ] && printf ' (silo: %s)' "$_silo"
-    [ -n "$_since_date" ] && printf ' (since %s)' "$_since_date"
-    printf '\n'
-    printf '────────────────────────────\n\n'
-
-    if [ ! -s "$_tmp" ]; then
-        printf '  (no writes match)\n\n'
-        rm -f "$_tmp"
-        return 0
-    fi
-
-    # Render each row.
-    while IFS=$(printf '\t') read -r _mt _cls _f; do
-        [ -n "$_mt" ] || continue
-        _who="${_cls%%:*}"
-        _kind="${_cls##*:}"
-        _rel="${_f#"$HIVE_DIR"/}"
-        # Heading line: HH:MM:SS  agent  rel/path
-        printf '%s  %-10s %s\n' "$(_mh_fmt_time "$_mt")" "$_who" "$_rel"
-        # Body — capped at 8 indented lines so 100 entries does not blow the
-        # terminal. Extractors already self-cap; this is a hard ceiling.
-        _mh_extract_for_kind "$_kind" "$_f" | head -n 8
-        printf '\n'
-    done < "$_tmp"
-
-    rm -f "$_tmp"
-    return 0
-}
-
-mh_setup() {
-    _mh_require_install
-    _installer="$INSTALL_DIR/install.sh"
-    if [ ! -f "$_installer" ]; then
-        printf 'ERROR: installer not found at %s\n' "$_installer" >&2
-        printf 'Re-run the install to restore it:\n' >&2
-        printf '  curl -fsSL https://raw.githubusercontent.com/TJCurnutte/memory-hive/main/install.sh | sh\n' >&2
-        return 1
-    fi
-    MEMORY_HIVE_WIZARD=1 MEMORY_HIVE_DIR="$INSTALL_DIR" \
-        MEMORY_HIVE_SKIP_CLAUDE_MD="${MEMORY_HIVE_SKIP_CLAUDE_MD:-1}" \
-        sh "$_installer"
-}
-
-# --- query: searchable hive ---------------------------------------------------
-#
-# `memory-hive query <term>` — grep across every text surface of the hive so
-# nothing the user (or an agent) wrote becomes write-only. We grep $HIVE_DIR
-# directly instead of reusing _mh_classify because the search target is
-# broader (every .md under hive/, including curator/, registry/, raw/,
-# knowledge/). Skips _archived/, .git, .upstream/.local backups, and
-# dotfiles by construction.
-#
-# Defaults to fixed-string match (`grep -F`); pass --regex to opt into ERE.
-# Honest-first: if the term contains regex metacharacters and --regex was
-# NOT passed, we warn the user once before running so a mistyped query
-# doesn't silently treat the regex as a literal.
-
-# _mh_query_has_regex_meta <term> — return 0 if the term contains characters
-# that mean something different in regex than literal text. Conservative
-# list: . * + ? ( ) [ ] { } ^ $ | \. We don't flag - or _ even though
-# they're technically regex-significant inside character classes.
-_mh_query_has_regex_meta() {
-    case "$1" in
-        *[.*+?\(\)\[\]\{\}\^\$\|\\]*) return 0 ;;
-        *) return 1 ;;
-    esac
-}
-
-# _mh_query_classify_path <abspath> — prints the file's "kind" (log,
-# memory, context, learning, distilled, raw, knowledge, curator, registry,
-# other). Used by --kind filtering. Path-driven and intentionally simple
-# — we trust the on-disk layout the installer creates.
-_mh_query_classify_path() {
-    case "$1" in
-        "$HIVE_DIR"/*) _qrel="${1#"$HIVE_DIR"/}" ;;
-        *) printf 'other'; return 0 ;;
-    esac
-    case "$_qrel" in
-        agents/*/log.md)            printf 'log' ;;
-        agents/*/memory.md)         printf 'memory' ;;
-        agents/*/context.md)        printf 'context' ;;
-        agents/*/learnings/*.md)    printf 'learning' ;;
-        learnings/raw/*)            printf 'raw' ;;
-        learnings/distilled/*)      printf 'distilled' ;;
-        knowledge/*)                printf 'knowledge' ;;
-        curator/*)                  printf 'curator' ;;
-        registry/*)                 printf 'registry' ;;
-        raw/*)                      printf 'raw' ;;
-        *)                          printf 'other' ;;
-    esac
-}
-
-# _mh_query_file_list — print one absolute path per line for every text
-# file under $HIVE_DIR that is in scope for query. Mirrors
-# _mh_hive_file_list (skipping .git/.upstream/.local/.DS_Store) plus
-# extra excludes for _archived/ and dotfiles, and limits to .md files.
-# Sanitized agent names guarantee no spaces/newlines in path segments.
-_mh_query_file_list() {
-    [ -d "$HIVE_DIR" ] || return 0
-    find "$HIVE_DIR" -type f -name '*.md' \
-        ! -path "*/_archived/*" \
-        ! -path "*/.git/*" \
-        ! -name '.*' \
-        ! -name "*.upstream" \
-        ! -name "*.local" \
-        ! -name ".DS_Store" \
-        2>/dev/null
-}
-
-# _mh_query_highlight <term> <line> — re-emit the line with ANSI bold-red
-# wrapped around every literal occurrence of <term>. Used only when stdout
-# is a tty. We sed-escape the term so regex metacharacters don't blow up
-# the s/// pattern.
-_mh_query_highlight() {
-    _term="$1"
-    _line="$2"
-    _esc="$(printf '%s' "$_term" | sed -e 's/[\.[\*^$/&#]/\\&/g')"
-    _hl_open="$(printf '\033[1;31m')"
-    _hl_close="$(printf '\033[0m')"
-    printf '%s' "$_line" | sed "s#${_esc}#${_hl_open}&${_hl_close}#g"
-}
-
-mh_query() {
-    _mh_require_install
-
-    _q_term=""
-    _q_silo=""
-    _q_kind=""
-    _q_since=""
-    _q_paths_only=0
-    _q_regex=0
-    _q_max_per_file=10
-
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            -h|--help)
-                cat <<'EOF'
-Usage: memory-hive query <term> [flags]
-
-Searches every text surface of the hive for <term>:
-  agents/*/log.md, memory.md, context.md
-  agents/*/learnings/*.md
-  learnings/raw/**/*.md, learnings/distilled/*.md
-  knowledge/*.md, curator/*.md, registry/*.md, raw/**/*.md
-
-Flags:
-  --silo <name>            Limit to that agent's silo.
-  --kind <k>               Scope by classification:
-                             log | memory | context | learning |
-                             raw | distilled | knowledge | curator | registry
-  --since <YYYY-MM-DD>     Only files modified on/after that date.
-  --paths-only             Print matching paths, no content.
-  --regex                  Treat <term> as an extended regular expression
-                             (default is fixed-string).
-
-Exits 1 if there are no matches (so it pipes cleanly into shell conditionals).
-
-Examples:
-  memory-hive query "circular import"
-  memory-hive query api --silo coder --kind memory
-  memory-hive query 2026-04 --kind log --since 2026-04-20
-  memory-hive query --regex 'TODO|FIXME' --paths-only
-EOF
-                return 0
-                ;;
-            --silo)
-                shift
-                [ $# -gt 0 ] || _mh_die "--silo needs a value"
-                _q_silo="$1"; shift ;;
-            --silo=*)  _q_silo="${1#--silo=}"; shift ;;
-            --kind)
-                shift
-                [ $# -gt 0 ] || _mh_die "--kind needs a value"
-                _q_kind="$1"; shift ;;
-            --kind=*)  _q_kind="${1#--kind=}"; shift ;;
-            --since)
-                shift
-                [ $# -gt 0 ] || _mh_die "--since needs a value"
-                _q_since="$1"; shift ;;
-            --since=*) _q_since="${1#--since=}"; shift ;;
-            --paths-only) _q_paths_only=1; shift ;;
-            --regex)      _q_regex=1; shift ;;
-            --) shift; _q_term="$1"; shift; break ;;
-            -*) _mh_die "Unknown flag: $1 (try --help)" ;;
-            *)
-                if [ -z "$_q_term" ]; then
-                    _q_term="$1"
-                else
-                    _mh_die "Unexpected argument: $1 (only one term; quote multi-word queries)"
-                fi
-                shift
-                ;;
-        esac
-    done
-
-    [ -n "$_q_term" ] || _mh_die "Usage: memory-hive query <term> [flags]   (try --help)"
-
-    # Validate --kind early so a typo fails before the search runs.
-    if [ -n "$_q_kind" ]; then
-        case "$_q_kind" in
-            log|memory|context|learning|raw|distilled|knowledge|curator|registry) ;;
-            *) _mh_die "Unknown --kind '$_q_kind'. Valid: log memory context learning raw distilled knowledge curator registry" ;;
-        esac
-    fi
-
-    # Validate --silo (must be a real on-disk silo; refuse archived/hidden).
-    if [ -n "$_q_silo" ]; then
-        case "$_q_silo" in
-            _archived|.*) _mh_die "Cannot search archived or hidden silos." ;;
-        esac
-        if [ ! -d "$AGENTS_DIR/$_q_silo" ]; then
-            _mh_die "No such silo: $_q_silo"
-        fi
-    fi
-
-    # Validate --since (YYYY-MM-DD only — keep parsing simple + portable).
-    _q_since_epoch=0
-    if [ -n "$_q_since" ]; then
-        case "$_q_since" in
-            [0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]) ;;
-            *) _mh_die "--since must be YYYY-MM-DD (got: $_q_since)" ;;
-        esac
-        # GNU date first, BSD date second.
-        _q_since_epoch="$(date -d "$_q_since 00:00:00" +%s 2>/dev/null \
-            || date -j -f '%Y-%m-%d %H:%M:%S' "$_q_since 00:00:00" +%s 2>/dev/null \
-            || printf '0')"
-        [ "$_q_since_epoch" -gt 0 ] || _mh_die "Could not parse --since date: $_q_since"
-    fi
-
-    # Honest warning: regex metas in a fixed-string query are usually a mistake.
-    if [ "$_q_regex" -eq 0 ] && _mh_query_has_regex_meta "$_q_term"; then
-        printf '(note: "%s" contains regex metacharacters but is being treated literally;\n' "$_q_term" >&2
-        printf '       pass --regex if you meant a regular expression)\n\n' >&2
-    fi
-
-    # Tty-aware highlighting. Only colorize when stdout is a real terminal.
-    _q_color=0
-    [ -t 1 ] && _q_color=1
-
-    # Pick grep flavor. -F = fixed-string (default), -E = extended regex.
-    if [ "$_q_regex" -eq 1 ]; then
-        _q_grep_flag="-E"
-    else
-        _q_grep_flag="-F"
-    fi
-
-    # Build the candidate file list with --silo / --kind / --since applied
-    # up front, so we never grep files that don't qualify and per-file
-    # output ordering stays deterministic.
-    _q_files="$INSTALL_DIR/.query-files.$$"
-    _mh_query_file_list | while IFS= read -r _f; do
-        [ -n "$_f" ] || continue
-        if [ -n "$_q_silo" ]; then
-            case "$_f" in
-                "$AGENTS_DIR/$_q_silo"/*) ;;
-                *) continue ;;
-            esac
-        fi
-        if [ -n "$_q_kind" ]; then
-            _fkind="$(_mh_query_classify_path "$_f")"
-            [ "$_fkind" = "$_q_kind" ] || continue
-        fi
-        if [ "$_q_since_epoch" -gt 0 ]; then
-            _fmt="$(_mh_mtime_epoch "$_f")"
-            [ -n "$_fmt" ] || continue
-            [ "$_fmt" -ge "$_q_since_epoch" ] || continue
-        fi
-        printf '%s\n' "$_f"
-    done | sort > "$_q_files"
-
-    if [ ! -s "$_q_files" ]; then
-        rm -f "$_q_files"
-        printf 'No files in scope for query.\n' >&2
-        return 1
-    fi
-
-    # --- search loop -------------------------------------------------------
-    # Per-file grep with line numbers, capped at $_q_max_per_file rows.
-    # Counters live in a temp file because the while-pipeline runs in a
-    # subshell on POSIX sh and any plain-shell counters wouldn't survive.
-    _q_counts="$INSTALL_DIR/.query-counts.$$"
-    : > "$_q_counts"
-    _q_first=1
-
-    while IFS= read -r _f; do
-        [ -n "$_f" ] || continue
-        # -n line numbers, -I skip binary, -h no filename (we print our own).
-        _q_hits="$(grep -nIh "$_q_grep_flag" -e "$_q_term" "$_f" 2>/dev/null || true)"
-        [ -n "$_q_hits" ] || continue
-
-        _q_count="$(printf '%s\n' "$_q_hits" | wc -l | tr -d ' ')"
-        printf 'F\n' >> "$_q_counts"
-        _i=0
-        while [ "$_i" -lt "$_q_count" ]; do
-            printf 'M\n' >> "$_q_counts"
-            _i=$((_i + 1))
-        done
-
-        if [ "$_q_paths_only" -eq 1 ]; then
-            printf '%s\n' "${_f#"$HIVE_DIR"/}"
-            continue
-        fi
-
-        # Heading style cribbed from rg: blank line between files, cyan-bold
-        # path (when tty), then `line:content` rows.
-        if [ "$_q_first" -eq 0 ]; then printf '\n'; fi
-        _q_first=0
-
-        _qrel="${_f#"$HIVE_DIR"/}"
-        if [ "$_q_color" -eq 1 ]; then
-            printf '\033[1;36m%s\033[0m\n' "$_qrel"
-        else
-            printf '%s\n' "$_qrel"
-        fi
-
-        # Cap per-file rows in a subshell so its counters don't bleed into
-        # the outer while-loop.
-        printf '%s\n' "$_q_hits" | (
-            _shown=0
-            _truncated=0
-            while IFS= read -r _row; do
-                [ -n "$_row" ] || continue
-                _shown=$((_shown + 1))
-                if [ "$_shown" -gt "$_q_max_per_file" ]; then
-                    _truncated=1
-                    break
-                fi
-                # Chop "lineno:content" at the first colon only — content
-                # itself may contain colons.
-                _ln="${_row%%:*}"
-                _body="${_row#*:}"
-                if [ "$_q_color" -eq 1 ]; then
-                    _body_hl="$(_mh_query_highlight "$_q_term" "$_body")"
-                    printf '  \033[2m%s\033[0m: %s\n' "$_ln" "$_body_hl"
-                else
-                    printf '  %s: %s\n' "$_ln" "$_body"
-                fi
-            done
-            if [ "$_truncated" -eq 1 ]; then
-                _more=$((_q_count - _q_max_per_file))
-                printf '  ... +%s more match(es) in this file\n' "$_more"
-            fi
-        )
-    done < "$_q_files"
-    rm -f "$_q_files"
-
-    # Aggregate counters from the temp file. Use wc -l rather than grep -c
-    # because grep -c exits non-zero on zero matches, which would force a
-    # fallback path; wc -l is unconditional. tr strips macOS' leading spaces.
-    if [ -s "$_q_counts" ]; then
-        _q_total_files="$(grep '^F$' "$_q_counts" 2>/dev/null | wc -l | tr -d ' ')"
-        _q_total_matches="$(grep '^M$' "$_q_counts" 2>/dev/null | wc -l | tr -d ' ')"
-    else
-        _q_total_files=0
-        _q_total_matches=0
-    fi
-    rm -f "$_q_counts"
-
-    if [ "$_q_total_matches" -eq 0 ]; then
-        printf 'No matches for "%s".\n' "$_q_term" >&2
-        return 1
-    fi
-
-    if [ "$_q_paths_only" -eq 0 ]; then
-        printf '\n'
-    fi
-    if [ "$_q_color" -eq 1 ]; then
-        printf '\033[2m%s match(es) across %s file(s).\033[0m\n' \
-            "$_q_total_matches" "$_q_total_files" >&2
-    else
-        printf '%s match(es) across %s file(s).\n' \
-            "$_q_total_matches" "$_q_total_files" >&2
-    fi
-    return 0
-}
-
-mh_list() {
-    _mh_require_install
-    if [ ! -d "$AGENTS_DIR" ]; then
-        printf '(no agents yet)\n'
-        return 0
-    fi
-    _found=0
-    for _p in "$AGENTS_DIR"/*; do
-        [ -d "$_p" ] || continue
-        _n="$(basename "$_p")"
-        case "$_n" in
-            _archived|.*) continue ;;
-        esac
-        _found=1
-        # Try to pull the first non-placeholder line from ## Role in context.md.
-        _role_summary=""
-        _cfile="$_p/context.md"
-        if [ -f "$_cfile" ]; then
-            _role_summary="$(awk '
-                /^## Role$/ { inrole = 1; next }
-                inrole == 1 && /^## / { exit }
-                inrole == 1 {
-                    # Skip blank lines and placeholder parenthetical prompts.
-                    if ($0 ~ /^[[:space:]]*$/) next
-                    if ($0 ~ /^\([^)]*\)$/) next
-                    print
-                    exit
-                }
-            ' "$_cfile")"
-        fi
-        if [ -n "$_role_summary" ]; then
-            # Trim to ~70 chars for one-line display.
-            _role_summary="$(printf '%s' "$_role_summary" | cut -c1-70)"
-            printf '  %-20s %s\n' "$_n" "$_role_summary"
-        else
-            printf '  %-20s (no role set)\n' "$_n"
-        fi
-    done
-    if [ "$_found" -eq 0 ]; then
-        printf '(no agents yet)\n'
-    fi
-}
-
-mh_add() {
-    _mh_require_install
-    _name_raw="$1"
-    shift || true
-    if [ -z "$_name_raw" ]; then
-        _mh_die "Usage: memory-hive add <name> [--role <template|path>]"
-    fi
-    _role_arg=""
-    # Parse remaining args. Only --role is supported for now.
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --role)
-                shift
-                if [ $# -eq 0 ]; then
-                    _mh_die "--role needs a value (template name or path)"
-                fi
-                _role_arg="$1"
-                shift
-                ;;
-            --role=*)
-                _role_arg="${1#--role=}"
-                shift
-                ;;
-            *)
-                _mh_die "Unknown argument: $1"
-                ;;
-        esac
-    done
-
-    _name="$(_mh_sanitize_name "$_name_raw")"
-    if [ -z "$_name" ]; then
-        _mh_die "Name must contain letters or digits (lowercase, dashes allowed)."
-    fi
-    if [ "$_name" = "main" ] || [ "$_name" = "_archived" ]; then
-        _mh_die "'$_name' is a reserved name."
-    fi
-    if [ -d "$AGENTS_DIR/$_name" ]; then
-        _mh_die "Agent '$_name' already exists at $AGENTS_DIR/$_name"
-    fi
-
-    _role_text=""
-    if [ -n "$_role_arg" ]; then
-        _role_text="$(_mh_resolve_role "$_role_arg")"
-    fi
-
-    if [ ! -f "$CREATE_AGENT" ]; then
-        _mh_die "create-agent.sh missing at $CREATE_AGENT — reinstall Memory Hive."
-    fi
-
-    if [ -n "$_role_text" ]; then
-        MH_AGENT_ROLE="$_role_text" \
-            MEMORY_HIVE_DIR="$INSTALL_DIR" \
-            sh "$CREATE_AGENT" "$_name"
-    else
-        MEMORY_HIVE_DIR="$INSTALL_DIR" \
-            sh "$CREATE_AGENT" "$_name"
-    fi
-    _mh_register_quiet
-}
-
-mh_archive() {
-    _mh_require_install
-    _name="$1"
-    [ -z "$_name" ] && _mh_die "Usage: memory-hive archive <name>"
-    case "$_name" in
-        main|_archived) _mh_die "'$_name' cannot be archived." ;;
-    esac
-    _src="$AGENTS_DIR/$_name"
-    if [ ! -d "$_src" ]; then
-        _mh_die "No such agent: $_name (looked in $_src)"
-    fi
-    _date="$(date -u +%Y-%m-%d 2>/dev/null || echo "today")"
-    _arch_root="$AGENTS_DIR/_archived/$_date"
-    mkdir -p "$_arch_root" || _mh_die "Could not create $_arch_root"
-    _dst="$_arch_root/$_name"
-    if [ -e "$_dst" ]; then
-        _i=1
-        while [ -e "${_dst}.${_i}" ]; do _i=$((_i + 1)); done
-        _dst="${_dst}.${_i}"
-    fi
-    mv "$_src" "$_dst" || _mh_die "Could not move $_src to $_dst"
-    printf 'Archived %s -> %s\n' "$_name" "$_dst"
-    _mh_register_quiet
-}
-
-mh_role() {
-    _mh_require_install
-    _name="$1"
-    [ -z "$_name" ] && _mh_die "Usage: memory-hive role <name>"
-    _cfile="$AGENTS_DIR/$_name/context.md"
-    if [ ! -f "$_cfile" ]; then
-        _mh_die "No such agent: $_name (looked for $_cfile)"
-    fi
-    _editor="${EDITOR:-vi}"
-    # Run (don't exec) so we can refresh the registry after $EDITOR closes.
-    # Errexit would abort the whole script if the editor exits non-zero
-    # (e.g. user quit with :cq in vim); guard so we still run register.
-    _editor_rc=0
-    "$_editor" "$_cfile" || _editor_rc=$?
-    _mh_register_quiet
-    return "$_editor_rc"
-}
-
-mh_rename() {
-    _mh_require_install
-    _old="$1"; _new_raw="$2"
-    [ -z "$_old" ] || [ -z "$_new_raw" ] && _mh_die "Usage: memory-hive rename <old> <new>"
-    case "$_old" in
-        main|_archived) _mh_die "'$_old' cannot be renamed." ;;
-    esac
-    _new="$(_mh_sanitize_name "$_new_raw")"
-    if [ -z "$_new" ]; then
-        _mh_die "New name must contain letters or digits (lowercase, dashes allowed)."
-    fi
-    if [ "$_new" = "main" ] || [ "$_new" = "_archived" ]; then
-        _mh_die "'$_new' is a reserved name."
-    fi
-    _src="$AGENTS_DIR/$_old"
-    _dst="$AGENTS_DIR/$_new"
-    if [ ! -d "$_src" ]; then
-        _mh_die "No such agent: $_old"
-    fi
-    if [ -e "$_dst" ]; then
-        _mh_die "Target already exists: $_new"
-    fi
-    mv "$_src" "$_dst" || _mh_die "Could not rename $_src -> $_dst"
-    printf 'Renamed %s -> %s\n' "$_old" "$_new"
-    _mh_register_quiet
-}
-
-# --- promote -----------------------------------------------------------------
-#
-# Move (cite, really) a raw learning into a distilled file with one command.
-#
-# Why: the curator loop says "review raw, promote valuable, log decision".
-# Doing that by hand is mv + diff + edit + open DECISIONS.md + type. Friction
-# kills the loop. This verb collapses it to one command:
-#
-#   memory-hive promote learnings/raw/coder/2026-04-23-test-isolation.md
-#
-# Mechanics: append a summary with a backlink to the distilled file, append a
-# dated entry to curator/DECISIONS.md, regenerate the registry. The raw file
-# stays put -- it's the source of truth. Distilled cites raw, never copies it
-# verbatim.
-
-# _mh_promote_extract_frontmatter <file> <key> -> prints value to stdout, or
-# empty if key not found. Reads only the first frontmatter block.
-_mh_promote_extract_frontmatter() {
-    _file="$1"
-    _key="$2"
-    awk -v k="$_key" '
-        BEGIN { inf = 0 }
-        NR == 1 && /^---[[:space:]]*$/ { inf = 1; next }
-        inf == 1 && /^---[[:space:]]*$/ { inf = 0; exit }
-        inf == 1 {
-            idx = index($0, ":")
-            if (idx == 0) next
-            key = substr($0, 1, idx - 1)
-            val = substr($0, idx + 1)
-            sub(/^[[:space:]]+/, "", key); sub(/[[:space:]]+$/, "", key)
-            sub(/^[[:space:]]+/, "", val); sub(/[[:space:]]+$/, "", val)
-            if (key == k) { print val; exit }
-        }
-    ' "$_file"
-}
-
-# _mh_promote_first_h1 <file> -> first "# Heading" text (sans leading "# ").
-# Skips frontmatter. Empty if no H1 found.
-_mh_promote_first_h1() {
-    _file="$1"
-    awk '
-        BEGIN { inf = 0 }
-        NR == 1 && /^---[[:space:]]*$/ { inf = 1; next }
-        inf == 1 && /^---[[:space:]]*$/ { inf = 0; next }
-        inf == 1 { next }
-        /^#[[:space:]]+/ {
-            sub(/^#[[:space:]]+/, "", $0)
-            sub(/[[:space:]]+$/, "", $0)
-            print
-            exit
-        }
-    ' "$_file"
-}
-
-# _mh_promote_summary <file> -> summary body for distilled. Prefers the
-# "## Generalizable rule" section (highest signal), else first paragraph
-# after the first H1. Capped at ~1200 chars.
-_mh_promote_summary() {
-    _file="$1"
-    _gr="$(awk '
-        BEGIN { take = 0 }
-        /^##[[:space:]]+[Gg]eneralizable [Rr]ule[[:space:]]*$/ { take = 1; next }
-        take == 1 && /^##[[:space:]]/ { exit }
-        take == 1 { print }
-    ' "$_file")"
-    if [ -n "$(printf '%s' "$_gr" | tr -d '[:space:]')" ]; then
-        printf '%s' "$_gr" | head -c 1200
-        return 0
-    fi
-    awk '
-        BEGIN { inf = 0; past_h1 = 0; in_para = 0 }
-        NR == 1 && /^---[[:space:]]*$/ { inf = 1; next }
-        inf == 1 && /^---[[:space:]]*$/ { inf = 0; next }
-        inf == 1 { next }
-        past_h1 == 0 && /^#[[:space:]]+/ { past_h1 = 1; next }
-        past_h1 == 1 {
-            if (/^##[[:space:]]/) next
-            if (/^[[:space:]]*$/) {
-                if (in_para == 1) exit
-                next
-            }
-            in_para = 1
-            print
-        }
-    ' "$_file" | head -c 1200
-}
-
-# _mh_promote_infer_target <file> -> distilled basename. Uses frontmatter
-# 'kind:' field, else patterns.md.
-_mh_promote_infer_target() {
-    _file="$1"
-    _kind="$(_mh_promote_extract_frontmatter "$_file" kind)"
-    case "$_kind" in
-        win|wins)               printf 'wins.md' ;;
-        mistake|mistakes)       printf 'mistakes.md' ;;
-        cross-agent|insight|cross-agent-insight|cross-agent-insights)
-                                printf 'cross-agent-insights.md' ;;
-        pattern|patterns|"")    printf 'patterns.md' ;;
-        *)                      printf '%s.md' "$_kind" ;;
-    esac
-}
-
-mh_promote() {
-    _mh_require_install
-
-    _raw_arg=""
-    _into=""
-    _title_override=""
-    _dry=0
-
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --into)
-                shift
-                [ $# -gt 0 ] || _mh_die "--into needs a value"
-                _into="$1"; shift ;;
-            --into=*)
-                _into="${1#--into=}"; shift ;;
-            --title)
-                shift
-                [ $# -gt 0 ] || _mh_die "--title needs a value"
-                _title_override="$1"; shift ;;
-            --title=*)
-                _title_override="${1#--title=}"; shift ;;
-            --dry-run|-n)
-                _dry=1; shift ;;
-            -h|--help)
-                printf 'Usage: memory-hive promote <raw-file> [--into <name>] [--title <text>] [--dry-run]\n'
-                return 0 ;;
-            -*)
-                _mh_die "Unknown flag: $1" ;;
-            *)
-                if [ -z "$_raw_arg" ]; then
-                    _raw_arg="$1"
-                else
-                    _mh_die "Unexpected argument: $1"
-                fi
-                shift ;;
-        esac
-    done
-
-    [ -n "$_raw_arg" ] || _mh_die "Usage: memory-hive promote <raw-file> [--into <name>] [--title <text>] [--dry-run]"
-
-    # Resolve to an absolute path. Try as-given, then a few sensible roots.
-    _raw_abs=""
-    for _candidate in \
-        "$_raw_arg" \
-        "$INSTALL_DIR/$_raw_arg" \
-        "$HIVE_DIR/$_raw_arg" \
-        "$HIVE_DIR/learnings/raw/$_raw_arg"; do
-        if [ -f "$_candidate" ]; then
-            _raw_abs="$_candidate"
-            break
-        fi
-    done
-    [ -n "$_raw_abs" ] || _mh_die "Raw file not found: $_raw_arg"
-
-    # Canonicalize via cd/pwd (portable; macOS has no `readlink -f`).
-    _raw_dir="$(cd "$(dirname "$_raw_abs")" 2>/dev/null && pwd)"
-    [ -n "$_raw_dir" ] || _mh_die "Could not resolve directory of $_raw_abs"
-    _raw_abs="$_raw_dir/$(basename "$_raw_abs")"
-
-    _raw_root="$HIVE_DIR/learnings/raw"
-    case "$_raw_abs" in
-        "$_raw_root"/*) ;;
-        *) _mh_die "Refuses to promote from outside $_raw_root (got $_raw_abs)" ;;
-    esac
-
-    _fm_date="$(_mh_promote_extract_frontmatter "$_raw_abs" date)"
-    _fm_agent="$(_mh_promote_extract_frontmatter "$_raw_abs" agent)"
-    if [ -z "$_fm_date" ] || [ -z "$_fm_agent" ]; then
-        printf 'ERROR: %s is missing required frontmatter (need date: and agent:).\n' "$_raw_abs" >&2
-        printf '       See templates/memory-entry.md for the canonical format.\n' >&2
-        exit 1
-    fi
-    _fm_context="$(_mh_promote_extract_frontmatter "$_raw_abs" context)"
-
-    if [ -n "$_title_override" ]; then
-        _title="$_title_override"
-    else
-        _title="$(_mh_promote_first_h1 "$_raw_abs")"
-        if [ -z "$_title" ]; then
-            _bn="$(basename "$_raw_abs" .md)"
-            _title="$(printf '%s' "$_bn" | sed 's/^[0-9-]*//' | tr '-' ' ')"
-            [ -n "$_title" ] || _title="$_bn"
-        fi
-    fi
-
-    if [ -z "$_into" ]; then
-        _into="$(_mh_promote_infer_target "$_raw_abs")"
-    fi
-    _into="$(basename "$_into")"
-    case "$_into" in
-        *.md) ;;
-        *) _into="$_into.md" ;;
-    esac
-    _distilled_dir="$HIVE_DIR/learnings/distilled"
-    _distilled_abs="$_distilled_dir/$_into"
-
-    _raw_rel_to_hive="${_raw_abs#"$HIVE_DIR/"}"
-    _backlink="../${_raw_rel_to_hive#learnings/}"
-
-    _summary="$(_mh_promote_summary "$_raw_abs")"
-    [ -n "$_summary" ] || _summary="_(no summary extracted; see source for full content)_"
-
-    _today="$(date -u +%Y-%m-%d 2>/dev/null || printf 'unknown-date')"
-
-    _section_tmp="$(mktemp -t mh-promote-section.XXXXXX)"
-    {
-        printf '\n## %s\n\n' "$_title"
-        printf -- '- **Date promoted:** %s\n' "$_today"
-        printf -- '- **Source:** [%s](%s)\n' "$_raw_rel_to_hive" "$_backlink"
-        printf -- '- **Contributing agent:** %s\n' "$_fm_agent"
-        printf -- '- **Original date:** %s\n' "$_fm_date"
-        if [ -n "$_fm_context" ]; then
-            printf -- '- **Context:** %s\n' "$_fm_context"
-        fi
-        printf '\n%s\n' "$_summary"
-    } > "$_section_tmp"
-
-    _decision_tmp="$(mktemp -t mh-promote-decision.XXXXXX)"
-    {
-        printf '\n### %s -- Promoted `%s` -> `learnings/distilled/%s`\n' \
-            "$_today" "$_raw_rel_to_hive" "$_into"
-        printf -- '- **Decision:** Append summary + backlink to %s.\n' "$_into"
-        printf -- '- **Reasoning:** Promoted via `memory-hive promote`; raw entry retained as source of truth.\n'
-        printf -- '- **Agents involved:** %s\n' "$_fm_agent"
-        printf -- '- **Outcome:** Distilled section "%s" written; raw file left in place.\n' "$_title"
-    } > "$_decision_tmp"
-
-    if [ "$_dry" -eq 1 ]; then
-        printf '[dry-run] Would append to %s:\n' "$_distilled_abs"
-        cat "$_section_tmp"
-        printf '\n[dry-run] Would append to %s/curator/DECISIONS.md:\n' "$HIVE_DIR"
-        cat "$_decision_tmp"
-        printf '\n[dry-run] No files written.\n'
-        rm -f "$_section_tmp" "$_decision_tmp"
-        return 0
-    fi
-
-    mkdir -p "$_distilled_dir" || _mh_die "Could not create $_distilled_dir"
-    if [ ! -f "$_distilled_abs" ]; then
-        _stem="$(basename "$_into" .md)"
-        _h1="$(printf '%s' "$_stem" | tr '-' ' ' | awk '{ for (i=1;i<=NF;i++) $i = toupper(substr($i,1,1)) tolower(substr($i,2)); print }')"
-        {
-            printf '# %s\n\n' "$_h1"
-            printf 'Curated learnings promoted from `learnings/raw/`. Each section cites\n'
-            printf 'its source raw file; raw is the source of truth, distilled is the\n'
-            printf 'reference index. Append-only -- entries are never edited in place.\n'
-        } > "$_distilled_abs" || _mh_die "Could not create $_distilled_abs"
-    fi
-    cat "$_section_tmp" >> "$_distilled_abs" || _mh_die "Could not append to $_distilled_abs"
-
-    _curator_dir="$HIVE_DIR/curator"
-    _decisions_file="$_curator_dir/DECISIONS.md"
-    mkdir -p "$_curator_dir" || _mh_die "Could not create $_curator_dir"
-    if [ ! -f "$_decisions_file" ]; then
-        {
-            printf '# Decisions\n\n'
-            printf 'Audit trail of every curation decision made by the curator.\n\n'
-            printf -- '---\n'
-        } > "$_decisions_file" || _mh_die "Could not create $_decisions_file"
-    fi
-    cat "$_decision_tmp" >> "$_decisions_file" || _mh_die "Could not append to $_decisions_file"
-
-    rm -f "$_section_tmp" "$_decision_tmp"
-
-    _mh_register_quiet
-
-    printf 'Promoted:\n'
-    printf '  source:   %s\n' "$_raw_rel_to_hive"
-    printf '  target:   learnings/distilled/%s\n' "$_into"
-    printf '  title:    %s\n' "$_title"
-    printf '  decision: curator/DECISIONS.md\n'
-    printf '\n--- appended to %s ---\n' "$_into"
-    printf '\n## %s\n\n' "$_title"
-    printf -- '- **Date promoted:** %s\n' "$_today"
-    printf -- '- **Source:** [%s](%s)\n' "$_raw_rel_to_hive" "$_backlink"
-    printf -- '- **Contributing agent:** %s\n' "$_fm_agent"
-    printf -- '- **Original date:** %s\n' "$_fm_date"
-    if [ -n "$_fm_context" ]; then
-        printf -- '- **Context:** %s\n' "$_fm_context"
-    fi
-    printf '\n%s\n' "$_summary"
-}
-
-# --- tagging -----------------------------------------------------------------
-#
-# Lightweight topical tagging for learning files. Tags live in YAML-style
-# frontmatter under the existing `date:`/`agent:` keys, comma-separated and
-# sorted alphabetically for determinism. The point: let topical clusters
-# (e.g. "testing", "parallel") emerge from the data so the curator can
-# spin up new distilled/<topic>.md files without manual hunting.
-
-# _mh_validate_tag <tag> → 0 if valid, 1 with stderr message if not.
-# Rules: lowercase, [a-z0-9-], 2-24 chars, no leading/trailing dash, no run.
-# Uses LC_ALL=C + grep so the character classes behave identically across
-# platforms (macOS bash 3.2's `case` glob has surprised us at least once).
-_mh_validate_tag() {
-    _t="$1"
-    if [ -z "$_t" ]; then
-        printf 'ERROR: empty tag\n' >&2
-        return 1
-    fi
-    _len=$(printf '%s' "$_t" | LC_ALL=C wc -c | tr -d ' ')
-    if [ "$_len" -lt 2 ] || [ "$_len" -gt 24 ]; then
-        printf 'ERROR: tag "%s" must be 2-24 chars (got %s)\n' "$_t" "$_len" >&2
-        return 1
-    fi
-    # Whole-string match against the strict character set. grep -E with an
-    # anchored alternation gives us platform-independent semantics; case-glob
-    # `[!a-z0-9-]` was observed to silently accept "Bad" on the macOS CI
-    # runner even though it rejects locally on the same OS.
-    if ! printf '%s' "$_t" | LC_ALL=C grep -Eq '^[a-z0-9-]+$'; then
-        printf 'ERROR: tag "%s" must be lowercase a-z, 0-9, or dash\n' "$_t" >&2
-        return 1
-    fi
-    case "$_t" in
-        -*|*-) printf 'ERROR: tag "%s" cannot start or end with a dash\n' "$_t" >&2; return 1 ;;
-        *--*) printf 'ERROR: tag "%s" cannot contain consecutive dashes\n' "$_t" >&2; return 1 ;;
-    esac
-    return 0
-}
-
-# _mh_extract_tags <file> → prints comma-separated tag list from frontmatter,
-# or empty if no tags: line. Only reads inside the first `---`/`---` fence.
-_mh_extract_tags() {
-    awk '
-        BEGIN { fence = 0 }
-        NR == 1 && /^---[[:space:]]*$/ { fence = 1; next }
-        fence == 1 && /^---[[:space:]]*$/ { exit }
-        fence == 1 && /^tags:[[:space:]]*/ {
-            line = $0
-            sub(/^tags:[[:space:]]*/, "", line)
-            print line
-            exit
-        }
-    ' "$1"
-}
-
-# _mh_has_frontmatter <file> → 0 if file starts with `---` fence, 1 otherwise.
-_mh_has_frontmatter() {
-    [ -f "$1" ] || return 1
-    awk 'NR == 1 { if ($0 ~ /^---[[:space:]]*$/) exit 0; else exit 1 }' "$1"
-}
-
-# _mh_normalize_tags <comma-list> → newline-separated, trimmed, deduped, sorted.
-# Empty entries dropped. Used to merge new + existing tag sets.
-_mh_normalize_tags() {
-    printf '%s' "$1" \
-        | tr ',' '\n' \
-        | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
-        | awk 'NF > 0' \
-        | sort -u
-}
-
-mh_tag() {
-    _mh_require_install
-    _file="$1"
-    shift || true
-    if [ -z "$_file" ] || [ $# -eq 0 ]; then
-        _mh_die "Usage: memory-hive tag <file> <tag1> [tag2 ...]"
-    fi
-    if [ ! -f "$_file" ]; then
-        _mh_die "File not found: $_file"
-    fi
-    case "$_file" in
-        *.md|*.markdown) ;;
-        *) _mh_die "Not a markdown file: $_file" ;;
-    esac
-    if ! _mh_has_frontmatter "$_file"; then
-        printf 'ERROR: %s has no YAML frontmatter (must start with `---`).\n' "$_file" >&2
-        printf 'Tip: add a frontmatter block manually, or run `memory-hive lint` once it exists.\n' >&2
-        exit 1
-    fi
-
-    # Validate every input tag before touching the file.
-    for _t in "$@"; do
-        _mh_validate_tag "$_t" || exit 1
-    done
-
-    _existing="$(_mh_extract_tags "$_file")"
-    _before="$_existing"
-    [ -n "$_before" ] || _before='(none)'
-
-    # Merge: existing + new args, normalized.
-    _merged_input="$_existing"
-    for _t in "$@"; do
-        if [ -n "$_merged_input" ]; then
-            _merged_input="$_merged_input,$_t"
-        else
-            _merged_input="$_t"
-        fi
-    done
-    _merged="$(_mh_normalize_tags "$_merged_input")"
-    # Re-join with ", " in sorted order.
-    _new_line="$(printf '%s' "$_merged" | tr '\n' ',' | sed -e 's/,$//' -e 's/,/, /g')"
-
-    # Rewrite the frontmatter:
-    #   - if a `tags:` line exists, replace it
-    #   - else insert before `agent:` (preferred), else after `date:`,
-    #     else append before the closing `---`.
-    _tmp="$_file.mhtag.$$"
-    awk -v newtags="$_new_line" '
-        BEGIN { fence = 0; in_fm = 0; replaced = 0; inserted = 0; saw_date = 0 }
-        {
-            if (NR == 1 && $0 ~ /^---[[:space:]]*$/) {
-                print
-                in_fm = 1
-                next
-            }
-            if (in_fm == 1 && $0 ~ /^---[[:space:]]*$/) {
-                # Closing fence — insert here if we never managed to.
-                if (replaced == 0 && inserted == 0) {
-                    print "tags: " newtags
-                    inserted = 1
-                }
-                print
-                in_fm = 2
-                next
-            }
-            if (in_fm == 1) {
-                if ($0 ~ /^tags:[[:space:]]*/) {
-                    print "tags: " newtags
-                    replaced = 1
-                    next
-                }
-                if ($0 ~ /^agent:[[:space:]]*/ && replaced == 0 && inserted == 0) {
-                    # Insert tags between date: and agent: for canonical order.
-                    print "tags: " newtags
-                    inserted = 1
-                    print
-                    next
-                }
-                print
-                next
-            }
-            print
-        }
-    ' "$_file" > "$_tmp" || { rm -f "$_tmp"; _mh_die "Failed to rewrite $_file"; }
-    mv "$_tmp" "$_file" || { rm -f "$_tmp"; _mh_die "Failed to write $_file"; }
-
-    printf 'tags before: %s\n' "$_before"
-    printf 'tags after:  %s\n' "$_new_line"
-}
-
-# _mh_tag_files: scan all .md files under the hive that have a `tags:` line in
-# their frontmatter. Emit `tag<TAB>file` records, one per (tag, file) pair.
-# Honors $MH_FILTER_AGENT if set (limits to that agent's silo + raw learnings).
-_mh_tag_files() {
-    [ -d "$HIVE_DIR" ] || return 0
-    find "$HIVE_DIR" -type f -name '*.md' \
-        ! -path "*/.git/*" \
-        ! -path "*/_archived/*" \
-        ! -name "*.upstream" \
-        2>/dev/null | while IFS= read -r _f; do
-        if [ -n "${MH_FILTER_AGENT:-}" ]; then
-            _rel="${_f#"$HIVE_DIR"/}"
-            case "$_rel" in
-                agents/"$MH_FILTER_AGENT"/*) ;;
-                learnings/raw/"$MH_FILTER_AGENT"-*.md) ;;
-                learnings/raw/"$MH_FILTER_AGENT"/*) ;;
-                *) continue ;;
-            esac
-        fi
-        _line="$(_mh_extract_tags "$_f")"
-        [ -n "$_line" ] || continue
-        printf '%s' "$_line" | tr ',' '\n' \
-            | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//' \
-            | awk -v f="$_f" 'NF > 0 { print $0 "\t" f }'
-    done
-}
-
-mh_tags() {
-    _mh_require_install
-    _filter_agent=""
-    _filter_tag=""
-    while [ $# -gt 0 ]; do
-        case "$1" in
-            --agent)
-                shift
-                [ $# -gt 0 ] || _mh_die "--agent needs a value"
-                _filter_agent="$1"; shift ;;
-            --agent=*) _filter_agent="${1#--agent=}"; shift ;;
-            --tag)
-                shift
-                [ $# -gt 0 ] || _mh_die "--tag needs a value"
-                _filter_tag="$1"; shift ;;
-            --tag=*) _filter_tag="${1#--tag=}"; shift ;;
-            -h|--help)
-                printf 'Usage: memory-hive tags [--agent <name>] [--tag <name>]\n'
-                return 0 ;;
-            *) _mh_die "Unknown argument: $1" ;;
-        esac
-    done
-
-    MH_FILTER_AGENT="$_filter_agent"
-    export MH_FILTER_AGENT
-
-    _records="$(_mh_tag_files)"
-
-    if [ -z "$_records" ]; then
-        if [ -n "$_filter_agent" ]; then
-            printf '(no tagged learning files for agent "%s")\n' "$_filter_agent"
-        else
-            printf '(no tagged learning files yet — try `memory-hive tag <file> <tag>`)\n'
-        fi
-        return 0
-    fi
-
-    if [ -n "$_filter_tag" ]; then
-        # List files using this tag.
-        _matches="$(printf '%s\n' "$_records" \
-            | awk -F'	' -v want="$_filter_tag" '$1 == want { print $2 }' \
-            | sort -u)"
-        if [ -z "$_matches" ]; then
-            printf '(no files use tag "%s")\n' "$_filter_tag"
-            return 0
-        fi
-        # Build the output as one string so a downstream `| grep -q` exiting
-        # early can't EPIPE us mid-loop. macOS bash-as-sh under `set -e`
-        # was tripping on broken-pipe in a piped while-loop.
-        _out="$(printf 'Files tagged "%s":\n' "$_filter_tag"
-            printf '%s\n' "$_matches" | while IFS= read -r _f; do
-                _rel="${_f#"$HIVE_DIR"/}"
-                printf '  %s\n' "$_rel"
-            done)"
-        printf '%s\n' "$_out"
-        return 0
-    fi
-
-    # Default: tag → count, sorted desc. Same EPIPE-safe pattern as above —
-    # accumulate then print once.
-    _header="Tags in hive"
-    [ -n "$_filter_agent" ] && _header="$_header (agent=$_filter_agent)"
-    _body="$(printf '%s\n' "$_records" \
-        | awk -F'	' '{ print $1 }' \
-        | sort | uniq -c | sort -rn \
-        | awk '{
-            count = $1
-            $1 = ""
-            sub(/^ /, "")
-            printf "  %4d  %s\n", count, $0
-        }')"
-    printf '%s:\n%s\n' "$_header" "$_body"
-}
-
-# mh_stale — list raw learnings older than N days with no curator decision.
-# Flags:
-#   --days N          window in days (default 7, env MEMORY_HIVE_STALE_DAYS)
-#   --agent <name>    only that agent's raw subdir
-#   --count           print just the integer count (scriptable)
-#   -h | --help       usage
 mh_stale() {
     _mh_require_install
     _days="${MEMORY_HIVE_STALE_DAYS:-7}"
@@ -4140,7 +2682,7 @@ EOF
     done
 
     _stale_tmp="${TMPDIR:-/tmp}/mh-stale-cli.$$"
-    _mh_stale_raw_files "$_days" "$_agent" > "$_stale_tmp" 2>/dev/null || : > "$_stale_tmp"
+    _MH_COUNT_ONLY=$([ "$_count_only" -eq 1 ] && echo 1 || echo 0) _mh_stale_raw_files "$_days" "$_agent" > "$_stale_tmp" 2>/dev/null || : > "$_stale_tmp"
     _n="$(awk 'END { print NR }' "$_stale_tmp" 2>/dev/null)"
     [ -n "$_n" ] || _n=0
 
@@ -4731,13 +3273,13 @@ _mh_dedup_normalize() {
     [ -n "$_txt" ] || return 0
     _stop="$(_mh_dedup_stopwords | tr '\n' ' ')"
     printf '%s' "$_txt" \
-        | tr '[:upper:]' '[:lower:]' \
-        | tr -c 'a-z0-9' ' ' \
-        | tr -s ' ' '\n' \
         | awk -v stop=" $_stop " '
-            NF && length($0) > 1 {
-                pat = " " $0 " "
-                if (index(stop, pat) == 0) print $0
+            {
+                gsub(/[^a-zA-Z0-9]/, " ")
+                n = split($0, w, /[ ]+/)
+                for (i = 1; i <= n; i++)
+                    if (length(w[i]) > 1 && index(stop, " " tolower(w[i]) " ") == 0)
+                        printf "%s\n", tolower(w[i])
             }
         ' \
         | sort -u \
@@ -4896,25 +3438,102 @@ EOF
     _tuples="$INSTALL_DIR/.dedup-tuples.$$"
     : > "$_tuples"
 
-    _file_count=0
-    for _agent_dir in "$_raw_root"/*; do
-        [ -d "$_agent_dir" ] || continue
-        _agent="$(basename "$_agent_dir")"
-        for _f in "$_agent_dir"/*.md; do
-            [ -f "$_f" ] || continue
-            _file_count=$((_file_count + 1))
-            _title="$(_mh_dedup_title "$_f")"
-            _norm="$(_mh_dedup_normalize "$_title")"
-            [ -n "$_norm" ] || continue
-            if [ "$_across_agents" -eq 1 ]; then
-                _scope="*"
-            else
-                _scope="$_agent"
-            fi
-            _rel="${_f#"$HIVE_DIR"/}"
-            printf '%s\t%s\t%s\n' "$_scope|$_norm" "$_rel" "$_f" >> "$_tuples"
-        done
-    done
+    # Batched tuple build: one find|xargs|awk pass extracts every file's title
+    # (identical semantics to _mh_dedup_title: first non-empty H1, else the
+    # slug fallback -- date prefix stripped, - and _ become spaces), then one
+    # awk pass normalizes every title (identical semantics to
+    # _mh_dedup_normalize: lowercase tokens, drop length<=1, padded-stoplist
+    # substring test, sort-unique via insertion sort, space-joined). This
+    # replaces the former per-file pipeline (~3 forks per file) with a fixed
+    # handful of processes total. Scans exactly one level of agent dirs,
+    # matching the previous glob; skips dotfiles; NUL-safe for odd paths.
+    _titles="$INSTALL_DIR/.dedup-titles.$$"
+    find "$_raw_root" -mindepth 2 -maxdepth 2 -name '*.md' -type f ! -name '.*' -print0 \
+        | xargs -0 awk '
+            FNR==1 {
+                if (path != "") {
+                    if (title == "") {
+                        t = path
+                        sub(/.*\//, "", t)
+                        sub(/\.md$/, "", t)
+                        sub(/^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-/, "", t)
+                        gsub(/[-_]/, " ", t)
+                        title = t
+                    }
+                    print agent "\t" path "\t" title
+                }
+                path = FILENAME
+                title = ""
+                n = split(FILENAME, segs, "/")
+                agent = segs[n-1]
+            }
+            /^# / && title == "" {
+                line = $0
+                sub(/^# +/, "", line)
+                sub(/[[:space:]]+$/, "", line)
+                if (line != "") title = line
+            }
+            END {
+                if (path != "") {
+                    if (title == "") {
+                        t = path
+                        sub(/.*\//, "", t)
+                        sub(/\.md$/, "", t)
+                        sub(/^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]-/, "", t)
+                        gsub(/[-_]/, " ", t)
+                        title = t
+                    }
+                    print agent "\t" path "\t" title
+                }
+            }' > "$_titles" 2>/dev/null
+    _file_count=$(wc -l < "$_titles" | tr -d '[:space:]')
+
+    _stoplist="$(_mh_dedup_stopwords | tr '\n' ' ')"
+    awk -F'\t' -v stop=" $_stoplist " -v scopemode="$_across_agents" -v hivedir="$HIVE_DIR" '
+        BEGIN {
+            gsub(/ +/, " ", stop)
+            k = split(stop, STOP, " ")
+        }
+        {
+            path = $2
+            title = $3
+            if (path == "" || title == "") next
+            if (index(path, hivedir "/") == 1) {
+                rel = substr(path, length(hivedir) + 2)
+            } else {
+                rel = path
+            }
+            scope = (scopemode == 1) ? "*" : $1
+            gsub(/[^a-zA-Z0-9]/, " ", title)
+            m = split(title, w, /[ ]+/)
+            ntok = 0
+            for (i = 1; i <= m; i++) {
+                lw = tolower(w[i])
+                if (length(w[i]) > 1 && index(stop, " " lw " ") == 0) {
+                    ntok++
+                    toks[ntok] = lw
+                }
+            }
+            for (i = 2; i <= ntok; i++) {
+                v = toks[i]
+                j = i - 1
+                while (j >= 1 && toks[j] > v) {
+                    toks[j+1] = toks[j]
+                    j--
+                }
+                toks[j+1] = v
+            }
+            out = ""
+            prev = ""
+            for (i = 1; i <= ntok; i++) {
+                if (toks[i] != prev) {
+                    out = (out == "") ? toks[i] : out " " toks[i]
+                    prev = toks[i]
+                }
+            }
+            if (out != "") printf "%s|%s\t%s\t%s\n", scope, out, rel, path
+        }' "$_titles" >> "$_tuples"
+    rm -f "$_titles"
 
     if [ "$_file_count" -eq 0 ]; then
         rm -f "$_tuples"
@@ -4938,8 +3557,7 @@ EOF
 
     _flush_cluster() {
         [ -n "$_cur_key" ] || return 0
-        _count=$(printf '%s\n' "$_cur_files" | grep -c .)
-        [ "$_count" -ge 2 ] || return 0
+        [ "${_cur_count:-0}" -ge 2 ] || return 0
 
         if [ "$_strict" -eq 1 ]; then
             _kept_files=""
@@ -4988,11 +3606,13 @@ $_line"
             _cur_key="$_key"
             _cur_files="$_rel"
             _cur_paths="$_abs"
+            _cur_count=1
         else
             _cur_files="$_cur_files
 $_rel"
             _cur_paths="$_cur_paths
 $_abs"
+            _cur_count=$((_cur_count + 1))
         fi
     done < "$_sorted"
     _flush_cluster
@@ -5142,6 +3762,19 @@ _mh_conflicts_body_tokens() {
 
 # _mh_conflicts_frontmatter_kind <file> -> reuse promote helper, then map via
 # _mh_promote_infer_target so casing/aliases collapse (win|wins -> wins.md).
+_mh_promote_infer_target() {
+    _file="$1"
+    _kind="$(_mh_promote_extract_frontmatter "$_file" kind)"
+    case "$_kind" in
+        win|wins)               printf 'wins.md' ;;
+        mistake|mistakes)       printf 'mistakes.md' ;;
+        cross-agent|insight|cross-agent-insight|cross-agent-insights)
+                                printf 'cross-agent-insights.md' ;;
+        pattern|patterns|"")    printf 'patterns.md' ;;
+        *)                      printf '%s.md' "$_kind" ;;
+    esac
+}
+
 _mh_conflicts_kind_target() {
     _mh_promote_infer_target "$1"
 }
@@ -5764,55 +4397,187 @@ LINTHELP
     : > "$_LINT_ERR_FILE"
     : > "$_LINT_WARN_FILE"
 
-    _files=0
-    _files_with_issues=0
-    _first_block=1
-    while IFS= read -r _f; do
-        [ -n "$_f" ] || continue
-        _files=$((_files + 1))
-
-        # Derive agent-from-path: only when file lives under raw/<agent>/.
-        # If the file sits directly under raw/ (no agent subdir), agent_path
-        # is empty and the agent-match check is skipped.
-        _agent_path=""
-        case "$_f" in
-            "$_raw_dir"/*/*)
-                _rest="${_f#"$_raw_dir"/}"
-                _agent_path="${_rest%%/*}"
+    # ---- batched lint -------------------------------------------------
+    # One wc pass collects exact byte sizes for every file (replaces the
+    # per-file `wc -c` fork). One xargs|awk pass performs ALL schema checks
+    # (identical rules to _mh_lint_one) and emits issue blocks. The shell
+    # read-loop below only renders blocks and tallies counts -- zero forks.
+    _lint_raw="$_tmpdir/rawout"
+    _lint_sizes="$_tmpdir/sizes"
+    tr '\n' '\0' < "$_list" | xargs -0 wc -c > "$_lint_sizes" 2>/dev/null
+    tr '\n' '\0' < "$_list" | xargs -0 awk -v sizesfile="$_lint_sizes" \
+        -v rawdir="$_raw_dir" -v instdir="$INSTALL_DIR" -v fixmode="$_fix" '
+        BEGIN {
+            while ((getline line < sizesfile) > 0) {
+                if (match(line, /^ *[0-9]+/)) {
+                    sz = substr(line, 1, RLENGTH); gsub(/ /, "", sz)
+                    p = substr(line, RLENGTH + 1); sub(/^ +/, "", p)
+                    SIZE[p] = sz + 0
+                }
+            }
+            close(sizesfile)
+        }
+        function flush_file(   base, nb, ok, k, needquote, msg, nseg, segs) {
+            filecount++
+            n = 0
+            base = FILENAME
+            if ((k = index(base, "/")) > 0) {  # keep only last segment
+                while ((k = index(base, "/")) > 0) base = substr(base, k + 1)
+            }
+            # 1. frontmatter open/close
+            if (fm_open != 1) {
+                emit("error", "frontmatter: file does not start with `---`")
+            } else if (fm_close == 0) {
+                emit("error", "frontmatter: missing closing `---`")
+            }
+            # 2. required fields
+            if (fm_open == 1) {
+                if (fdate == "")  emit("error", "frontmatter: missing required field `date`")
+                if (fagent == "") emit("error", "frontmatter: missing required field `agent`")
+                if (fctx == "")   emit("error", "frontmatter: missing required field `context`")
+                if (fconf == "")  emit("error", "frontmatter: missing required field `confidence`")
+            }
+            # 3. date sanity
+            if (fdate != "") {
+                ok = (fdate ~ /^[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]$/)
+                if (!ok) {
+                    emit("error", "frontmatter: `date` must be YYYY-MM-DD (got `" fdate "`)")
+                } else {
+                    mm = substr(fdate, 6, 2) + 0; dd = substr(fdate, 9, 2) + 0
+                    if (mm < 1 || mm > 12 || dd < 1 || dd > 31) {
+                        emit("error", "frontmatter: `date` not a valid YYYY-MM-DD (`" fdate "`)")
+                    }
+                }
+            }
+            # 4. agent vs parent dir
+            if (fagent != "" && apath != "") {
+                if (fagent != apath) {
+                    emit("error", "frontmatter: `agent: " fagent "` does not match parent directory `" apath "`")
+                }
+            }
+            # 5. confidence values
+            if (fconf != "") {
+                if (fconf != "low" && fconf != "medium" && fconf != "high") {
+                    emit("warn", "frontmatter: `confidence` should be low|medium|high (got `" fconf "`)")
+                }
+            }
+            # 6. filename convention
+            nb = tolower(base)
+            gsub(/_/, "-", nb)
+            gsub(/-+/, "-", nb)
+            ok = (base ~ /^[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]-.*[a-z0-9].*\.md$/)
+            if (!ok) {
+                msg = "filename does not match <YYYY-MM-DD>-<slug>.md convention"
+                if (fixmode == 1 && nb != base) {
+                    if (nb ~ /^[0-9][0-9][0-9][0-9]-[0-1][0-9]-[0-3][0-9]-.*[a-z0-9].*\.md$/) {
+                        print "FIX|" FILENAME "|" nb
+                        hadfix = 1
+                        n++
+                        return_from_fix = 1
+                    } else {
+                        emit("warn", msg)
+                    }
+                } else {
+                    emit("warn", msg)
+                }
+            }
+            # 7. H1 after frontmatter
+            if (fm_open == 1 && h1 == "") {
+                emit("warn", "content: no H1 (`# Title`) found after frontmatter")
+            }
+            # 8. size cap
+            sz = SIZE[FILENAME] + 0
+            if (sz >= 51200) {
+                emit("warn", "file size " sz " bytes exceeds 50KB hygiene cap")
+            }
+            if (n > 0) withissues++
+        }
+        function emit(level, msg) {
+            print "ISS|" level "|" msg
+            if (level == "error") errtot++; else warntot++
+            n++
+        }
+        FNR == 1 {
+            if (fpath != "") flush_file()
+            fpath = FILENAME
+            fm_open = 0; fm_close = 0; h1 = ""
+            fdate = ""; fagent = ""; fctx = ""; fconf = ""
+            in_fm = 0; hadfix = 0; n = 0
+            apath = ""
+            if (index(FILENAME, rawdir "/") == 1) {
+                rest = substr(FILENAME, length(rawdir) + 2)
+                if ((k = index(rest, "/")) > 0) apath = substr(rest, 1, k - 1)
+            }
+        }
+        {
+            if (FNR == 1 && $0 == "---") { in_fm = 1; fm_open = 1; next }
+            if (in_fm == 1) {
+                if ($0 == "---") { in_fm = 0; fm_close = FNR; next }
+                if (match($0, /^[A-Za-z_][A-Za-z0-9_-]*[[:space:]]*:[[:space:]]*/)) {
+                    key = substr($0, 1, RLENGTH); val = substr($0, RLENGTH + 1)
+                    sub(/[[:space:]]*:[[:space:]]*$/, "", key)
+                    klow = tolower(key)
+                    sub(/[[:space:]]+$/, "", val)
+                    if (substr(val, 1, 1) == "\"" && substr(val, length(val), 1) == "\"") {
+                        val = substr(val, 2, length(val) - 2)
+                    }
+                    if (klow == "date" && fdate == "") fdate = val
+                    else if (klow == "agent" && fagent == "") fagent = val
+                    else if (klow == "context" && fctx == "") fctx = val
+                    else if (klow == "confidence" && fconf == "") fconf = val
+                }
+                next
+            }
+            if (fm_open == 1 && h1 == "") {
+                if (match($0, /^#[[:space:]]+/)) h1 = FNR
+            }
+        }
+        END {
+            if (fpath != "") flush_file()
+            print "ENDC|" errtot + 0 " " warntot + 0 " " withissues + 0 " " filecount + 0
+        }' > "$_lint_raw" 2>/dev/null || :
+    _files="$(wc -l < "$_list" | tr -d ' ')"
+    _err_count=0; _warn_count=0; _files_with_issues=0
+    _block_open=0; _first_block=1
+    _shell_warn_extra=0
+    while IFS='|' read -r _t _a _rest; do
+        case "$_t" in
+            BLOCK)
+                if [ "$_first_block" -eq 1 ]; then
+                    _first_block=0
+                else
+                    printf '\n'
+                fi
+                printf '%s\n' "$_a"
+                _files_with_issues=$((_files_with_issues + 1))
+                ;;
+            ISS)
+                printf '  %-7s %s\n' "$_a" "$_rest"
+                ;;
+            FIX)
+                _dir="${_a%/*}"
+                _old="${_a##*/}"
+                if [ -e "$_dir/$_rest" ]; then
+                    printf '  %-7s %s\n' "warn" "filename does not match <YYYY-MM-DD>-<slug>.md (auto-fix target \`$_rest\` already exists)"
+                    _warn_count=$((_warn_count + 1))
+                elif mv "$_a" "$_dir/$_rest" 2>/dev/null; then
+                    printf '  %-7s %s\n' "fixed" "renamed \`$_old\` -> \`$_rest\`"
+                else
+                    printf '  %-7s %s\n' "warn" "filename does not match <YYYY-MM-DD>-<slug>.md (rename failed)"
+                    _warn_count=$((_warn_count + 1))
+                fi
+                ;;
+            ENDC)
+                set -- $_a $_rest
+                _err_count="$1"
+                _warn_count=$((_warn_count + $2))
+                _files_with_issues="$3"
                 ;;
         esac
+    done < "$_lint_raw"
+    rm -f "$_lint_raw" "$_lint_sizes"
 
-        _out="$(_mh_lint_one "$_f" "$_agent_path" "$_fix")"
-        if [ -n "$_out" ]; then
-            _files_with_issues=$((_files_with_issues + 1))
-            # Tally per-issue: count error/warn lines emitted for this file.
-            _ne=$(printf '%s\n' "$_out" | grep -c '^error|' || true)
-            _nw=$(printf '%s\n' "$_out" | grep -c '^warn|'  || true)
-            [ -n "$_ne" ] || _ne=0
-            [ -n "$_nw" ] || _nw=0
-            printf '%s\n' "$_ne" >> "$_LINT_ERR_FILE"
-            printf '%s\n' "$_nw" >> "$_LINT_WARN_FILE"
-            # Display path: relative to install root if possible.
-            _disp="$_f"
-            case "$_f" in
-                "$INSTALL_DIR"/*) _disp="${_f#"$INSTALL_DIR"/}" ;;
-            esac
-            if [ "$_first_block" -eq 1 ]; then
-                _first_block=0
-            else
-                printf '\n'
-            fi
-            printf '%s\n' "$_disp"
-            printf '%s\n' "$_out" | while IFS='|' read -r _lvl _msg; do
-                [ -n "$_lvl" ] || continue
-                printf '  %-7s %s\n' "$_lvl" "$_msg"
-            done
-        fi
-    done < "$_list"
-
-    # Sum the per-file counts. awk handles the empty-file case cleanly.
-    _err_count="$(awk '{s+=$1} END{print s+0}' "$_LINT_ERR_FILE" 2>/dev/null)"
-    _warn_count="$(awk '{s+=$1} END{print s+0}' "$_LINT_WARN_FILE" 2>/dev/null)"
+    # (counts arrive from the batched awk's ENDC line inside the loop above)
     [ -n "$_err_count" ]  || _err_count=0
     [ -n "$_warn_count" ] || _warn_count=0
 
@@ -6261,6 +5026,117 @@ mh_reflect() {
     rm -f "$_entries_tsv" "$_bodies_tsv" "$_themes_tsv" "$_addendum_file"
     trap - EXIT
     return 0
+}
+
+_mh_fmt_time() {
+    _e="$1"
+    # GNU date accepts @epoch, BSD date accepts -r epoch. Try both.
+    date -d "@$_e" '+%H:%M:%S' 2>/dev/null || date -r "$_e" '+%H:%M:%S' 2>/dev/null || printf '??:??:??'
+}
+
+# _mh_fmt_date <epoch> -> "YYYY-MM-DD".
+_mh_fmt_date() {
+    _e="$1"
+    date -d "@$_e" '+%Y-%m-%d' 2>/dev/null || date -r "$_e" '+%Y-%m-%d' 2>/dev/null || printf '????-??-??'
+}
+
+mh_stats() {
+    _mh_require_install
+
+    _now="$(date +%s)"
+    # Start-of-today in local time.
+    _today0="$(date -d 'today 00:00:00' +%s 2>/dev/null || date -v0H -v0M -v0S +%s 2>/dev/null || printf '%s' "$_now")"
+    _week_ago=$((_now - 7 * 86400))
+
+    # Baseline: the installer touches $HIVE_DIR/.baseline-installed as its
+    # last step. Files with mtime <= baseline are installer scaffolding, not
+    # agent activity, and get excluded from the counter. Without this the
+    # counter lies on a fresh install ("13 writes" from the templates).
+    _baseline_file="$HIVE_DIR/.baseline-installed"
+    _baseline_mtime=0
+    _baseline_missing=0
+    if [ -f "$_baseline_file" ]; then
+        _baseline_mtime="$(_mh_mtime_epoch "$_baseline_file")"
+        [ -n "$_baseline_mtime" ] || _baseline_mtime=0
+    else
+        _baseline_missing=1
+    fi
+
+    # Pipeline emits records; aggregation happens after to keep counters.
+    _mh_hive_file_list | while IFS= read -r _f; do
+        _cls="$(_mh_classify "$_f")"
+        [ -n "$_cls" ] || continue
+        _mt="$(_mh_mtime_epoch "$_f")"
+        [ -n "$_mt" ] || continue
+        # Drop installer scaffolding (files touched at or before baseline).
+        if [ "$_baseline_mtime" -gt 0 ] && [ "$_mt" -le "$_baseline_mtime" ]; then
+            continue
+        fi
+        printf '%s\t%s\t%s\n' "$_mt" "$_cls" "$_f"
+    done | sort -nr > /tmp/mh-stats.$$
+
+    _total=0; _today=0; _week=0
+    _agent_tally=""
+    _kind_tally=""
+    _latest_row=""
+    while IFS=$(printf '\t') read -r _mt _cls _f; do
+        [ -n "$_mt" ] || continue
+        _total=$((_total + 1))
+        [ "$_mt" -ge "$_today0" ] && _today=$((_today + 1))
+        [ "$_mt" -ge "$_week_ago" ] && _week=$((_week + 1))
+        _who="${_cls%%:*}"
+        _kind="${_cls##*:}"
+        _agent_tally="$_agent_tally
+$_who"
+        _kind_tally="$_kind_tally
+$_kind"
+        [ -z "$_latest_row" ] && _latest_row="$_mt|$_cls|$_f"
+    done < /tmp/mh-stats.$$
+    rm -f /tmp/mh-stats.$$
+
+    # --- render -------------------------------------------------------------
+    printf '\nMemory Hive — activity\n'
+    printf 'Hive: %s\n' "$HIVE_DIR"
+    if [ "$_baseline_missing" -eq 1 ]; then
+        printf '\n  (no .baseline-installed marker — re-run the installer to set it;\n'
+        printf '   stats below include install-time scaffolding until then)\n'
+    else
+        printf 'Since install: %s\n' "$(_mh_fmt_date "$_baseline_mtime")"
+    fi
+    printf '\n'
+    printf '  %-14s %s\n' "Today:"       "$_today writes"
+    printf '  %-14s %s\n' "Last 7 days:" "$_week writes"
+    printf '  %-14s %s\n' "All-time:"    "$_total writes"
+
+    if [ "$_total" -eq 0 ]; then
+        printf '\n  (no agent has written to the hive yet — run a task and come back)\n'
+        printf '\n  Every count here corresponds to a file under %s\n' "$HIVE_DIR"
+        printf '  whose mtime is newer than the install baseline.\n'
+        printf '  Verify with: find %s -type f -newer %s\n\n' "$HIVE_DIR" "$_baseline_file"
+        return 0
+    fi
+
+    printf '\nBy agent:\n'
+    printf '%s\n' "$_agent_tally" | awk 'NF' | sort | uniq -c | sort -rn | while read -r _c _a; do
+        printf '  %-24s %s\n' "$_a" "$_c"
+    done
+
+    printf '\nBy kind:\n'
+    printf '%s\n' "$_kind_tally" | awk 'NF' | sort | uniq -c | sort -rn | while read -r _c _k; do
+        printf '  %-24s %s\n' "$_k" "$_c"
+    done
+
+    if [ -n "$_latest_row" ]; then
+        _mt="${_latest_row%%|*}"
+        _rest="${_latest_row#*|}"
+        _cls="${_rest%%|*}"
+        _f="${_rest#*|}"
+        _rel="${_f#"$HIVE_DIR"/}"
+        printf '\nMost recent write: %s · %s · %s\n' "$(_mh_fmt_date "$_mt") $(_mh_fmt_time "$_mt")" "$_cls" "$_rel"
+    fi
+
+    # Honest-by-construction footer — tells users how to verify independently.
+    printf '\nVerify: find %s -type f -newer %s\n\n' "$HIVE_DIR" "$_baseline_file"
 }
 
 mh_digest() {
