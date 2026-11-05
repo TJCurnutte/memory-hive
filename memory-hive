@@ -3762,6 +3762,19 @@ _mh_conflicts_body_tokens() {
 
 # _mh_conflicts_frontmatter_kind <file> -> reuse promote helper, then map via
 # _mh_promote_infer_target so casing/aliases collapse (win|wins -> wins.md).
+_mh_promote_infer_target() {
+    _file="$1"
+    _kind="$(_mh_promote_extract_frontmatter "$_file" kind)"
+    case "$_kind" in
+        win|wins)               printf 'wins.md' ;;
+        mistake|mistakes)       printf 'mistakes.md' ;;
+        cross-agent|insight|cross-agent-insight|cross-agent-insights)
+                                printf 'cross-agent-insights.md' ;;
+        pattern|patterns|"")    printf 'patterns.md' ;;
+        *)                      printf '%s.md' "$_kind" ;;
+    esac
+}
+
 _mh_conflicts_kind_target() {
     _mh_promote_infer_target "$1"
 }
@@ -5013,6 +5026,117 @@ mh_reflect() {
     rm -f "$_entries_tsv" "$_bodies_tsv" "$_themes_tsv" "$_addendum_file"
     trap - EXIT
     return 0
+}
+
+_mh_fmt_time() {
+    _e="$1"
+    # GNU date accepts @epoch, BSD date accepts -r epoch. Try both.
+    date -d "@$_e" '+%H:%M:%S' 2>/dev/null || date -r "$_e" '+%H:%M:%S' 2>/dev/null || printf '??:??:??'
+}
+
+# _mh_fmt_date <epoch> -> "YYYY-MM-DD".
+_mh_fmt_date() {
+    _e="$1"
+    date -d "@$_e" '+%Y-%m-%d' 2>/dev/null || date -r "$_e" '+%Y-%m-%d' 2>/dev/null || printf '????-??-??'
+}
+
+mh_stats() {
+    _mh_require_install
+
+    _now="$(date +%s)"
+    # Start-of-today in local time.
+    _today0="$(date -d 'today 00:00:00' +%s 2>/dev/null || date -v0H -v0M -v0S +%s 2>/dev/null || printf '%s' "$_now")"
+    _week_ago=$((_now - 7 * 86400))
+
+    # Baseline: the installer touches $HIVE_DIR/.baseline-installed as its
+    # last step. Files with mtime <= baseline are installer scaffolding, not
+    # agent activity, and get excluded from the counter. Without this the
+    # counter lies on a fresh install ("13 writes" from the templates).
+    _baseline_file="$HIVE_DIR/.baseline-installed"
+    _baseline_mtime=0
+    _baseline_missing=0
+    if [ -f "$_baseline_file" ]; then
+        _baseline_mtime="$(_mh_mtime_epoch "$_baseline_file")"
+        [ -n "$_baseline_mtime" ] || _baseline_mtime=0
+    else
+        _baseline_missing=1
+    fi
+
+    # Pipeline emits records; aggregation happens after to keep counters.
+    _mh_hive_file_list | while IFS= read -r _f; do
+        _cls="$(_mh_classify "$_f")"
+        [ -n "$_cls" ] || continue
+        _mt="$(_mh_mtime_epoch "$_f")"
+        [ -n "$_mt" ] || continue
+        # Drop installer scaffolding (files touched at or before baseline).
+        if [ "$_baseline_mtime" -gt 0 ] && [ "$_mt" -le "$_baseline_mtime" ]; then
+            continue
+        fi
+        printf '%s\t%s\t%s\n' "$_mt" "$_cls" "$_f"
+    done | sort -nr > /tmp/mh-stats.$$
+
+    _total=0; _today=0; _week=0
+    _agent_tally=""
+    _kind_tally=""
+    _latest_row=""
+    while IFS=$(printf '\t') read -r _mt _cls _f; do
+        [ -n "$_mt" ] || continue
+        _total=$((_total + 1))
+        [ "$_mt" -ge "$_today0" ] && _today=$((_today + 1))
+        [ "$_mt" -ge "$_week_ago" ] && _week=$((_week + 1))
+        _who="${_cls%%:*}"
+        _kind="${_cls##*:}"
+        _agent_tally="$_agent_tally
+$_who"
+        _kind_tally="$_kind_tally
+$_kind"
+        [ -z "$_latest_row" ] && _latest_row="$_mt|$_cls|$_f"
+    done < /tmp/mh-stats.$$
+    rm -f /tmp/mh-stats.$$
+
+    # --- render -------------------------------------------------------------
+    printf '\nMemory Hive — activity\n'
+    printf 'Hive: %s\n' "$HIVE_DIR"
+    if [ "$_baseline_missing" -eq 1 ]; then
+        printf '\n  (no .baseline-installed marker — re-run the installer to set it;\n'
+        printf '   stats below include install-time scaffolding until then)\n'
+    else
+        printf 'Since install: %s\n' "$(_mh_fmt_date "$_baseline_mtime")"
+    fi
+    printf '\n'
+    printf '  %-14s %s\n' "Today:"       "$_today writes"
+    printf '  %-14s %s\n' "Last 7 days:" "$_week writes"
+    printf '  %-14s %s\n' "All-time:"    "$_total writes"
+
+    if [ "$_total" -eq 0 ]; then
+        printf '\n  (no agent has written to the hive yet — run a task and come back)\n'
+        printf '\n  Every count here corresponds to a file under %s\n' "$HIVE_DIR"
+        printf '  whose mtime is newer than the install baseline.\n'
+        printf '  Verify with: find %s -type f -newer %s\n\n' "$HIVE_DIR" "$_baseline_file"
+        return 0
+    fi
+
+    printf '\nBy agent:\n'
+    printf '%s\n' "$_agent_tally" | awk 'NF' | sort | uniq -c | sort -rn | while read -r _c _a; do
+        printf '  %-24s %s\n' "$_a" "$_c"
+    done
+
+    printf '\nBy kind:\n'
+    printf '%s\n' "$_kind_tally" | awk 'NF' | sort | uniq -c | sort -rn | while read -r _c _k; do
+        printf '  %-24s %s\n' "$_k" "$_c"
+    done
+
+    if [ -n "$_latest_row" ]; then
+        _mt="${_latest_row%%|*}"
+        _rest="${_latest_row#*|}"
+        _cls="${_rest%%|*}"
+        _f="${_rest#*|}"
+        _rel="${_f#"$HIVE_DIR"/}"
+        printf '\nMost recent write: %s · %s · %s\n' "$(_mh_fmt_date "$_mt") $(_mh_fmt_time "$_mt")" "$_cls" "$_rel"
+    fi
+
+    # Honest-by-construction footer — tells users how to verify independently.
+    printf '\nVerify: find %s -type f -newer %s\n\n' "$HIVE_DIR" "$_baseline_file"
 }
 
 mh_digest() {
