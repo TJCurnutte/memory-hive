@@ -2588,7 +2588,7 @@ _mh_stale_raw_files() {
     find "$_raw_root" -name '*.md' -type f -print0 2>/dev/null \
       | xargs -0 stat -f '%m%t%N' 2>/dev/null \
       | awk -F"\t" -v cutoff="$_cutoff" -v raw="$_raw_root" \
-          '$1 <= cutoff && $2 ~ raw { p=$2; n=p; sub(/.*\//,"",n); rel=p; sub("^"raw"/","",rel); a=rel; sub("/.*","",a); print n "\t" a "\t" p }' \
+          '$1 <= cutoff && $2 ~ raw { p=$2; n=p; sub(/.*\//,"",n); rel=p; sub("^"raw"/","",rel); a=rel; sub("/.*","",a); print n "\t" a "\t" p "\t" $1 }' \
       | sort -u > "${_tmp}.pairs"
 
     if [ -f "$_decisions" ]; then
@@ -2614,13 +2614,12 @@ _mh_stale_raw_files() {
         cat "$_tmp"
         return 0
     fi
-    while IFS="	" read -r _base _agent _f; do
+    while IFS="	" read -r _base _agent _f _mt; do
         [ -n "$_base" ] || continue
         case "$_f" in "$_raw_root"/*) ;; *) continue ;; esac
         if [ -n "$_filter_agent" ] && [ "$_agent" != "$_filter_agent" ]; then
             continue
         fi
-        _mt="$(_mh_mtime_epoch "$_f")"
         [ -n "$_mt" ] || continue
         _age=$(( (_now_s - _mt) / 86400 ))
         printf '%s\t%s\t%s\n' "$_age" "$_agent" "$_f"
